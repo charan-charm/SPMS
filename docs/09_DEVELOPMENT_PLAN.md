@@ -434,3 +434,93 @@ READY
 ```
 
 The next development activity is the first technical skeleton, not feature-heavy UI coding.
+
+---
+
+# 13. M0 Implementation Record
+
+**Status:** Implemented — pending owner review
+**Scope:** Implementation foundation only; no business modules.
+
+## 13.1 Environment
+
+| Component | Verified version | Location |
+|---|---|---|
+| PHP (CLI) | 8.5.10 | `C:\php85\php.exe` (standalone, XAMPP untouched) |
+| Composer | 2.10.3 | `C:\ProgramData\ComposerSetup\bin\composer.phar` |
+| MariaDB | 10.4.x (XAMPP) | started standalone from `C:\xampp\mysql\bin\mysqld.exe` |
+
+PHP 8.5 exceeds the locked 8.4 minimum. No framework and no Composer
+packages are used; Composer provides PSR-4 autoloading only.
+
+## 13.2 Concrete implementation decisions
+
+- **Namespace:** PSR-4 `App\ → app/` (autoloader generated via
+  `composer dump-autoload -o`; tests map via `autoload-dev` `Tests\ → tests/`).
+- **Configuration:** minimal built-in `.env` parser (`App\Support\Env`)
+  loaded by `App\Support\Config` — no dotenv package required. `.env`
+  remains untracked; `.env.example` documents all keys.
+- **Front controller:** `public/index.php` only bootstraps the autoloader,
+  enables the built-in-server static-file passthrough, and calls
+  `App::create()->run()`. No business logic.
+- **Bootstrap (`App\App`):** config initialization, timezone, error
+  display policy (`display_errors` on only in `development`), logger
+  construction, request/correlation ID generation, route registration,
+  centralized exception → JSON error mapping.
+- **Router (`App\Support\Router`):** centralized, explicit-method
+  (GET/POST/PUT/PATCH/DELETE), no business logic; unknown paths throw
+  `NotFoundException` (404), known path with wrong method throws
+  `MethodNotAllowedException` (405 + `Allow`/`meta.allow`).
+- **Layering for health:** Controller (`HealthController`, HTTP only) →
+  Service (`HealthService`, health orchestration/state classification) →
+  Repository (`HealthRepository`, `SELECT 1` ping). No artificial layers.
+- **JSON envelope (`App\Support\Response`):** every API response is
+  `{success, data, error, meta}`; `meta.request_id` and `X-Request-Id`
+  header carry the correlation ID; HTTP status is meaningful
+  (200/404/405/500/503).
+- **Errors (`App\Support\AppException`):** stable error codes with safe
+  messages; unexpected exceptions log full diagnostics and return a
+  generic `INTERNAL_ERROR` 500; database failures never expose SQL/DSN/
+  credentials/paths.
+- **Database (`App\Support\Database`):** lazily constructed shared PDO,
+  `ERRMODE_EXCEPTION`, `EMULATE_PREPARES=false`, utf8mb4, env-driven
+  credentials.
+- **Logging (`App\Support\Logger`):** JSON lines in `storage/logs/`
+  (outside public root) with timestamp, level, request ID, redacted
+  context; sensitive keys auto-redacted.
+- **Migrations:** `database/migrate.php` applies `database/migrations/*.php`
+  in filename order inside transactions and records applied IDs in the
+  `migrations` table. M0 creates only the tracking table — no invented
+  domain tables.
+- **Tests:** plain PHP runner `tests/run-tests.php` (no test framework);
+  suites Unit / Integration / API / Security / Workflow.
+
+## 13.3 Verification results
+
+- `php tests/run-tests.php` → **27/27 checks pass**
+  (Unit 14, Integration 6, API 2, Security 5).
+- Live HTTP (built-in server) verified: `/api/health` 200 healthy,
+  404 unknown route, 405 wrong method, 503 degraded with DB stopped,
+  recovery to 200 after DB restart, `X-Request-Id` present, no internal
+  details in any response body.
+
+## 13.4 Local run / database / health testing
+
+- Run: `php -S 127.0.0.1:8080 -t public public/index.php`
+- DB config: `.env` (see `.env.example`); the migration runner creates the
+  database if missing.
+- Migrations: `php database/migrate.php` (`--status` to inspect).
+- Health: `curl http://127.0.0.1:8080/api/health`.
+
+## 13.5 Known limitations
+
+- Apache rewrite rules are not yet configured; the PHP built-in server is
+  the verified development path (`index.php` also works as URL prefix).
+- M0 has no authentication, CSRF, or rate limiting — these arrive with
+  the first protected operations (authentication milestone), not needed
+  for a public health read.
+- MariaDB was started manually for this session; a service must be running
+  for database-backed checks.
+- `composer.lock` is not yet generated (no dependencies); it will be
+  committed once the first real dependency is added or via
+  `composer install` in the deployment environment.
