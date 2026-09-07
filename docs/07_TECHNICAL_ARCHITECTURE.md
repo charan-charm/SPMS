@@ -1016,46 +1016,55 @@ Coverage includes:
 D:\SPMS
 ├── app/
 │   ├── Controllers/
-│   ├── Services/
-│   ├── Repositories/
-│   ├── Models/
+│   ├── Domain/
+│   │   ├── Account/
+│   │   ├── Analytics/
+│   │   ├── Bills/
+│   │   ├── Energy/
+│   │   ├── Forecast/
+│   │   ├── Household/
+│   │   ├── Intelligence/
+│   │   ├── Notification/
+│   │   ├── Recommendation/
+│   │   ├── Reports/
+│   │   └── Solar/
 │   ├── Integrations/
-│   ├── Middleware/
-│   ├── Validation/
-│   ├── Exceptions/
+│   ├── Repositories/
+│   ├── Services/
 │   └── Support/
 ├── config/
 ├── database/
 │   ├── migrations/
-│   └── seeds/
+│   └── seeders/
+├── docs/
 ├── public/
 │   ├── index.php
 │   └── assets/
 │       ├── css/
-│       ├── js/
-│       ├── icons/
-│       └── fonts/
+│       ├── fonts/
+│       ├── images/
+│       └── js/
 ├── resources/
-│   ├── views/
-│   └── localization/
-├── routes/
-│   ├── web.php
-│   └── api.php
+│   └── views/
 ├── storage/
+│   ├── cache/
 │   ├── logs/
-│   ├── bills/
-│   ├── reports/
-│   ├── exports/
-│   └── temporary/
+│   └── temp/
 ├── tests/
-├── docs/
-├── vendor/
+│   ├── API/
+│   ├── Integration/
+│   ├── Security/
+│   ├── Unit/
+│   └── Workflow/
 ├── composer.json
 ├── composer.lock
 ├── .env
+├── .env.example
 ├── .gitignore
 └── README.md
 ```
+
+This tree represents the established Phase 6 repository organization. Layer responsibilities remain as described in Sections 3–4; domain capability logic is organized under `app/Domain/` rather than a generic `Models/` directory. The concrete implementation placement of cross-cutting components (middleware, validation, exceptions, and similar mechanisms) is determined during M0 according to the Phase 6 implementation specification, without changing the architecture.
 
 Only `public/` is the web root.
 

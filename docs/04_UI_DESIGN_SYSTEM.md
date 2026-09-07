@@ -1396,6 +1396,362 @@ Before implementing a component/page, verify:
 
 ---
 
+🎨 SPMS — Global Design Token System
+1. Color architecture
+
+One important distinction:
+
+Logo colors ≠ application UI colors.
+
+The logo keeps its navy + blue + yellow/orange identity.
+
+The application UI uses the already-decided green + teal energy system.
+
+Light theme
+Token	Value	Purpose
+--color-bg	#F9FAFB	Application background
+--color-surface	#FFFFFF	Cards/panels
+--color-border	#E5E7EB	Borders/dividers
+--color-heading	#111827	Headings
+--color-text	#374151	Main text
+--color-muted	#9CA3AF	Secondary text
+--color-primary	#22C55E	Main actions/energy
+--color-primary-hover	#16A34A	Hover
+--color-primary-active	#15803D	Active
+--color-primary-soft	#DCFCE7	Soft green backgrounds
+--color-secondary	#06B6D4	Teal accent
+--color-secondary-hover	#0891B2	Teal hover
+--color-secondary-active	#0E7490	Teal active
+--color-secondary-soft	#E0F7FA	Soft teal
+Dark theme
+Token	Value
+--color-bg	#0B1220
+--color-surface	#111827
+--color-border	#1F2937
+--color-heading	#F9FAFB
+--color-text	#D1D5DB
+--color-muted	#6B7280
+--color-primary	#34D399
+--color-primary-hover	#22C55E
+--color-primary-active	#16A34A
+--color-primary-soft	#064E3B
+--color-secondary	#22D3EE
+--color-secondary-hover	#06B6D4
+--color-secondary-active	#0891B2
+--color-secondary-soft	#0E7490
+⚡ 2. Semantic colors
+
+These are meaning-based, not decorative.
+
+Success
+Light: #22C55E
+Dark:  #34D399
+
+Warning
+Light: #F59E0B
+Dark:  #FBBF24
+
+Danger
+Light: #EF4444
+Dark:  #F87171
+
+Info
+Light: #3B82F6
+Dark:  #60A5FA
+
+For example:
+
+Success → GoodWe connected
+
+Warning → Solar data is stale
+
+Danger → Integration failed
+
+Info → Forecast information
+
+And importantly:
+
+We never communicate meaning through color alone.
+
+☀️ 3. Energy/data visualization tokens
+
+This is particularly important for SPMS.
+
+Solar Actual          #22C55E
+Consumption Actual    #3B82F6
+
+Solar Forecast        #86EFAC
+Consumption Forecast  #93C5FD
+
+Potential Surplus     #10B981
+Potential Deficit     #F97316
+
+Grid / Reference      #6B7280
+Estimated             #F59E0B
+Stale                 #9CA3AF
+Demo / Test           #8B5CF6
+
+But the color is only one signal.
+
+Data nature
+ACTUAL
+→ solid line
+→ explicit "Actual" label
+
+PREDICTED
+→ dashed line
+→ explicit "Predicted" label
+→ confidence information
+
+ESTIMATED
+→ dotted line
+→ explicit "Estimated" label
+
+STALE
+→ subdued/muted
+→ stale indicator
+
+SIMULATED / DEMO
+→ explicit DEMO/SIMULATED label
+
+This directly protects one of our most important SPMS principles:
+
+Predicted data must never visually masquerade as measured data.
+
+🔤 4. Typography
+
+We already selected:
+
+Inter
+
+Used for:
+
+Navigation
+Body text
+Forms
+Buttons
+Tables
+Labels
+Chart labels
+Metadata
+Space Grotesk
+
+Used for:
+
+Major headings
+Hero numbers
+KPI values
+Important energy values
+Dashboard numbers
+Type scale
+Display       48 / 56
+H1            36 / 44
+H2            28 / 36
+H3            20 / 28
+H4            16 / 24
+
+Body Large    16 / 24
+Body          14 / 20
+Caption       12 / 16
+Label         12 / 16
+
+Weights:
+
+300 Light
+400 Regular
+500 Medium
+600 Semibold
+700 Bold
+📐 5. Spacing system
+
+We will not randomly use 13px here, 19px there, 27px somewhere else.
+
+Our base spacing scale:
+
+4px
+8px
+12px
+16px
+24px
+32px
+48px
+64px
+
+Common usage:
+
+4px   → tiny internal spacing
+8px   → icon/text relationships
+12px  → compact controls
+16px  → normal component spacing
+24px  → card internal spacing
+32px  → section spacing
+48px  → major sections
+64px  → page-level spacing
+🔲 6. Border radius
+4px   → tags / tiny elements
+8px   → buttons / inputs / controls
+12px  → standard cards
+16px  → large feature panels
+
+We are not making everything extremely rounded.
+
+SPMS should feel:
+
+structured + premium + calm
+
+rather than playful.
+
+🌫️ 7. Elevation
+
+Three levels:
+
+Elevation 0
+→ flat
+
+Elevation 1
+→ normal card
+
+Elevation 2
+→ important/raised component
+
+Default light card:
+
+background: #FFFFFF
+border: 1px solid #E5E7EB
+subtle shadow
+
+Dark card:
+
+background: #111827
+border: 1px solid #1F2937
+subtle shadow
+
+No default glassmorphism.
+
+🖥️ 8. Layout tokens
+
+Desktop:
+
+Page horizontal margin: 64px
+Grid: 12 columns
+
+Mobile:
+
+Page horizontal margin: 24px
+Grid: 4 columns / stacked
+
+Standard card gap:
+
+24px
+
+Compact card gap:
+
+16px
+🎬 9. Motion tokens
+Theme transition       200–300ms
+Hover                  100–150ms
+Button/state           100–200ms
+Expand/sidebar         200–300ms
+Page transition        300–400ms
+Chart/data animation   400–600ms
+
+Motion must be:
+
+smooth
+subtle
+purposeful
+non-distracting
+
+No:
+
+❌ bouncing
+❌ flashing
+❌ excessive particles
+❌ neon effects
+❌ parallax
+
+And reduced-motion preferences must be respected.
+
+☀️ 10. SPMS signature visual language
+
+This is where the application becomes recognizably SPMS, rather than just another dashboard.
+
+We use:
+
+Green
+   ↓
+energy / healthy utilization
+
+Teal
+   ↓
+technology / intelligence
+
+Blue
+   ↓
+solar / analytical visualization
+
+Yellow + Orange
+   ↓
+sun / solar identity
+
+Deep Navy
+   ↓
+brand identity
+
+Atmosphere is subtle:
+
+Green/teal radial accents
+Organic curves
+Soft sunlight-like illumination
+Very restrained ambient effects
+
+But the priority remains:
+
+DATA
+ ↓
+CONTENT
+ ↓
+COMPONENT
+ ↓
+ATMOSPHERE
+
+Never the reverse.
+
+🧠 11. The most important implementation rule
+
+All of this eventually becomes CSS custom properties.
+
+Conceptually:
+
+:root {
+    --color-bg: #F9FAFB;
+    --color-surface: #FFFFFF;
+    --color-primary: #22C55E;
+    --color-secondary: #06B6D4;
+
+    --color-heading: #111827;
+    --color-text: #374151;
+    --color-muted: #9CA3AF;
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+    --space-8: 64px;
+
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+}
+
+Dark theme then overrides the semantic values rather than duplicating the entire component system.
+
+---
+
 # 65. VIVA-FRIENDLY CORE EXPLANATIONS
 
 ### Why green?
