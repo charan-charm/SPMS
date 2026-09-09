@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SPMS — Solar Power Management System</title>
+    <meta name="description" content="SPMS household solar energy decision support (frontend foundation)." />
+    <link rel="icon" type="image/png" href="/images/branding/logos/logo-icon.png" />
+
+    <script>
+        // Theme boot: applied before first paint to avoid a theme flash.
+        // 'system' (or no stored preference) follows the OS preference;
+        // explicit light/dark preferences persist.
+        (function () {
+            try {
+                var stored = localStorage.getItem('spms-theme');
+                var theme = (stored === 'light' || stored === 'dark')
+                    ? stored
+                    : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+                document.documentElement.setAttribute('data-theme', theme);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'light');
+            }
+        })();
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>

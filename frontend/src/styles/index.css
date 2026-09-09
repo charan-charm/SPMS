@@ -1,0 +1,205 @@
+@import "tailwindcss";
+@import "./fonts.css";
+
+/*
+ * SPMS design tokens — locked values from docs/04_UI_DESIGN_SYSTEM.md.
+ * Tailwind consumes these through @theme inline (docs/12 §1–§3).
+ * Light theme is the default; [data-theme='dark'] overrides semantic values.
+ */
+
+:root {
+    /* Application typography — Plus Jakarta Sans is the single
+       application font (owner-selected, F3 refinement 2.1), with a
+       sensible system fallback stack. */
+    --spms-font-main: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+    --spms-background: #F9FAFB;
+    --spms-surface: #FFFFFF;
+    --spms-surface-alt: #F3F4F6;
+    --spms-border: #E5E7EB;
+    --spms-heading: #111827;
+    --spms-body: #374151;
+    --spms-muted: #9CA3AF;
+
+    --spms-primary: #22C55E;
+    --spms-primary-hover: #16A34A;
+    --spms-primary-active: #15803D;
+    --spms-primary-soft: #DCFCE7;
+    --spms-primary-contrast: #FFFFFF;
+
+    --spms-secondary: #06B6D4;
+    --spms-secondary-hover: #0891B2;
+    --spms-secondary-active: #0E7490;
+    --spms-secondary-soft: #E0F7FA;
+
+    --spms-focus: #06B6D4;
+
+    --spms-success: #22C55E;
+    --spms-warning: #F59E0B;
+    --spms-danger: #EF4444;
+    --spms-info: #3B82F6;
+
+    /* Semantic chart tokens (docs/04 chart tokens) */
+    --spms-chart-solar: #22C55E;
+    --spms-chart-usage: #3B82F6;
+    --spms-chart-solar-fc: #86EFAC;
+    --spms-chart-usage-fc: #93C5FD;
+    --spms-chart-surplus: #10B981;
+    --spms-chart-deficit: #F97316;
+    --spms-chart-estimated: #F59E0B;
+    --spms-chart-stale: #9CA3AF;
+    --spms-chart-demo: #8B5CF6;
+}
+
+/* Elevation (docs/04 §5: levels 0/1/2 — restrained, subtle) */
+:root {
+    --spms-shadow-1: 0 1px 2px rgba(17, 24, 39, 0.05);
+    --spms-shadow-2: 0 8px 24px rgba(17, 24, 39, 0.08);
+}
+
+[data-theme='dark'] {
+    --spms-background: #0B1220;
+    --spms-surface: #111827;
+    --spms-surface-alt: #0E1626;
+    --spms-border: #1F2937;
+    --spms-heading: #F9FAFB;
+    --spms-body: #D1D5DB;
+    --spms-muted: #6B7280;
+
+    --spms-primary: #34D399;
+    --spms-primary-hover: #22C55E;
+    --spms-primary-active: #16A34A;
+    --spms-primary-soft: #064E3B;
+    --spms-primary-contrast: #052E16;
+
+    --spms-secondary: #22D3EE;
+    --spms-secondary-hover: #06B6D4;
+    --spms-secondary-active: #0891B2;
+
+    --spms-focus: #22D3EE;
+
+    --spms-success: #34D399;
+    --spms-warning: #FBBF24;
+    --spms-danger: #F87171;
+    --spms-info: #60A5FA;
+
+    --spms-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --spms-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+@theme inline {
+    --color-background: var(--spms-background);
+    --color-surface: var(--spms-surface);
+    --color-surface-alt: var(--spms-surface-alt);
+    --color-border: var(--spms-border);
+    --color-heading: var(--spms-heading);
+    --color-body: var(--spms-body);
+    --color-muted: var(--spms-muted);
+
+    --color-primary: var(--spms-primary);
+    --color-primary-hover: var(--spms-primary-hover);
+    --color-primary-active: var(--spms-primary-active);
+    --color-primary-soft: var(--spms-primary-soft);
+    --color-primary-contrast: var(--spms-primary-contrast);
+
+    --color-secondary: var(--spms-secondary);
+    --color-secondary-hover: var(--spms-secondary-hover);
+    --color-secondary-active: var(--spms-secondary-active);
+    --color-secondary-soft: var(--spms-secondary-soft);
+
+    --color-focus: var(--spms-focus);
+
+    --color-success: var(--spms-success);
+    --color-warning: var(--spms-warning);
+    --color-danger: var(--spms-danger);
+    --color-info: var(--spms-info);
+
+    --color-chart-solar: var(--spms-chart-solar);
+    --color-chart-usage: var(--spms-chart-usage);
+    --color-chart-solar-fc: var(--spms-chart-solar-fc);
+    --color-chart-usage-fc: var(--spms-chart-usage-fc);
+    --color-chart-surplus: var(--spms-chart-surplus);
+    --color-chart-deficit: var(--spms-chart-deficit);
+    --color-chart-estimated: var(--spms-chart-estimated);
+    --color-chart-stale: var(--spms-chart-stale);
+    --color-chart-demo: var(--spms-chart-demo);
+
+    /* Elevation */
+    --shadow-1: var(--spms-shadow-1);
+    --shadow-2: var(--spms-shadow-2);
+
+    /* Locked radii (docs/12 §6) */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+
+    /* Typography — Plus Jakarta Sans (single application font) */
+    --font-body: var(--spms-font-main);
+    --font-display: var(--spms-font-main);
+}
+
+body {
+    font-family: var(--font-body);
+    background-color: var(--spms-background);
+    color: var(--spms-body);
+    transition: background-color 250ms ease, color 250ms ease;
+}
+
+:focus-visible {
+    outline: 2px solid var(--spms-focus);
+    outline-offset: 2px;
+}
+
+/* Shell transition keyframes (docs/12 §13: drawer 200–300ms) */
+@keyframes spms-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes spms-slide-in-left {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
+}
+
+/*
+ * Subtle scrollbar utility (F3 refinement) — keeps scrolling fully
+ * functional and keyboard accessible; only the visual weight changes.
+ * Firefox uses scrollbar-width/color; Chromium/WebKit use ::-webkit-*.
+ */
+.scrollbar-subtle {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--spms-muted) 45%, transparent) transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--spms-muted) 40%, transparent);
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--spms-muted) 65%, transparent);
+}
+
+.scrollbar-subtle {
+    scrollbar-gutter: stable;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
