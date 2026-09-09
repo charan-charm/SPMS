@@ -461,3 +461,48 @@ receives a stable Git commit after verification.
 > Implement the locked architecture incrementally, verify each meaningful boundary, preserve the established semantic/security/analytical rules, document concrete implementation decisions, test continuously, and commit stable milestones.
 
 This governs the transition from architecture into actual coding.
+---
+
+# 18. Energy Balance — F4 Implementation Decision
+
+## D-041 — Balanced Classification Tolerance — F4
+
+The official project documentation (docs/01 §15.1) defines the balanced state
+qualitatively only:
+
+``	ext
+Solar ≈ Consumption → Approximately Balanced
+``
+
+The ≈ relation was never numerically defined in any official document.
+During the F4 implementation review, the project owner ratified the following
+numeric tolerance as the project's concrete implementation decision:
+
+``	ext
+tolerance = max(0.1 kWh, 5% × max(solar_generation_kwh, household_consumption_kwh))
+``
+
+Classification (backend-authoritative, docs/01 §15.3, D-015):
+
+``	ext
+abs(solar_generation_kwh - household_consumption_kwh) <= tolerance
+    → BALANCED
+
+solar_generation_kwh - household_consumption_kwh > tolerance
+    → POTENTIAL_SURPLUS
+
+household_consumption_kwh - solar_generation_kwh > tolerance
+    → POTENTIAL_DEFICIT
+``
+
+Notes:
+
+- The tolerance constants are fixed in code and are deliberately not
+  environment-configurable.
+- The applied tolerance is disclosed transparently in every classified API
+  response via result.tolerance.
+- Result semantics remain potential: measurement context POTENTIAL
+  (docs/06 §13). A potential surplus is not confirmed grid export and a
+  potential deficit is not confirmed grid import.
+
+**END OF DECISION LOG**

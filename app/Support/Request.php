@@ -87,4 +87,9 @@ final class Request
     {
         return $this->body[$name] ?? null;
     }
+
+    public function body(): array
+    {
+        return $this->body;
+    }
 }

@@ -12,6 +12,7 @@ use App\Support\Response;
 use App\Support\Router;
 use App\Support\AppException;
 use App\Controllers\HealthController;
+use App\Controllers\EnergyBalanceController;
 use App\Repositories\HealthRepository;
 use App\Services\HealthService;
 use Throwable;
@@ -117,6 +118,10 @@ final class App
     private function registerRoutes(Router $router): void
     {
         $router->add('GET', '/api/health', [HealthController::class, 'health']);
+
+        // F4 — Energy Balance & Situation Analysis (versioned API boundary)
+        $router->add('POST', '/api/v1/energy/balance', [EnergyBalanceController::class, 'classify']);
+        $router->add('GET', '/api/v1/energy/balance', [EnergyBalanceController::class, 'current']);
     }
 
     private function internalErrorResponse(): Response
