@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { Sun, Moon, Inbox, FlaskConical } from 'lucide-react'
 import {
@@ -31,6 +32,7 @@ import {
     OperationStatus,
     RecommendationCard,
     ChartContainer,
+    SolarDayArc,
 } from '../../components/data-display'
 import { EmptyState, ErrorState, LoadingSkeleton, LoadingState } from '../../components/feedback'
 import { ThemeSwitch } from '../../components/navigation/ThemeSwitch'
@@ -45,8 +47,13 @@ import { useTheme } from '../../hooks/useTheme'
  * without fabricating any SPMS data — every value shown is an explicit
  * presentation example of the component API, clearly labelled.
  */
+
+function toHHmm(minutes) {
+    return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+}
 export function DesignSystemPreview() {
     const { theme, toggleTheme } = useTheme()
+    const [solarMinutes, setSolarMinutes] = useState(645)
 
     return (
         <main className="mx-auto max-w-5xl px-6 py-10">
@@ -211,6 +218,91 @@ export function DesignSystemPreview() {
                             <OperationStatus status="COMPLETED" />
                             <OperationStatus status="FAILED" />
                             <OperationStatus status="RECOVERING" />
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Solar Day Arc</CardTitle>
+                        <CardDescription>
+                            Data-driven daylight visualization — the parent owns all times; the
+                            component only interpolates and presents. Nothing is invented when
+                            data is missing.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                        <div className="space-y-3">
+                            <SolarDayArc
+                                sunrise="06:12"
+                                solarPeak="12:34"
+                                sunset="18:21"
+                                currentTime={toHHmm(solarMinutes)}
+                                date="2026-09-10"
+                            />
+                            <div className="flex flex-wrap items-center gap-3">
+                                <Label htmlFor="dsp-solar-time" className="text-xs text-muted">
+                                    Preview time
+                                </Label>
+                                <input
+                                    id="dsp-solar-time"
+                                    type="range"
+                                    min={360}
+                                    max={1140}
+                                    step={5}
+                                    value={solarMinutes}
+                                    onChange={(event) => setSolarMinutes(Number(event.target.value))}
+                                    className="h-1.5 w-64 max-w-full cursor-pointer accent-primary"
+                                    aria-label="Preview time of day (development only)"
+                                />
+                                <span className="text-xs font-semibold text-heading">
+                                    {toHHmm(solarMinutes)}
+                                </span>
+                            </div>
+                        </div>
+
+                        <Separator />
+
+                        <div className="grid gap-6 sm:grid-cols-2">
+                            <div>
+                                <p className="mb-2 text-xs text-muted">Sunrise position</p>
+                                <SolarDayArc sunrise="06:12" sunset="18:21" currentTime="06:12" />
+                            </div>
+                            <div>
+                                <p className="mb-2 text-xs text-muted">Solar peak supplied</p>
+                                <SolarDayArc
+                                    sunrise="05:58"
+                                    solarPeak="12:47"
+                                    sunset="18:40"
+                                    currentTime="12:47"
+                                />
+                            </div>
+                            <div>
+                                <p className="mb-2 text-xs text-muted">Sunset position</p>
+                                <SolarDayArc sunrise="06:12" sunset="18:21" currentTime="18:21" />
+                            </div>
+                            <div>
+                                <p className="mb-2 text-xs text-muted">
+                                    Afternoon — no solar peak supplied
+                                </p>
+                                <SolarDayArc sunrise="06:12" sunset="18:21" currentTime="15:30" />
+                            </div>
+                            <div>
+                                <p className="mb-2 text-xs text-muted">Stale · predicted nature</p>
+                                <SolarDayArc
+                                    sunrise="06:12"
+                                    sunset="18:21"
+                                    currentTime="11:15"
+                                    status="STALE"
+                                    nature="PREDICTED"
+                                />
+                            </div>
+                            <div>
+                                <p className="mb-2 text-xs text-muted">
+                                    No data — nothing is invented
+                                </p>
+                                <SolarDayArc />
+                            </div>
                         </div>
                     </CardContent>
                 </Card>

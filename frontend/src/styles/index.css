@@ -241,6 +241,39 @@ body {
     }
 }
 
+/*
+ * Solar Day Arc (SolarDayArc) — theme-dependent arc styling only; all
+ * geometry, data interpolation, and motion live in the component. The
+ * dashed daylight trajectory is a quiet warm guide in light theme and
+ * gains a very subtle warm under-glow in dark theme; the sun's bloom is
+ * slightly stronger in dark for atmosphere. Never neon, never a moon.
+ */
+.spms-day-arc-line {
+    stroke: var(--spms-warning);
+    stroke-opacity: 0.55;
+}
+
+[data-theme='dark'] .spms-day-arc-line {
+    stroke-opacity: 0.7;
+}
+
+.spms-day-arc-glow {
+    stroke: var(--spms-warning);
+    opacity: 0;
+}
+
+[data-theme='dark'] .spms-day-arc-glow {
+    opacity: 0.14;
+}
+
+.spms-day-sun-bloom {
+    opacity: 0.85;
+}
+
+[data-theme='dark'] .spms-day-sun-bloom {
+    opacity: 1;
+}
+
 :focus-visible {
     outline: 2px solid var(--spms-focus);
     outline-offset: 2px;
