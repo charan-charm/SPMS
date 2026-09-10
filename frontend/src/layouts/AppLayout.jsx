@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router'
 import { AppSidebar } from '../components/navigation/AppSidebar'
 import { MobileNavDrawer } from '../components/navigation/MobileNavDrawer'
 import { AppHeader } from '../components/navigation/AppHeader'
+import { LeafBackdrop } from '../components/decorative/LeafBackdrop'
 
 /**
  * AppLayout (docs/04 §10–11) — the authenticated application shell:
@@ -30,7 +31,12 @@ export function AppLayout() {
     }
 
     return (
-        <div className="flex min-h-screen flex-col bg-background">
+        <div className="relative isolate flex min-h-screen flex-col bg-background">
+            {/* Decorative leaf bunches — purely visual, behind all content,
+                clipped to the content region (never under the top bar or
+                sidebar; see LeafBackdrop) */}
+            <LeafBackdrop />
+
             {/* Full-width header — owns SPMS branding + page context + controls */}
             <AppHeader onOpenNavigation={() => setDrawerOpen(true)} />
 

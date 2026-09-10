@@ -146,6 +146,101 @@ body {
     transition: background-color 250ms ease, color 250ms ease;
 }
 
+/*
+ * Decorative leaf watermark (owner-requested visual refinement) —
+ * presentation-only opacity/visibility control for LeafBackdrop. Uses
+ * the existing theme tokens; no design-token values are changed.
+ * Owner direction: LIGHTEST SHADE fills (primary-soft green in light
+ * theme, secondary-soft teal in dark theme) — the layer opacity tunes
+ * them to "barely visible, somewhat visible" in each theme.
+ */
+.spms-leaf-layer {
+    --leaf-opacity: 0.85;
+}
+
+[data-theme='dark'] .spms-leaf-layer {
+    --leaf-opacity: 0.09;
+}
+
+/*
+ * Foliage tint palette (owner direction) — the LIGHTEST shade of each
+ * color from the existing SPMS soft tokens: pale green in light theme,
+ * pale teal in dark theme. Plain fills — no borders, no veins. No new
+ * brand colors.
+ */
+.spms-leaf-fill {
+    fill: var(--spms-primary-soft);
+}
+
+[data-theme='dark'] .spms-leaf-fill {
+    fill: var(--spms-secondary-soft);
+}
+
+/*
+ * Gentle beach-breeze float (owner direction) — each bunch sways as ONE
+ * unit (spms-leaf-sway-a/b, different timing per corner): slow drift +
+ * slight tilt, ~1° max, ease-in-out infinite. No per-leaf animation. No
+ * scaling, bouncing, pulsing, or spinning.
+ */
+@keyframes spms-leaf-sway-a {
+    0%,
+    100% {
+        transform: translate(0px, 0px) rotate(0deg);
+    }
+
+    50% {
+        transform: translate(-8px, 6px) rotate(1.5deg);
+    }
+}
+
+@keyframes spms-leaf-sway-b {
+    0%,
+    100% {
+        transform: translate(0px, 0px) rotate(0deg);
+    }
+
+    50% {
+        transform: translate(7px, -7px) rotate(-1.3deg);
+    }
+}
+
+.spms-leaf-sway-a {
+    animation: spms-leaf-sway-a 11s ease-in-out infinite;
+    will-change: transform;
+}
+
+.spms-leaf-sway-b {
+    animation: spms-leaf-sway-b 12.5s ease-in-out infinite;
+    will-change: transform;
+}
+
+/* Reduced motion: freeze all foliage completely, keep it visible. */
+@media (prefers-reduced-motion: reduce) {
+    .spms-leaf-sway-a,
+    .spms-leaf-sway-b {
+        animation: none;
+        will-change: auto;
+    }
+}
+
+/* Mobile: keep the corner concept, hide the smallest leaves per bunch. */
+@media (max-width: 640px) {
+    .spms-leaf-layer .spms-leaf-minor {
+        display: none;
+    }
+}
+
+/* Tablet: even subtler. */
+@media (min-width: 641px) and (max-width: 1024px) {
+    .spms-leaf-layer {
+        --leaf-opacity: 0.002;
+    }
+
+    [data-theme='dark'] .spms-leaf-layer {
+        --leaf-opacity: 0.003;
+    }
+}
+
 :focus-visible {
     outline: 2px solid var(--spms-focus);
     outline-offset: 2px;
