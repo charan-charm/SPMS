@@ -75,6 +75,7 @@ final class AccountService
             'Welcome to SPMS.' . "\r\n\r\n"
             . 'Use the verification code below to activate your account:' . "\r\n\r\n"
             . '{TOKEN}' . "\r\n\r\n"
+            . 'The code expires in ' . self::VERIFICATION_TTL_HOURS . ' hours.' . "\r\n\r\n"
             . 'If you did not create this account, no action is required.'
         );
 
@@ -171,6 +172,7 @@ final class AccountService
                 'SPMS — Verify your email address',
                 'Use the verification code below to activate your account:' . "\r\n\r\n"
                 . '{TOKEN}' . "\r\n\r\n"
+                . 'The code expires in ' . self::VERIFICATION_TTL_HOURS . ' hours.' . "\r\n\r\n"
                 . 'If you did not request this, no action is required.'
             );
         } else {

@@ -737,6 +737,16 @@ Status: RATIFIED.
     than exposing authentication secrets (including raw tokens) in
     ordinary logs.
 
+W1.1 implementation record (no new decision): the abstraction gained a
+Brevo HTTPS transport (`MAIL_TRANSPORT=brevo`) alongside `file` and
+`smtp`. Real Brevo sending is gated behind an explicit
+`BREVO_ALLOW_REAL_SEND` flag that the automated test runner pins off —
+tests can never produce a Brevo API request; the only sanctioned path
+that enables real delivery is the dedicated manual entry point
+(`scripts/manual-brevo-server.php`) with the flag set in that process
+only. The API key never leaves backend configuration and is never
+logged or included in error messages.
+
 ## D-055 — Middleware Layer, Authorization Boundaries and Admin — Database/Auth
 
 Status: RATIFIED (formalizes docs/07 §16 request flow, docs/08 §10–11).

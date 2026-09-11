@@ -11,8 +11,9 @@ use RuntimeException;
  * W1 — Transport selection (docs/10 D-054).
  *
  * MAIL_TRANSPORT selects the implementation: "file" (development sink,
- * the default) or "smtp" (production/provider). Credentials come only
- * from configuration. Failures propagate — callers fail safely and
+ * the default), "smtp" (production/provider), or "brevo" (Brevo
+ * transactional email API — W1.1). Credentials come only from
+ * configuration. Failures propagate — callers fail safely and
  * visibly instead of silently dropping authentication mail.
  */
 final class Mailer
@@ -31,6 +32,7 @@ final class Mailer
         $this->transport = match ($selected) {
             'smtp' => new SmtpTransport(),
             'file' => new FileMailTransport(),
+            'brevo' => new BrevoMailTransport(),
             default => throw new RuntimeException('Unknown mail transport: ' . $selected),
         };
     }

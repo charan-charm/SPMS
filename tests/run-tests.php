@@ -19,6 +19,15 @@ use Tests\TestResult;
 $basePath = dirname(__DIR__);
 Config::initialize($basePath);
 
+// W1.1 — HARD test isolation: the automated suite must never be able to
+// produce a real Brevo API request, regardless of the developer's local
+// .env. Every test process pins the file sink and disables real Brevo
+// sending (BrevoMailTransport refuses to send without the explicit flag).
+Config::overrideForTesting([
+    'MAIL_TRANSPORT' => 'file',
+    'BREVO_ALLOW_REAL_SEND' => '0',
+]);
+
 $suiteFilter = $argv[1] ?? null;
 
 $suites = [
@@ -30,6 +39,7 @@ $suites = [
         Tests\Unit\EnergyCostTest::class,
         Tests\Unit\InsightTest::class,
         Tests\Unit\AccountTest::class,
+        Tests\Unit\MailTransportTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
