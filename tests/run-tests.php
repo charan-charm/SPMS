@@ -29,21 +29,27 @@ $suites = [
         Tests\Unit\EnergyBalanceTest::class,
         Tests\Unit\EnergyCostTest::class,
         Tests\Unit\InsightTest::class,
+        Tests\Unit\AccountTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
         Tests\Integration\MigrationRunnerTest::class,
+        Tests\Integration\AuthMigrationsTest::class,
     ],
     'API' => [
         Tests\API\HealthApiTest::class,
         Tests\API\EnergyBalanceApiTest::class,
         Tests\API\EnergyCostApiTest::class,
         Tests\API\InsightApiTest::class,
+        Tests\API\AuthApiTest::class,
     ],
     'Security' => [
         Tests\Security\SafeErrorsTest::class,
+        Tests\Security\AuthSecurityTest::class,
     ],
-    'Workflow' => [],
+    'Workflow' => [
+        Tests\Workflow\AuthWorkflowTest::class,
+    ],
 ];
 
 $allResults = [];

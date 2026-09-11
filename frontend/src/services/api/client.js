@@ -15,7 +15,7 @@ import { buildApiUrl, DEFAULT_REQUEST_TIMEOUT_MS } from './config'
  * - stable backend error-code mapping into ApiError
  * - correlation/request ID capture (meta.request_id / X-Request-Id)
  * - session cookie handling (credentials: include)
- * - CSRF token forwarding foundation (XSRF-TOKEN cookie → X-CSRF-Token)
+ * - CSRF synchronizer-token forwarding (X-SPMS-CSRF, W1 docs/10 D-052)
  *
  * No SPMS endpoints exist yet — none are defined here.
  */
@@ -38,9 +38,25 @@ function readCookie(name) {
     return match ? decodeURIComponent(match.substring(name.length + 1)) : null
 }
 
+/**
+ * CSRF token store (W1 — docs/10 D-052). The backend issues a
+ * synchronizer token bound to the server-side session and delivers it
+ * in the auth session/login response body; the future auth module
+ * stores it here via setCsrfToken(). The client forwards it
+ * automatically on every request through the X-SPMS-CSRF header.
+ * In-memory only — never persisted to browser storage.
+ */
+let csrfToken = null
+
+export function setCsrfToken(token) {
+    csrfToken = typeof token === 'string' && token !== '' ? token : null
+}
+
 function getCsrfToken() {
-    // CSRF foundation: forwarded automatically once the backend issues the
-    // XSRF-TOKEN cookie. Harmless no-op until then.
+    if (csrfToken) {
+        return csrfToken
+    }
+    // Legacy cookie fallback — harmless no-op until a backend issues it.
     return readCookie('XSRF-TOKEN')
 }
 
@@ -78,7 +94,7 @@ async function request(path, { method = 'GET', body = undefined, query = undefin
 
     const csrfToken = getCsrfToken()
     if (csrfToken) {
-        requestHeaders['X-CSRF-Token'] = csrfToken
+        requestHeaders['X-SPMS-CSRF'] = csrfToken
     }
 
     if (body !== undefined) {

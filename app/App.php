@@ -15,7 +15,9 @@ use App\Controllers\HealthController;
 use App\Controllers\EnergyBalanceController;
 use App\Controllers\EnergyCostController;
 use App\Controllers\IntelligenceController;
+use App\Controllers\AuthController;
 use App\Repositories\HealthRepository;
+use App\Security\AuthMiddleware;
 use App\Services\HealthService;
 use Throwable;
 
@@ -67,7 +69,21 @@ final class App
     private function handle(): void
     {
         $logger = $this->logger;
-        $request = Request::fromGlobals();
+
+        // Malformed request bodies are client errors and must surface as
+        // a 400 envelope, never an internal error.
+        try {
+            $request = Request::fromGlobals();
+        } catch (AppException $e) {
+            $logger?->warning('request.malformed_body', [
+                'error_code' => $e->errorCode(),
+                'status' => $e->httpStatus(),
+            ]);
+            $e->toResponse()->send();
+
+            return;
+        }
+
         $requestId = RequestId::current() ?? '';
 
         $router = new Router();
@@ -80,6 +96,12 @@ final class App
             ]);
 
             [$controllerClass, $action] = $router->dispatch($request->method(), $request->path());
+
+            // Middleware seam (docs/10 D-055): Router → Middleware →
+            // Controller. Authentication context is resolved from the
+            // server-side session; CSRF is enforced here for
+            // authenticated state-changing requests.
+            $request = AuthMiddleware::process($request);
 
             $controller = new $controllerClass();
             $response = $controller->{$action}($request);
@@ -132,6 +154,16 @@ final class App
         // F6 — Deterministic Intelligence (versioned API boundary)
         $router->add('GET', '/api/v1/intelligence/insights', [IntelligenceController::class, 'list']);
         $router->add('GET', '/api/v1/intelligence/insights/{id}', [IntelligenceController::class, 'show']);
+
+        // W1 — Authentication Foundation (versioned API boundary)
+        $router->add('POST', '/api/v1/auth/register', [AuthController::class, 'register']);
+        $router->add('POST', '/api/v1/auth/verify', [AuthController::class, 'verify']);
+        $router->add('POST', '/api/v1/auth/verify/resend', [AuthController::class, 'verifyResend']);
+        $router->add('POST', '/api/v1/auth/login', [AuthController::class, 'login']);
+        $router->add('POST', '/api/v1/auth/logout', [AuthController::class, 'logout']);
+        $router->add('GET', '/api/v1/auth/session', [AuthController::class, 'session']);
+        $router->add('POST', '/api/v1/auth/recovery/request', [AuthController::class, 'recoveryRequest']);
+        $router->add('POST', '/api/v1/auth/recovery/confirm', [AuthController::class, 'recoveryConfirm']);
     }
 
     private function internalErrorResponse(): Response

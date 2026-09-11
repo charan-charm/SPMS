@@ -63,6 +63,12 @@ final class Response
         return $this;
     }
 
+    /** Test/integration access to constructed headers (e.g. Set-Cookie). */
+    public function headers(): array
+    {
+        return $this->headers;
+    }
+
     public function send(): void
     {
         $meta = $this->meta;

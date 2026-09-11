@@ -601,4 +601,226 @@ GET /api/v1/intelligence/insights/{id}   single persisted insight
     explanation_source identifier, and never claim measured certainty
     for potential/estimated/simulated results.
 
+# 14. Database Foundation and Authentication — Ratified Architecture (W1/W3)
+
+Status of this section: RATIFIED by the project owner as the governing
+architecture for the upcoming W1 (Authentication Foundation) and W3
+(Household Ownership) implementation. Items marked LOCKED below were
+already authoritative through earlier decisions; items marked RATIFIED
+record the new specific implementation architecture. Application code,
+migrations, and tests are NOT part of this ratification.
+
+Ratified architectural principles (repeated here as one list; each is
+already grounded in the cited rules):
+
+1.  The backend is the sole security authority (docs/08 §2, §24).
+2.  Authentication establishes identity; authorization establishes
+    resource access (docs/06 §5).
+3.  Household ownership is a domain relationship, not merely an account
+    attribute (this section).
+4.  Client-provided identifiers are never proof of ownership
+    (docs/06 §26, docs/08 §19).
+5.  Repositories do not decide authorization (this section).
+6.  React route protection is UX only, never security (docs/08 §18).
+7.  Sessions are server-side and revocable (docs/08 §8).
+8.  Secrets/tokens are stored hashed where possible (docs/08 §23).
+9.  Authentication failures must not leak whether sensitive account
+    data exists (docs/08 §7).
+10. Deletion behavior must preserve security/audit history
+    (docs/01 §39, docs/01 §31).
+11. Data lifecycle and security lifecycle are separate concerns
+    (docs/01 §39).
+12. Demo/Test mode is an operating mode, not an authorization role
+    (docs/01 §33.2, docs/08 §10).
+
+## D-049 — Account Identity Model — Database/Auth
+
+Status: RATIFIED.
+
+1.  One `accounts` table is the canonical authentication/account
+    identity. No separate user/profile authentication tables exist in
+    v1. Conceptual fields: `id CHAR(36) UUIDv4` (existing identifier
+    convention), `email` normalized lowercase and UNIQUE,
+    `password_hash`, `status` (PENDING_VERIFICATION, ACTIVE, DISABLED,
+    DELETION_PENDING), `role` (USER, ADMIN), `mode` (REAL, DEMO_TEST),
+    `email_verified_at`, `created_at`, `updated_at`.
+2.  Client input can never determine `role`, `mode`, `status`, or any
+    authorization property. These are server-assigned only.
+3.  Demo/Test is an account mode attribute, not an authorization role
+    (docs/01 §33.2 — LOCKED, restated for the schema).
+
+## D-050 — Household Membership Ownership Model — Database/Auth
+
+Status: RATIFIED.
+
+1.  Household-domain identity lives in a separate `households` table.
+    Ownership/sharing is modeled by a `household_memberships` table
+    between `accounts` and `households`. Ownership is never encoded as
+    `accounts.household_id`.
+2.  The schema is N:N-capable. Ratified v1 business rules: one account
+    may own/belong to one household; a household may eventually have
+    multiple members; the primary v1 membership role is OWNER;
+    MEMBER/VIEWER roles may be added later. Single-household-per-account
+    is enforced by v1 application rules, not by the schema shape.
+3.  The membership layer is the authorization boundary. Household-scoped
+    data must be authorized from the authenticated account's
+    server-side membership. A client-supplied `household_id` is only a
+    requested resource identifier: access is verified server-side, and
+    for normal current-user operations the effective household is
+    derived from authenticated membership. Cross-household access is
+    denied (404 semantics where existence would otherwise leak).
+
+## D-051 — Server-Side Database-Backed Sessions and Cookie Policy — Database/Auth
+
+Status: RATIFIED (formalizes docs/07 §16, docs/08 §8, docs/04 Q101/Q103).
+
+1.  Sessions are server-side and database-backed (application-managed
+    session store). JWT is NOT used as the primary browser
+    authentication mechanism.
+2.  Session identifier: opaque, cryptographically random, 256-bit
+    entropy, carried in a cookie. The database stores ONLY a secure
+    hash of the identifier (SHA-256), never the raw identifier.
+3.  Lifecycle: the identifier is regenerated on successful login; the
+    session is revoked/deleted on logout; idle expiry and absolute
+    expiry are both enforced server-side.
+4.  Ratified defaults: 24 hours idle timeout; 7 days absolute lifetime.
+    Values may be tuned during W1 with security review.
+5.  Cookie policy: HttpOnly; SameSite=Lax; Secure=true in production
+    HTTPS; Secure=false only for local development over plain HTTP;
+    Path=/. The authoritative session token is never stored in browser
+    storage (docs/08 §8, §20).
+
+## D-052 — CSRF Synchronizer-Token Policy — Database/Auth
+
+Status: RATIFIED (formalizes docs/08 §9, docs/06 §23).
+
+1.  State-changing authenticated browser requests use a synchronizer
+    token: server-generated, associated with the server-side session,
+    sent by the frontend through the centralized API client.
+2.  SameSite alone is not the CSRF defense. GET/HEAD/OPTIONS remain
+    non-mutating.
+
+## D-053 — Account Tokens, Password Policy and Rate Limiting — Database/Auth
+
+Status: RATIFIED (formalizes docs/08 §5–7, §12).
+
+1.  A dedicated `account_tokens` table serves verification and recovery
+    workflows. Tokens are random, opaque, single-use, time-limited, and
+    invalid after use. Stored token identifiers are hashed with
+    SHA-256; raw tokens are never stored.
+2.  Ratified TTLs: email verification 24 hours; password recovery 1
+    hour.
+3.  Raw verification/recovery tokens are never written to ordinary
+    application logs.
+4.  Passwords use PHP `password_hash`/`password_verify`; Argon2id is
+    preferred where the runtime supports it, with a secure
+    PHP-supported fallback otherwise. No custom hashing. No plaintext.
+5.  The password policy is centralized and backend-enforced. v1 minimum
+    length: 12 characters.
+6.  Authentication-sensitive operations are rate-limited with DB-backed
+    state (not process memory). Protected at minimum: login,
+    registration, verification resend, password recovery request,
+    password reset attempts.
+7.  Login protection: bounded failed-attempt throttling per normalized
+    account/email + IP, broader IP throttling, and temporary cooldown —
+    never a permanent lockout (which would enable trivial
+    denial-of-service against another user).
+
+## D-054 — Authentication Email Transport Abstraction — Database/Auth
+
+Status: RATIFIED.
+
+1.  Authentication email delivery uses a transport abstraction:
+    SMTP/provider transport through configuration in production; a
+    local mail-catcher/dev sink in development when available.
+2.  If no development sink is available, delivery fails safely rather
+    than exposing authentication secrets (including raw tokens) in
+    ordinary logs.
+
+## D-055 — Middleware Layer, Authorization Boundaries and Admin — Database/Auth
+
+Status: RATIFIED (formalizes docs/07 §16 request flow, docs/08 §10–11).
+
+1.  A deliberate middleware layer is introduced matching the documented
+    architecture: Router → Middleware → Controller → Service/Domain →
+    Repository. Authentication middleware establishes the authenticated
+    account context.
+2.  Authorization remains a backend service/controller-boundary
+    responsibility. Repositories remain authentication-agnostic and
+    receive already-authorized, validated identifiers.
+3.  No authorization logic lives in React; frontend route guards are UX
+    only (docs/08 §18).
+4.  Roles are USER and ADMIN. ADMIN does not automatically mean
+    unrestricted access to every household: administrative operations
+    use explicit backend capabilities/authorization rules, and sensitive
+    administrative actions are auditable (docs/08 §11, docs/04 Q194–Q196).
+
+## D-056 — Security/Audit Events and Deletion Foreign-Key Policy — Database/Auth
+
+Status: RATIFIED (formalizes docs/01 §39, docs/01 §31, docs/08 §26).
+
+1.  A dedicated security/audit event mechanism is part of the DB
+    architecture. Events retain actor information where available.
+2.  Security/audit history must not depend on the lifecycle of the
+    deleted account or household: event rows reference actors/resources
+    by identifier without destructive foreign-key cascades that would
+    erase security history.
+3.  Ratified relationship behavior: account → sessions CASCADE; account
+    → account_tokens CASCADE; account → memberships CASCADE; account →
+    owned household RESTRICT. Household → insights RESTRICT initially;
+    other analytical/domain records are lifecycle-aware and RESTRICT
+    where appropriate.
+4.  SET NULL must not be used merely to make deletion succeed. Account
+    deletion follows the controlled hybrid lifecycle (docs/01 §31):
+    disable, revoke, delete/anonymize per retention policy, stop
+    processing, retain minimal audit/proof.
+
+## D-057 — Insights Household Foreign-Key Integration — Database/Auth
+
+Status: RATIFIED (extends D-046; does not alter the F6 migration).
+
+1.  `insights.household_id = NULL` has intentional semantics:
+    system-scope / undetermined-household insights (D-046). NULL is
+    preserved for exactly that meaning.
+2.  Once household ownership is implemented and existing F6 test
+    residue is cleaned, a foreign key is added from
+    `insights.household_id` to `households.id` with RESTRICT behavior.
+    SET NULL is never used for this relationship (a deleted household's
+    insights must not silently become system-scope insights).
+3.  `account_id` is not added to insights: household domain ownership
+    is the correct scope, reached through memberships.
+4.  Transitional fact: current F6 insight data may be visible across
+    household scopes because authentication/ownership does not exist
+    yet. This is known transitional behavior — closed server-side by
+    W3, never by client-side filters.
+
+## D-058 — Strict SQL Mode and Ratified Migration Sequence — Database/Auth
+
+Status: RATIFIED.
+
+1.  SPMS database access operates under strict SQL semantics. Strict
+    mode is configured for the SPMS connection/session explicitly, not
+    by blindly changing the global XAMPP/MariaDB installation, which
+    must keep working for unrelated applications.
+2.  Ratified migration sequence (architectural intent; created only in
+    their own future milestones):
+
+```text
+0002_create_accounts
+0003_create_sessions
+0004_create_account_tokens
+0005_create_households
+0006_create_household_memberships
+0007_add_insights_household_foreign_key
+0008_create_security_events
+```
+
+3.  Dependencies: 0003/0004 require 0002; 0006 requires 0002 + 0005;
+    0007 requires 0005 plus a real household-creation path. Before any
+    migration: inspect the MariaDB version and sql_mode, inspect
+    migration state, preserve F6 data semantics, identify and
+    explicitly handle F6 fake/test household residue, never reset or
+    drop tables as a shortcut. 0007 must NOT be implemented until
+    incompatible residue is cleaned or safely migrated.
+
 **END OF DECISION LOG**

@@ -1,0 +1,126 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Security;
+
+use App\Domain\Account\Account;
+use App\Domain\Auth\SessionService;
+use App\Repositories\AccountRepository;
+use App\Repositories\SecurityEventRepository;
+use App\Repositories\SessionRepository;
+use App\Support\AppException;
+use App\Support\Request;
+use App\Support\Security\SessionCookie;
+use App\Support\Security\TokenHasher;
+use DateTimeImmutable;
+
+/**
+ * W1 — Authentication middleware (docs/10 D-055).
+ *
+ * Router → Middleware → Controller → Service/Domain → Repository.
+ *
+ * Reads the session cookie, hashes the opaque identifier, locates the
+ * valid server-side session, rejects revoked/idle-expired/absolute-
+ * expired sessions (lazily revoking the latter), verifies the account
+ * can still authenticate, and establishes the AuthContext on the
+ * request. Also enforces the CSRF synchronizer token on authenticated
+ * state-changing requests (docs/10 D-052).
+ *
+ * Repositories never see this layer's decisions; React never influences
+ * them.
+ */
+final class AuthMiddleware
+{
+    public const CSRF_HEADER = 'X-SPMS-CSRF';
+
+    private const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+
+    public function __construct(
+        private readonly SessionRepository $sessions = new SessionRepository(),
+        private readonly AccountRepository $accounts = new AccountRepository(),
+        private readonly SessionService $sessionService = new SessionService(),
+        private readonly SecurityEventRepository $events = new SecurityEventRepository()
+    ) {
+    }
+
+    public static function process(Request $request): Request
+    {
+        return (new self())->handle($request);
+    }
+
+    public function handle(Request $request): Request
+    {
+        $context = $this->resolve($request);
+
+        if ($context->isAuthenticated()) {
+            if (in_array($request->method(), self::MUTATING_METHODS, true)) {
+                $this->assertCsrfToken($request, $context);
+            }
+
+            $session = $context->session();
+            if ($session !== null) {
+                $this->sessionService->touch($session);
+            }
+        }
+
+        return $request->withAuthContext($context);
+    }
+
+    private function resolve(Request $request): AuthContext
+    {
+        $rawToken = SessionCookie::extractToken($request->header('cookie'));
+
+        if ($rawToken === null) {
+            return AuthContext::anonymous();
+        }
+
+        $session = $this->sessionService->resolve($rawToken, new DateTimeImmutable('now', new \DateTimeZone('UTC')));
+
+        if ($session === null) {
+            return AuthContext::anonymous();
+        }
+
+        $account = $this->accounts->findById((string) $session['account_id']);
+
+        if ($account === null || !$account->canAuthenticate()) {
+            // A session whose account can no longer authenticate
+            // (deleted or disabled) is revoked, never silently honored.
+            $this->sessions->revoke((string) $session['id'], gmdate('Y-m-d H:i:s'));
+            $this->events->record(
+                SecurityEventRepository::SESSION_REVOKED,
+                null,
+                $session['account_id'],
+                ['session_id' => $session['id'], 'reason' => 'ACCOUNT_STATE'],
+                null
+            );
+
+            return AuthContext::anonymous();
+        }
+
+        return AuthContext::authenticated($account, $session);
+    }
+
+    private function assertCsrfToken(Request $request, AuthContext $context): void
+    {
+        $session = $context->session();
+        $presented = $request->header(strtolower(self::CSRF_HEADER));
+
+        if ($session === null
+            || !is_string($presented)
+            || $presented === ''
+            || !hash_equals((string) $session['csrf_token'], $presented)) {
+            $account = $context->account();
+
+            $this->events->record(
+                SecurityEventRepository::CSRF_REJECTED,
+                null,
+                $account?->id(),
+                ['path' => $request->path(), 'method' => $request->method()],
+                $request->ipAddress()
+            );
+
+            throw new AppException('CSRF_REJECTED', 'CSRF token missing or invalid.', 403);
+        }
+    }
+}

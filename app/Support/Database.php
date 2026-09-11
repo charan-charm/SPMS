@@ -37,6 +37,13 @@ final class Database
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
             ]);
+
+            // Strict SQL semantics for the SPMS connection/session only —
+            // the global MariaDB configuration is intentionally left
+            // untouched (docs/10 D-058).
+            self::$pdo->exec(
+                "SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION'"
+            );
         } catch (PDOException $e) {
             self::$pdo = null;
 
