@@ -14,6 +14,7 @@ use App\Support\AppException;
 use App\Controllers\HealthController;
 use App\Controllers\EnergyBalanceController;
 use App\Controllers\EnergyCostController;
+use App\Controllers\IntelligenceController;
 use App\Repositories\HealthRepository;
 use App\Services\HealthService;
 use Throwable;
@@ -127,6 +128,10 @@ final class App
         // F5 — Energy Cost Analysis (versioned API boundary)
         $router->add('POST', '/api/v1/energy/cost/estimate', [EnergyCostController::class, 'estimate']);
         $router->add('GET', '/api/v1/energy/cost/historical', [EnergyCostController::class, 'historical']);
+
+        // F6 — Deterministic Intelligence (versioned API boundary)
+        $router->add('GET', '/api/v1/intelligence/insights', [IntelligenceController::class, 'list']);
+        $router->add('GET', '/api/v1/intelligence/insights/{id}', [IntelligenceController::class, 'show']);
     }
 
     private function internalErrorResponse(): Response

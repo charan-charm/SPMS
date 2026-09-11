@@ -242,6 +242,67 @@ body {
 }
 
 /*
+ * Coordinated theme transition — when data-theme flips, CSS custom
+ * properties change instantly and never interpolate; only elements that
+ * happened to carry their own color transitions animated, each on its own
+ * clock (body 250ms, cards/buttons/inputs 150ms, everything else
+ * instantly), so the theme appeared to change in layers. While the
+ * theme-switch window is open (spms-theme-switching, set by
+ * ThemeProvider), EVERY element transitions the same theme-token color
+ * properties on one shared 250ms clock — background, surfaces, cards,
+ * secondary surfaces, borders, text, muted text and focus rings move as
+ * one visual state.
+ *
+ * The property list is deliberately restricted to that approved
+ * coordinated set. box-shadow, fill and stroke are EXCLUDED: shadows are
+ * the most paint-expensive property to interpolate (and barely
+ * perceptible across themes), and SVG fill/stroke belong to the
+ * decorative/branding layers (logo, leaves) which must snap cleanly
+ * instead of interpolating — icon color already rides on `color` via
+ * currentColor. Keeping the list tight prevents the paint queue from
+ * saturating on card-heavy pages, which is what made the decorative
+ * layers' snap frames land late and trail the surfaces. Enumerated color
+ * properties only — never `all` — so layout, position, transforms and
+ * hover motion are untouched. This block sits BEFORE the leaf-suppression
+ * rule below so the decorative leaves keep their owner-requested instant
+ * snap.
+ */
+.spms-theme-switching,
+.spms-theme-switching *,
+.spms-theme-switching *::before,
+.spms-theme-switching *::after {
+    transition:
+        background-color 250ms ease,
+        color 250ms ease,
+        border-color 250ms ease,
+        outline-color 250ms ease,
+        text-decoration-color 250ms ease;
+}
+
+/* Reduced motion: theme switching must stay effectively instant — the
+   document-wide reduced-motion guard below already collapses durations;
+   this keeps that guarantee independent of rule order. */
+@media (prefers-reduced-motion: reduce) {
+    .spms-theme-switching,
+    .spms-theme-switching *,
+    .spms-theme-switching *::before,
+    .spms-theme-switching *::after {
+        transition: none;
+    }
+}
+
+/* Theme switches are instant for the decorative leaves (owner request):
+   the ENTIRE leaf subtree is excluded from the coordinated transition so
+   no leaf node carries transition bookkeeping and the fill/opacity snap
+   repaints land on the first available frame — no shimmer, and no
+   trailing the surfaces while the switch paints. The loading transitions
+   above only ever run for loading start/end, never for theme changes. */
+.spms-theme-switching .spms-leaf-layer,
+.spms-theme-switching .spms-leaf-layer * {
+    transition: none !important;
+}
+
+/*
  * Solar Day Arc (SolarDayArc) — theme-dependent arc styling only; all
  * geometry, data interpolation, and motion live in the component. The
  * dashed daylight trajectory is a quiet warm guide in light theme and

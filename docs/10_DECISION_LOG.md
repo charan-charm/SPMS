@@ -1,490 +1,321 @@
 # 10 — Decision Log
 
-**Status:** Phase 6 consolidated  
+**Status:** Phase 6 consolidated + F0 frontend direction locked  
 **Purpose:** Preserve important architectural and implementation decisions with rationale.
 
-This document records the decisions that materially govern implementation. It is not intended to reproduce every individual Q&A line.
-
----
+This document records decisions that materially govern implementation.
 
 # 1. Architecture Decisions
 
 ## D-001 — XAMPP for Development
 
-**Decision:** Use XAMPP for local development.
+Use XAMPP for local development because it provides a practical Apache/PHP/MySQL-compatible environment while the application remains portable to normal PHP hosting.
 
-**Rationale:** It provides a practical Apache/PHP/MySQL environment while the application architecture remains portable to normal PHP hosting.
+## D-002 — PHP + MySQL Backend
 
----
+Keep PHP and MySQL as the backend/data stack. The established backend architecture remains valid.
 
-## D-002 — PHP + MySQL + Vanilla JavaScript
+## D-003 — React Frontend — F0
 
-**Decision:** Use PHP, MySQL, HTML, CSS, and Vanilla JavaScript rather than returning to the previous React/Node architecture.
+**Decision:** Use React as the SPMS frontend.
 
-**Rationale:** The chosen stack is simpler to understand, maintain, demonstrate, and explain during a project viva.
+**Rationale:** SPMS requires a dynamic, component-based, responsive interface containing dashboards, analytical charts, interactive forms, notifications, animated states, and reusable UI patterns.
 
----
+This supersedes the previous PHP-rendered HTML/vanilla-JavaScript presentation direction.
 
-## D-003 — Lightweight MVC-like Architecture
+The change affects frontend implementation only. Existing functional requirements, workflows, backend architecture, security principles, analytical authority, provenance, quality, and lifecycle rules remain valid.
 
-**Decision:** Use modular MVC-like separation without adopting a large full-stack framework.
+## D-004 — Vite Frontend Tooling — F0
 
-**Rationale:** Clear layer responsibilities are more important than framework complexity.
+Use Vite for React development/build tooling.
 
----
+Node.js is tooling only. Node.js/Express is not the SPMS backend.
 
-## D-004 — Public Front Controller
+## D-005 — Tailwind CSS — F0
 
-**Decision:** Use one public front controller:
+Use Tailwind CSS for frontend styling, constrained by the SPMS design system.
+
+## D-006 — shadcn/ui — F0
+
+Use shadcn/ui where appropriate as a reusable accessible component foundation adapted to SPMS.
+
+## D-007 — Motion — F0
+
+Use Motion for purposeful application animation. Animation remains subtle, consistent, and reduced-motion aware.
+
+## D-008 — Lucide Icons — F0
+
+Use Lucide Icons for consistent professional outline iconography.
+
+## D-009 — Recharts / Approved Chart Library — F0
+
+Use Recharts initially, or another explicitly approved charting library if implementation evidence justifies a change. The chart library is never analytical authority.
+
+## D-010 — React Router — F0
+
+Use React Router for frontend navigation. Backend authorization remains authoritative.
+
+## D-011 — Centralized Fetch API Client — F0
+
+Use native `fetch()` through a centralized React API client to keep transport behavior consistent without unnecessary client frameworks.
+
+## D-012 — Frontend State — F0
+
+Start with React state and Context where genuinely global state is required. Avoid unnecessary global-state complexity.
+
+## D-013 — Frontend/Backend Boundary — F0
 
 ```text
-public/index.php
+React
+↓
+REST API
+↓
+PHP
+↓
+MySQL
 ```
 
-**Rationale:** Centralizes bootstrap, routing, middleware, and request handling.
+React owns UI/interaction/visualization. PHP owns business logic/security/validation/database/external integrations.
 
----
+## D-014 — Public Front Controller
 
-## D-005 — Layered Request Flow
+Keep `public/index.php` as the PHP public front controller for backend/API requests.
 
-**Decision:**
+## D-015 — Backend Authority
 
-```text
-Controller → Service → Repository / Integration
-```
+Backend/domain/analytical services own authoritative business and numerical calculations.
 
-**Rationale:** Keeps HTTP, business logic, persistence, and external providers separated.
+## D-016 — Semantic API Contracts
 
----
+APIs expose structured semantic identifiers and contextual metadata. UI labels are not authoritative semantics.
 
-# 2. Backend Authority
+# 2. Data Meaning
 
-## D-006 — Backend Owns Business Truth
-
-**Decision:** Backend/domain/analytical services own authoritative business and numerical calculations.
-
-**Rationale:** Prevents the frontend from becoming a second source of truth.
-
----
-
-## D-007 — Frontend Is Presentation/Interaction
-
-**Decision:** JavaScript handles presentation and presentation-only calculations.
-
-**Rationale:** UI code must not redefine authoritative energy, prediction, balance, cost, authorization, or lifecycle truth.
-
----
-
-## D-008 — Semantic API Contracts
-
-**Decision:** APIs expose structured semantic identifiers and contextual metadata.
-
-**Rationale:** The UI should not infer whether a value is actual, predicted, estimated, simulated, stale, degraded, or unavailable.
-
----
-
-# 3. Data Meaning
-
-## D-009 — Data Nature and Status Are Separate
-
-**Decision:** Keep nature separate from status.
+## D-017 — Data Nature and Status Are Separate
 
 ```text
 Nature: ACTUAL / PREDICTED / ESTIMATED / SIMULATED
 Status: FRESH / STALE / DEGRADED / UNAVAILABLE
 ```
 
-**Rationale:** A value can be actual but stale, or predicted but fresh.
+## D-018 — Measurement Context
 
----
+Distinguish measured/actual, inferred, predicted, potential, estimated, and simulated meanings.
 
-## D-010 — Measurement Context
+## D-019 — Provenance
 
-**Decision:** Distinguish measured/actual, inferred, predicted, potential, estimated, and simulated meanings.
+Track source, time, processing, nature, transformation, model/version, and lineage where required.
 
-**Rationale:** SPMS does not have direct grid measurement and therefore must not claim confirmed grid import/export from predictions.
+# 3. Integrations
 
----
+## D-020 — GoodWe Is Actual Solar Source
 
-## D-011 — Provenance
+GoodWe remains the primary source of actual solar measurements.
 
-**Decision:** Track source, time, processing, nature, transformation, model/version, and lineage where required.
+## D-021 — External Services Are Bounded
 
-**Rationale:** Analytical results must remain explainable and traceable.
+GoodWe, weather, AWS, Bedrock, and email remain isolated integration dependencies.
 
----
+## D-022 — Graceful Degradation
 
-# 4. GoodWe and External Services
+External failure degrades affected capabilities without destroying independent valid information.
 
-## D-012 — GoodWe Is Actual Solar Source
+# 4. AI and Analytics
 
-**Decision:** GoodWe is the primary source of actual solar measurements.
+## D-023 — Bedrock Boundary
 
-**Rationale:** Actual solar evidence should come from the connected solar system.
+Bedrock is an explanation/intelligence capability. It does not define numerical prediction truth.
 
----
-
-## D-013 — External Services Are Bounded
-
-**Decision:** GoodWe, weather, AWS, Bedrock, and email remain isolated integration dependencies.
-
-**Rationale:** Provider behavior must not redefine SPMS truth.
-
----
-
-## D-014 — Graceful Degradation
-
-**Decision:** External failure degrades only affected capabilities where possible.
-
-**Rationale:** Loss of GoodWe, weather, or Bedrock should not unnecessarily destroy valid historical or independent functionality.
-
----
-
-# 5. AI / Bedrock
-
-## D-015 — Bedrock Does Not Calculate Numerical Truth
-
-**Decision:** Bedrock handles explanation, summarization, and contextual language.
-
-**Rationale:** Numerical prediction, balance, and cost calculations require authoritative analytical services.
-
----
-
-## D-016 — Minimum AI Context
-
-**Decision:** Send only minimum necessary validated semantic context to AI.
-
-**Rationale:** Reduces privacy/security exposure and constrains unsupported generation.
-
----
-
-## D-017 — Validate AI Output
-
-**Decision:** AI output is schema-constrained and validated.
-
-**Rationale:** Unsupported claims must not reach the user as authoritative facts.
-
----
-
-# 6. Prediction
-
-## D-018 — Separate Prediction Capabilities
-
-**Decision:** Solar forecasting and household consumption forecasting are distinct analytical capabilities.
-
-**Rationale:** Their inputs, behavior, and evaluation contexts can differ.
-
----
-
-## D-019 — Adaptive Resolution
-
-**Decision:** Prediction resolution cannot exceed available evidence.
-
-**Rationale:**
+## D-024 — Authoritative Analytical Pipeline
 
 ```text
-Monthly bill ≠ hourly measured consumption
-```
-
-The system must not manufacture fine-grained truth.
-
----
-
-## D-020 — Historical Predictions Are Immutable
-
-**Decision:** Historical predictions retain their original model/version/context.
-
-**Rationale:** Model improvements must not silently rewrite historical truth.
-
----
-
-# 7. Intelligence
-
-## D-021 — Intelligence Pipeline
-
-```text
-Validated Analytical Facts
-        ↓
+Validated Evidence
+↓
+Prediction
+↓
+Energy Balance
+↓
+Cost
+↓
+Validated Facts
+↓
 Intelligence
-        ↓
-Bedrock Explanation
-        ↓
+↓
+AI Explanation
+↓
 Insight
-        ↓
+↓
 Recommendation
-        ↓
+↓
 Notification Decision
-        ↓
-Feedback
-        ↓
-Personalization
 ```
 
-**Rationale:** Separates objective analysis, explanation, recommendation policy, and user adaptation.
+## D-025 — Recommendation Authority
 
----
+Recommendations are advisory. SPMS does not directly control appliances.
 
-## D-022 — Recommendation Is Advisory
+# 5. Security
 
-**Decision:** Recommendations do not directly control appliances.
+## D-026 — Backend Security Authority
 
-**Rationale:** SPMS is a household energy-management advisory system, not an appliance-control system.
+The backend is the security authority. React is an untrusted client.
 
----
+## D-027 — Server-Managed Sessions
 
-## D-023 — Feedback Does Not Redefine Truth
+Use PHP server-managed sessions with secure cookie controls.
 
-**Decision:** User feedback changes relevance/presentation/frequency/timing, not objective analytical truth.
+## D-028 — CSRF
 
-**Rationale:** A dismissed recommendation is not automatically an incorrect prediction.
+Authenticated state-changing browser requests require CSRF protection.
 
----
+## D-029 — File Security
 
-# 8. Security
+Private files remain outside the public web root and are accessed through authorized backend paths.
 
-## D-024 — Backend Authorization
+## D-030 — Secrets
 
-**Decision:** Every protected operation validates authorization server-side.
+Secrets remain server-side and outside source control.
 
-**Rationale:** Frontend hiding is not authorization.
+# 6. UI / UX
 
----
+## D-031 — Calm + Premium Hybrid
 
-## D-025 — Protected Bill Files
+SPMS uses a calm, premium, modern energy-tech visual identity.
 
-**Decision:** Bills are stored outside the public web root and accessed through backend authorization.
+## D-032 — Green + Teal Application Identity
 
-**Rationale:** Bills are protected household documents.
+Application UI uses the established green/teal palette. The logo/brand palette remains separate.
 
----
+## D-033 — Design System First
 
-## D-026 — Secrets Outside Source Control
+Reusable UI foundations must be established before large-scale page implementation.
 
-**Decision:** Credentials and secrets are environment-specific and excluded from version control.
+## D-034 — Adaptive Data Exploration
 
-**Rationale:** Prevents accidental credential disclosure and supports environment separation.
+Q18 remains **C — Adaptive Data Exploration**:
 
----
+> Make information easy to find without making the interface harder to understand.
 
-# 9. Database
+No giant universal query interface by default.
 
-## D-027 — MySQL + PDO
+## D-035 — Purposeful Motion
 
-**Decision:** MySQL with PHP PDO and prepared statements.
+Motion communicates state, continuity, hierarchy, or feedback. It does not exist merely for decoration.
 
-**Rationale:** Provides relational integrity and a clear persistence boundary.
+## D-036 — Data Visualization Semantics
 
----
+Charts preserve actual/predicted/estimated/stale/simulated distinctions. Color alone never communicates meaning.
 
-## D-028 — Versioned Migrations
+# 7. Development
 
-**Decision:** Database schema changes are version-controlled migration files.
+## D-037 — Incremental Implementation
 
-**Rationale:** Makes schema evolution reproducible.
-
----
-
-## D-029 — Historical Integrity
-
-**Decision:** Historical analytical records are protected from silent destructive changes.
-
-**Rationale:** Historical reports, predictions, and evaluations depend on preserving past truth.
-
----
-
-# 10. Background Operations
-
-## D-030 — Persistent Operations
-
-**Decision:** Meaningful long-running jobs receive persistent operation records and IDs.
-
-**Rationale:** Users and administrators need authoritative operation state.
-
----
-
-## D-031 — Bounded Retry
-
-**Decision:** External operations use timeouts, bounded retries, backoff, and failure classification.
-
-**Rationale:** Prevents uncontrolled retry loops and cascading failures.
-
----
-
-# 11. Testing
-
-## D-032 — Layered Testing
-
-**Decision:**
+Implementation proceeds through meaningful slices:
 
 ```text
-Unit
- ↓
-Repository
- ↓
-API
- ↓
+Design
+↓
+Backend/API where required
+↓
+Frontend
+↓
 Integration
- ↓
-Workflow / E2E
- ↓
-Security
- ↓
-Failure / Recovery
- ↓
-Analytical Validation
- ↓
-Model Evaluation
+↓
+Testing
+↓
+Review
+↓
+Git checkpoint
 ```
 
-**Rationale:** Different correctness risks require different testing layers.
+## D-038 — Coding Agent Role
 
----
+The coding agent implements approved decisions. It is not the project architect. Architectural conflicts must be reported.
 
-## D-033 — Demo/Test Uses Real Architecture
+## D-039 — Git Checkpoints
 
-**Decision:** Demo/Test uses controlled simulated inputs through real SPMS boundaries.
+Meaningful stable milestones are committed before moving to the next milestone.
 
-**Rationale:** Demonstrates realistic degradation and recovery without building a fake application.
+# 8. Frontend Transition Record
 
----
+The previous presentation direction used PHP-rendered HTML/CSS/vanilla JavaScript.
 
-# 12. Model Lifecycle
-
-## D-034 — Controlled Model Release
-
-**Decision:**
+It is now superseded by:
 
 ```text
-Candidate
- ↓
-Validation
- ↓
-Evaluation
- ↓
-Release Gate
- ↓
-Deployment
- ↓
-Monitoring
- ↓
-Rollback
+React
++
+Vite
++
+Tailwind CSS
++
+Motion
++
+shadcn/ui
++
+Lucide
++
+Recharts / approved charting
 ```
 
-**Rationale:** A new model must demonstrate acceptable behavior before becoming authoritative.
+The current M1.0 PHP/HTML landing page is a visual prototype/reference rather than the final frontend implementation.
 
----
+The M0 backend foundation remains valid.
 
-# 13. Recovery
-
-## D-035 — Backup Is Not Enough
-
-**Decision:**
+# 9. Current Locked Frontend Stack
 
 ```text
-Backup
- ↓
-Restore
- ↓
-Integrity Validation
- ↓
-Reconciliation
- ↓
-Health Verification
- ↓
-Recovery Complete
+React
+Vite
+Tailwind CSS
+Motion
+shadcn/ui
+Lucide Icons
+Recharts
+React Router
+fetch()
 ```
 
-**Rationale:** Recoverability must be demonstrated, not assumed.
-
----
-
-# 14. Documentation
-
-## D-036 — Existing Numbered Documents Are the Source of Truth
-
-**Decision:** Maintain the established numbered documentation structure rather than creating duplicate phase documents.
-
-**Rationale:** Keeps project knowledge organized and avoids conflicting specifications.
-
----
-
-# 15. Git
-
-## D-037 — Meaningful Stable Checkpoints
-
-**Decision:** Commit meaningful stable milestones, not every tiny edit.
-
-**Rationale:** Keeps Git history useful and makes rollback/checkpointing practical.
-
----
-
-## D-038 — First Technical Skeleton Is a Checkpoint
-
-**Decision:** The first complete:
+Backend:
 
 ```text
-Browser
- ↓
-Router
- ↓
-Controller
- ↓
-Service
- ↓
-Repository
- ↓
-MySQL
- ↓
-API
+PHP
+REST JSON API
+PDO
+MySQL/MariaDB-compatible development database
+XAMPP
 ```
 
-receives a stable Git commit after verification.
+No Node.js/Express application backend.
 
-**Rationale:** This proves the core architecture works before feature complexity is added.
+# 10. Current Next Step
 
----
+**F1 — React Frontend Foundation**
 
-# 16. Architectural Conflict Rule
+No domain functionality should be implemented until the frontend foundation/design-system boundary is established.
 
-## D-039 — No Silent Shortcuts
+# 11. Energy Balance — F4 Implementation Decision
 
-**Decision:** If implementation conflicts with a locked architectural rule, stop, document, evaluate, and explicitly decide whether the architecture or implementation should change.
-
-**Rationale:** Convenience must not silently redefine system architecture.
-
----
-
-# 17. Final Governing Decision
-
-## D-040 — Implementation Readiness Rule
-
-> Implement the locked architecture incrementally, verify each meaningful boundary, preserve the established semantic/security/analytical rules, document concrete implementation decisions, test continuously, and commit stable milestones.
-
-This governs the transition from architecture into actual coding.
----
-
-# 18. Energy Balance — F4 Implementation Decision
-
-## D-041 — Balanced Classification Tolerance — F4
+## D-040 — Balanced Classification Tolerance — F4
 
 The official project documentation (docs/01 §15.1) defines the balanced state
 qualitatively only:
 
-``	ext
+```text
 Solar ≈ Consumption → Approximately Balanced
-``
+```
 
-The ≈ relation was never numerically defined in any official document.
+The `≈` relation was never numerically defined in any official document.
 During the F4 implementation review, the project owner ratified the following
 numeric tolerance as the project's concrete implementation decision:
 
-``	ext
+```text
 tolerance = max(0.1 kWh, 5% × max(solar_generation_kwh, household_consumption_kwh))
-``
+```
 
 Classification (backend-authoritative, docs/01 §15.3, D-015):
 
-``	ext
+```text
 abs(solar_generation_kwh - household_consumption_kwh) <= tolerance
     → BALANCED
 
@@ -493,14 +324,14 @@ solar_generation_kwh - household_consumption_kwh > tolerance
 
 household_consumption_kwh - solar_generation_kwh > tolerance
     → POTENTIAL_DEFICIT
-``
+```
 
 Notes:
 
 - The tolerance constants are fixed in code and are deliberately not
   environment-configurable.
 - The applied tolerance is disclosed transparently in every classified API
-  response via result.tolerance.
+  response via `result.tolerance`.
 - Result semantics remain potential: measurement context POTENTIAL
   (docs/06 §13). A potential surplus is not confirmed grid export and a
   potential deficit is not confirmed grid import.
@@ -603,5 +434,171 @@ reference error and has been corrected to D-040. No decision content was
 changed, no decision was renamed or renumbered, and D-041 remains
 genuinely unused — this F5 entry deliberately takes D-042 so that no
 existing reference can collide.
+
+# 13. Deterministic Intelligence — F6 Implementation Decision
+
+## D-043 — Controlled Insight Taxonomy and Detector Architecture — F6
+
+The project owner ratified the following F6.1 implementation decisions
+(docs/01 §38.1, docs/02 §2 F6, AGENT_INSTRUCTIONS §26):
+
+1.  Insight types are controlled. Every insight belongs to exactly one
+    whitelisted type in `InsightTaxonomy`, and every type belongs to
+    exactly one category (SOLAR, CONSUMPTION, ENERGY, COST, GENERAL).
+    Taxonomy v1 declares 20 types across the five categories. The set is
+    extensible only by editing the taxonomy class — never by accepting
+    arbitrary strings from input, storage, AI output, or the frontend.
+
+2.  Detection is deterministic and rule-based. Each detector is a
+    separate class implementing one `InsightDetector` contract, reading
+    only the canonical validated evidence input. There is no AI/LLM
+    generation of insight types, wording-as-truth, or candidate insight
+    in v1. The engine performs no I/O and no persistence; ordering of
+    results is deterministic.
+
+3.  The canonical evidence input is a single validated structure with
+    optional sections (household scope, solar, consumption, forecast,
+    balance, cost, historical, quality context, provenance context).
+    Missing sections mean "not provided", never zero. A value record
+    cannot claim UNAVAILABLE status. The F6 evidence adapter maps locked
+    F4/F5 result payloads into this shape verbatim: F6 never recomputes
+    a balance (docs/10 D-040) and never recomputes a cost (docs/10
+    D-042). Detector thresholds (change/pattern/recurrence heuristics)
+    are fixed v1 implementation defaults, disclosed in every insight's
+    supporting facts, and are not scientifically calibrated.
+
+## D-044 — Evidence-Weighted Significance Model — F6
+
+Insight significance (LOW, MODERATE, HIGH) is assigned by a dedicated
+deterministic model, not by detectors alone and never by the frontend:
+
+```text
+significance = detector magnitude hint (LOW/MODERATE/HIGH)
+               capped by honesty ceilings
+```
+
+Honesty ceilings (v1, fixed in code):
+
+-   DATA_LIMITATION insights are always LOW.
+-   Any involved evidence that is not ACTUAL (predicted, estimated,
+    simulated, or no analytical value at all) caps significance at
+    MODERATE.
+-   INSUFFICIENT insight confidence caps significance at LOW.
+
+These are evidence-weighted heuristics ratified as v1 implementation
+defaults only — not scientifically validated impact measurements.
+
+## D-045 — Independent F6 Insight Confidence — F6
+
+Insight confidence is F6's own judgement about how well the evidence a
+candidate actually used supports the finding:
+
+-   It is never copied from an upstream F4/F5 confidence value and never
+    presented as a numeric score — levels only (HIGH, MODERATE, LOW,
+    VERY_LOW, INSUFFICIENT). F4's result-level confidence is deliberately
+    not even carried into F6 evidence; F4's result-level quality IS
+    carried through and participates in the quality ceilings below.
+-   Base level comes from evidence breadth (how many distinct evidence
+    domains carry usable records for this candidate) and observation
+    depth (three or more compared records can raise the base).
+-   Honesty ceilings apply: SIMULATED evidence caps at LOW;
+    ESTIMATED/PREDICTED at MODERATE; POOR quality at VERY_LOW;
+    UNVERIFIED quality at LOW; PARTIAL quality at MODERATE; two-period
+    comparisons at MODERATE; no usable evidence is INSUFFICIENT.
+-   Status ceilings (owner-ratified F6.1 correction): UNAVAILABLE
+    evidence status — and defensively ERROR, which cannot pass validated
+    evidence input — caps insight confidence at INSUFFICIENT; STALE and
+    DEGRADED evidence status caps at MODERATE. Status is applied as a
+    ceiling only and never upgrades confidence.
+-   Degradation is propagated worst-of and never upgraded (docs/05 §7,
+    §9).
+
+## D-046 — Insight Persistence, Deduplication and Lifecycle — F6
+
+1.  Persistence (F6 v1): insights are persisted in a single `insights`
+    table (migration `0001_create_insights`) with semantic data fields
+    (data nature nullable = "no analytical value involved"; data status;
+    quality), provenance, supporting facts, limitations, explanation and
+    explanation source, UTC timestamps (docs/05 §13), and lifecycle
+    counters (first_detected_at, last_observed_at, observation_count).
+
+2.  Deduplication: the identity is household + type + affected period.
+    It is enforced by a database unique key over NULL-safe generated
+    columns (MySQL unique indexes ignore NULLs), complemented by an
+    explicit lookup inside a repository transaction (docs/05 §15, §18).
+    Repeated detections converge on the same row instead of duplicating
+    it; materially changed evidence updates the row while historical
+    anchors are preserved. Period-scoped variants of the same type are
+    distinct rows, preserving historical truth (docs/05 §6).
+
+3.  Lifecycle states: DETECTED, VALIDATED, ACTIVE, UPDATED, RESOLVED,
+    EXPIRED, HISTORICAL. The engine/repository ladder is deterministic:
+    first detection DETECTED, second unchanged observation VALIDATED,
+    third+ ACTIVE; changed evidence moves a validated insight to
+    UPDATED. ONGOING is accepted as an input/filter alias and normalized
+    to UPDATED — never persisted verbatim. RESOLVED, EXPIRED and
+    HISTORICAL are reserved states: filterable in v1, assigned only by
+    future evaluation paths (no background job exists yet).
+
+## D-047 — Intelligence API Boundary and Backend-Controlled Generation — F6
+
+1.  Endpoints (versioned /api/v1 envelope, mirroring the F4/F5 idiom
+    without modifying F4 or F5):
+
+```text
+GET /api/v1/intelligence/insights        list persisted insights
+GET /api/v1/intelligence/insights/{id}   single persisted insight
+```
+
+2.  Generation is backend-controlled and never triggered by ordinary
+    reads. GET /api/v1/intelligence/insights is strictly read-only
+    (docs/06 §3 read-oriented GET semantics): it validates filters,
+    queries persisted insights, and returns the standard envelope — no
+    INSERT or UPDATE can occur on a read, and repeated reads leave
+    observation counters and timestamps unchanged. Detection,
+    significance, confidence, deduplication and lifecycle run only
+    through the controlled internal service path
+    (IntelligenceService::refreshFromEnergyPipeline /
+    refreshFromPayloads), which is not exposed as any public endpoint;
+    future ingestion (GoodWe synchronization, prediction, bills) will
+    invoke that internal seam. Until a controlled evaluation has run,
+    the honest state is an empty insight list — reads never fabricate a
+    DATA_LIMITATION row merely because someone performed a GET.
+
+3.  List filters (category, type, significance, confidence, status,
+    household scope, period bounds, limit, offset) are validated against
+    allowlists with bounded pagination (docs/05 §17). POST to the list
+    route is a 405 by construction.
+
+4.  Ownership: household-scoped insights are returned only to requests
+    scoped to the owning household; a mismatch returns 404 rather than
+    disclosing existence. Full authentication arrives with the
+    account/session milestones; the scoping is structurally prepared in
+    v1.
+
+5.  Router extension: the shared router gained additive support for
+    `{param}` path segments (exact-match routes keep absolute
+    precedence; 404/405 semantics unchanged), required for the insight
+    detail route.
+
+## D-048 — Data Quality, Provenance and Data Limitation Insights — F6
+
+1.  Every insight carries the semantic data fields of the evidence it
+    used, propagated worst-of and never upgraded: SIMULATED stays
+    SIMULATED end to end (docs/10 D-048 supersedes no earlier decision;
+    D-041 remains unused per section 12). DEMO is a product/demo context
+    concept, never a data_nature value.
+
+2.  Data limitation insights (DATA_LIMITATION) state honestly what is
+    missing, unavailable, insufficient, or simulated-only — including
+    F4/F5 UNAVAILABLE results and INSUFFICIENT_EVIDENCE pricing — so
+    consumers can see why coverage is limited. Missing data is never
+    treated as zero and never silently ignored (docs/01 §27, §42.3).
+
+3.  Provenance is persisted per insight: engine version, taxonomy
+    version, contributing detectors, evidence domains, and the F4/F5
+    pipeline sources. Explanations are deterministic, carry an
+    explanation_source identifier, and never claim measured certainty
+    for potential/estimated/simulated results.
 
 **END OF DECISION LOG**

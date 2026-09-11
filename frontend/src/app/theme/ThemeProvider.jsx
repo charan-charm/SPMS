@@ -32,7 +32,18 @@ function resolveInitialPreference() {
 }
 
 function applyTheme(resolved) {
-    document.documentElement.setAttribute('data-theme', resolved)
+    const root = document.documentElement
+    if (root.getAttribute('data-theme') === resolved) return
+    // spms-theme-switching opens the coordinated theme-transition window:
+    // every element transitions the shared color-bearing properties on one
+    // 250ms clock (styles/index.css), so the theme moves as one visual
+    // state instead of in layers. The window must outlast the transition
+    // (250ms + buffer) or mid-flight transitions would be cut. The same
+    // window keeps the decorative leaves instant (owner request): their
+    // suppression is a later, !important rule in index.css.
+    root.classList.add('spms-theme-switching')
+    root.setAttribute('data-theme', resolved)
+    window.setTimeout(() => root.classList.remove('spms-theme-switching'), 350)
 }
 
 function persist(preference) {

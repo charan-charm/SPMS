@@ -93,10 +93,16 @@ foreach ($files as $file) {
         ($migration['up'])($pdo);
         $record = $pdo->prepare('INSERT INTO migrations (id) VALUES (:id)');
         $record->execute(['id' => $id]);
-        $pdo->commit();
+        // DDL statements end the active transaction (implicit commit), so
+        // only commit when a transaction is still open.
+        if ($pdo->inTransaction()) {
+            $pdo->commit();
+        }
         echo "[applied] {$id}" . PHP_EOL;
     } catch (Throwable $e) {
-        $pdo->rollBack();
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         fwrite(STDERR, "[failed]  {$id}: " . $e->getMessage() . PHP_EOL);
         exit(1);
     }
