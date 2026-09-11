@@ -1,6 +1,7 @@
 import { createBrowserRouter } from 'react-router'
 import { FoundationPlaceholder } from '../pages/public/FoundationPlaceholder'
 import { EnergyBalancePage } from '../pages/app/EnergyBalancePage'
+import { EnergyCostPage } from '../pages/app/EnergyCostPage'
 import { RouteErrorBoundary } from './RouteErrorBoundary'
 import { publicRoutes, protectedRoutes, authRoutes } from './routes'
 import { PublicLayout } from '../layouts/PublicLayout'
@@ -41,7 +42,9 @@ function baseRoutes() {
             children: protectedRoutes.map((route) =>
                 route.path === '/energy'
                     ? { path: route.path, element: <EnergyBalancePage /> }
-                    : placeholderRoute(route.path, route.name),
+                    : route.path === '/energy/cost'
+                        ? { path: route.path, element: <EnergyCostPage /> }
+                        : placeholderRoute(route.path, route.name),
             ),
         },
         {

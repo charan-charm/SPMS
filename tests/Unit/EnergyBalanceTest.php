@@ -89,7 +89,7 @@ final class EnergyBalanceTest
                 Assert::same('POTENTIAL_SURPLUS', $surplus['result']['classification']);
             }),
 
-            TestResult::check('Ratified tolerance rule (docs/10 D-041): inclusive boundary and exact floor behavior', function (): void {
+            TestResult::check('Ratified tolerance rule (docs/10 D-040): inclusive boundary and exact floor behavior', function (): void {
                 // diff 0.5 kWh; tolerance = max(0.1, 5% × 10.5) = 0.525 → diff ≤ tolerance → balanced (both directions)
                 $surplusSide = (new EnergyBalanceService())->classify([
                     'solar' => self::solar(10.5),

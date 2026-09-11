@@ -24,6 +24,7 @@ export const protectedRoutes = [
     { path: '/dashboard', name: 'Dashboard' },
     { path: '/solar', name: 'Solar' },
     { path: '/energy', name: 'Energy' },
+    { path: '/energy/cost', name: 'Energy cost' },
     { path: '/forecasts', name: 'Forecasts' },
     { path: '/insights', name: 'Insights' },
     { path: '/analytics', name: 'Analytics' },

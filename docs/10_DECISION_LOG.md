@@ -505,4 +505,103 @@ Notes:
   (docs/06 §13). A potential surplus is not confirmed grid export and a
   potential deficit is not confirmed grid import.
 
+# 12. Energy Cost — F5 Implementation Decision
+
+## D-042 — Energy Cost Analysis Honesty Boundary — F5
+
+The project owner ratified the following F5 implementation decisions
+(docs/01 §19, docs/02 §2 F5, docs/05 §12, Q31/Q34):
+
+1.  Pipeline-first increment (F5.1): F5 v1 accepts validated future /
+    predicted / estimated energy inputs and an explicitly declared
+    pricing basis, and computes an honest estimated variable cost.
+    Historical verified cost remains an honest UNAVAILABLE result until
+    verified bill persistence exists (F13/F2).
+
+2.  Currency (F5.2): INR (₹) only in v1, locale en-IN for presentation.
+    Currency is explicit data on the API contract, never presentation-only.
+
+3.  Pricing evidence ladder (F5.3), whitelisted and declared per request:
+    verified tariff/rate evidence → reliable verified historical bill
+    relationship → explicit user-provided rate → insufficient evidence.
+    SPMS never invents tariff information; declared bases are disclosed
+    as unverified in v1 responses.
+
+4.  Cost range (F5.4): a numeric range is mandatory whenever fallback
+    pricing evidence is used, the worst input confidence is LOW or
+    VERY_LOW, or prediction uncertainty (non-ACTUAL input nature)
+    materially affects the result. The widest applicable disclosed
+    factor wins. An uncertain future cost is never presented as a
+    guaranteed or exact bill. The owner has ratified the factors below
+    UNCHANGED as v1 implementation defaults only — they are not
+    scientifically calibrated uncertainty, not statistically validated
+    prediction intervals, and not permanent domain truth.
+
+5.  Fixed charges (F5.5): never multiplied by kWh, never folded into an
+    inferred ₹/kWh rate, never silently included in the variable
+    estimate. They are echoed separately with treatment
+    SEPARATE_NOT_INCLUDED.
+
+6.  Frontend location (F5.6): dedicated /energy/cost page; the locked F4
+    /energy page is not modified beyond routing integration.
+
+7.  Tariff modeling (F5.7): no full tariff/slab engine in v1; the
+    request contract keeps pricing basis explicit and extensible for
+    later tariff-structure modeling.
+
+8.  Other charges (F5.9): FPPCA, electricity duty, taxes and similar
+    adjustments are not predicted and never silently included in future
+    variable cost.
+
+9.  Balanced cost semantics (owner-ratified refinement): when the
+    energy position is BALANCED within the disclosed F4 tolerance
+    (D-040), the sub-tolerance residual is treated as NO material
+    potential deficit for cost analysis — grid_dependent_kwh is 0 and
+    the estimated variable cost is 0.00. The raw difference remains
+    preserved in energy_position.balance_kwh, the tolerance stays
+    disclosed, and F4's own classification behavior is untouched.
+
+10. Degradation handling (owner-ratified refinement): STALE / DEGRADED
+    status and POOR quality introduce NO additional range factors in
+    v1. Degradation is shown honestly through the existing
+    status/quality indicators, explanations, and worst-of semantics;
+    only the locked range triggers (fallback basis, LOW/VERY_LOW
+    confidence, non-ACTUAL nature) determine whether a range applies.
+
+11. Zero-width range presentation (owner-ratified refinement): when the
+    backend range is 0–0 (genuine zero variable cost), the frontend
+    presents "No variable energy cost identified" instead of a
+    misleading ₹0.00–₹0.00 band. Backend range mathematics and the
+    disclosed triggers are unchanged.
+
+Honesty boundary (core rules):
+
+-   The cost result is an ESTIMATE with measurement_context ESTIMATED;
+    the echoed energy position keeps measurement_context POTENTIAL and
+    is never reinterpreted as measured grid import/export.
+-   Insufficient pricing evidence returns an honest
+    INSUFFICIENT_EVIDENCE result, never a fabricated zero.
+-   Result data nature is the worst of the input natures, floored to
+    ESTIMATED (a future cost is never labeled ACTUAL); predicted,
+    estimated, and simulated inputs keep their own nature.
+-   Disclosed default range half-width factors (v1 implementation
+    defaults, ratified unchanged by the owner; fixed in code, disclosed
+    in every ranged response): fallback basis
+    HISTORICAL_BILL_RELATIONSHIP 15%, USER_PROVIDED_RATE 25%; non-ACTUAL
+    input nature ESTIMATED 10% / PREDICTED 15% / SIMULATED 20%; worst
+    input confidence LOW 25% / VERY_LOW 40%.
+
+API boundary: POST /api/v1/energy/cost/estimate and GET
+/api/v1/energy/cost/historical under the versioned /api/v1 envelope,
+mirroring the F4 implementation idiom without modifying F4 (locked at
+ec869a8).
+
+Note on decision numbering: the F4 balanced-classification tolerance is
+canonically D-040 (section 11 above). An early F4 test-suite citation
+referenced "docs/10 D-041" for the same decision; that citation was a
+reference error and has been corrected to D-040. No decision content was
+changed, no decision was renamed or renumbered, and D-041 remains
+genuinely unused — this F5 entry deliberately takes D-042 so that no
+existing reference can collide.
+
 **END OF DECISION LOG**

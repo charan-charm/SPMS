@@ -13,6 +13,7 @@ use App\Support\Router;
 use App\Support\AppException;
 use App\Controllers\HealthController;
 use App\Controllers\EnergyBalanceController;
+use App\Controllers\EnergyCostController;
 use App\Repositories\HealthRepository;
 use App\Services\HealthService;
 use Throwable;
@@ -122,6 +123,10 @@ final class App
         // F4 — Energy Balance & Situation Analysis (versioned API boundary)
         $router->add('POST', '/api/v1/energy/balance', [EnergyBalanceController::class, 'classify']);
         $router->add('GET', '/api/v1/energy/balance', [EnergyBalanceController::class, 'current']);
+
+        // F5 — Energy Cost Analysis (versioned API boundary)
+        $router->add('POST', '/api/v1/energy/cost/estimate', [EnergyCostController::class, 'estimate']);
+        $router->add('GET', '/api/v1/energy/cost/historical', [EnergyCostController::class, 'historical']);
     }
 
     private function internalErrorResponse(): Response

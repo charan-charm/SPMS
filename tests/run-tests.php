@@ -27,6 +27,7 @@ $suites = [
         Tests\Unit\RouterTest::class,
         Tests\Unit\ResponseEnvelopeTest::class,
         Tests\Unit\EnergyBalanceTest::class,
+        Tests\Unit\EnergyCostTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
@@ -35,6 +36,7 @@ $suites = [
     'API' => [
         Tests\API\HealthApiTest::class,
         Tests\API\EnergyBalanceApiTest::class,
+        Tests\API\EnergyCostApiTest::class,
     ],
     'Security' => [
         Tests\Security\SafeErrorsTest::class,
