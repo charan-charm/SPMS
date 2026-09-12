@@ -203,6 +203,8 @@ They are never placed in ordinary analytical API responses.
 
 They are excluded from logs.
 
+GoodWe credentials are a separate credential domain from SPMS account passwords: SPMS never stores the GoodWe secret as a one-way password hash, and the provider's wire encoding is not a storage mechanism. If the integration requires the original secret, it is encrypted at rest with keys held outside the database and repository (docs/10 D-059; mechanism decided in G0). GoodWe credentials/tokens never appear in AI/Bedrock prompts.
+
 ---
 
 ## 14. File Upload Security

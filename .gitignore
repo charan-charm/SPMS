@@ -27,3 +27,8 @@ desktop.ini
 
 # PHP dependencies
 /vendor/
+
+# GoodWe/SEMS+ reference: raw response samples contain real plant
+# identifiers (station ID, inverter serial, station name) - keep
+# local-only until sanitized during G0 evidence processing.
+references/goodwe-sems-prototype/sems-output/

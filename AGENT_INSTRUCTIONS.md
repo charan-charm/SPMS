@@ -592,6 +592,50 @@ Recovery requires:
 - validation
 - reconciliation
 
+G-FOUNDATION reference boundary (established before G0):
+
+The earlier GoodWe/SEMS+ prototype lives in
+`references/goodwe-sems-prototype/`. It is EVIDENCE ONLY: endpoint
+discovery, HAR capture/replay tooling, response samples, research CLIs.
+Never copy its Node/Express architecture, routes, or code into the PHP
+backend. Express is forbidden as the SPMS production backend. Node.js
+remains build/prototype/research tooling only.
+
+Production rules:
+
+- The production GoodWe integration lives server-side in the PHP
+  architecture (integration layer + Solar domain). React never calls
+  GoodWe directly.
+- GoodWe-specific URLs, headers, authentication protocol, token
+  handling, request/response formats, retries and provider error codes
+  stay inside the integration boundary. The rest of SPMS works with
+  canonical SPMS concepts.
+- SPMS passwords and GoodWe credentials are DIFFERENT credential
+  domains. The provider's website password encoding (base64 of MD5) is
+  a wire-protocol detail, not a storage mechanism. If replaying the
+  original GoodWe secret is genuinely required, treat it as a reversible
+  external credential protected by encryption at rest with keys outside
+  the database and repository — never as a one-way password hash. If the
+  official API instead uses application credentials (AppId/AppSecret +
+  tokens), the architecture follows that mechanism. G0 verifies this
+  against official provider documentation.
+- GoodWe integration belongs to the household context
+  (Account → Household Membership → Household → GoodWe Integration),
+  never to an SPMS account password record. W3 owns household/membership
+  architecture; G0 owns the integration schema.
+- The GoodWe MVP is READ-ONLY: monitoring, historical/near-current
+  production, telemetry, time series, flow, weather, station statistics,
+  inverter/device information. Remote inverter/device/battery/appliance
+  control is out of scope even where the prototype discovered such
+  endpoints.
+- HAR replay and the sems-* CLI scripts are research/discovery tooling,
+  never part of the production request path.
+- Provider responses must pass validation → normalization → canonical
+  SPMS solar data → provenance/quality classification before any domain
+  use (F4/F5/F6, forecasting).
+- Do not implement GoodWe production code before the G0 contract
+  decisions exist.
+
 ---
 
 # 19. Weather Integration

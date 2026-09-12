@@ -833,4 +833,301 @@ Status: RATIFIED.
     drop tables as a shortcut. 0007 must NOT be implemented until
     incompatible residue is cleaned or safely migrated.
 
+## D-059 — GoodWe/SEMS+ External Integration Boundary and Foundation — Integration
+
+Status: RATIFIED (G-FOUNDATION; establishes boundaries only — the detailed
+provider contract is a G0 deliverable).
+
+1.  GoodWe/SEMS+ is an official SPMS external integration domain. It is
+    not the SPMS backend, the SPMS database, the SPMS authentication
+    system, the frontend API, or the AI layer.
+2.  The production integration lives server-side in the PHP architecture
+    (integration layer + Solar domain). React never calls GoodWe directly.
+    The earlier Node/Express prototype under
+    `references/goodwe-sems-prototype/` is evidence/reference only —
+    endpoint discovery, HAR capture/replay tooling, response samples,
+    research CLIs — and is never migrated into production. Node.js stays
+    build/prototype/research tooling; Express is forbidden as the SPMS
+    production backend.
+3.  GoodWe-specific protocol details (URLs, headers, authentication
+    protocol, token handling, request/response formats, retries, provider
+    error codes, provider naming and quirks) remain inside the
+    integration boundary. The rest of SPMS works with canonical SPMS
+    concepts; raw provider structures never leak through the domain.
+4.  Provider data becomes usable only after validation, normalization to
+    canonical SPMS solar data, and provenance/quality classification.
+    Provider-sourced measurements are actual data where semantically
+    supported; SPMS forecasts are predicted; unavailability fallbacks are
+    estimated/stale per existing rules; demo datasets are simulated
+    (docs/01 §Data Nature). Endpoint-level semantics are G0 decisions.
+5.  SPMS credentials and GoodWe credentials are separate credential
+    domains. The prototype's SEMS+ website authentication encodes the
+    password as base64(MD5(password)) before the login request — a wire
+    protocol detail, NOT a storage mechanism. If production requires
+    replaying the original GoodWe secret, it is a reversible external
+    credential protected by encryption at rest with keys outside the
+    database and repository; if the official API instead uses application
+    credentials (e.g. AppId/AppSecret + access tokens), the architecture
+    follows that mechanism. G0 resolves this from official provider
+    documentation.
+6.  GoodWe secrets and tokens are server-side only: never exposed to
+    React, browser storage, frontend API responses, AI/Bedrock prompts,
+    application logs, error messages, Git, or analytics (extends
+    docs/08 §14).
+7.  GoodWe integration belongs to the household integration context
+    (Account → Household Membership → Household → GoodWe Integration),
+    not to an SPMS account password record. No account-owned GoodWe
+    credential fields; no migrations in this foundation pass. W3 owns the
+    household/membership architecture; G0 owns the eventual integration
+    schema, which must respect household authorization.
+8.  The GoodWe MVP is READ-ONLY: solar monitoring, historical/near-current
+    production, telemetry, time series, flow, weather, station statistics,
+    inverter/device information. Remote inverter/device/battery/appliance/
+    grid control is out of scope; such endpoints found in the reference
+    material are recorded as discovered, never adopted.
+9.  HAR capture/replay is research tooling for endpoint discovery and
+    verification, never part of the production request path. Approved
+    discovery sequence: SEMS+ browser behavior → HAR capture → endpoint
+    discovery → isolated replay → response inspection → official provider
+    verification where possible → SPMS contract decision → PHP
+    integration.
+10. Provider session/token reuse, expiration handling, re-authentication,
+    secure server-side token handling, no token logging and rate-limit-aware
+    authentication are required properties; login-per-request is not
+    carried into production. Exact token lifetime and storage strategy are
+    G0 decisions.
+11. Availability follows the existing SPMS degradation model (available /
+    stale / degraded / unavailable / error / recovered): never fabricate
+    live data, retain usable last-known actual data, expose
+    freshness/sync state, use only approved fallbacks, resynchronize and
+    reconcile on recovery.
+12. G0 deliverables: official authentication mechanism, credential
+    ownership, token lifecycle/storage, required production endpoints,
+    endpoint request contracts, response schemas, endpoint data
+    semantics, station/inverter identity model, rate limits, retry rules,
+    provider error mapping, normalization model, raw-response retention,
+    sync/freshness model, and the GoodWe → SPMS provenance mapping.
+
+## D-060 — GoodWe Canonical Solar Ingestion Contract — Integration
+
+Status: RATIFIED (G0; SPMS-side data contract). Provider-side field
+semantics marked provisional remain subject to G1 validation; provisional
+mappings are derived from prototype response samples and are NOT presented
+as official provider contracts.
+
+1.  Canonical ingestion model: every GoodWe observation becomes a
+    canonical solar measurement record with at minimum: household scope
+    (via the future household integration binding), source identifier
+    (provider + external station/inverter identifiers), controlled metric
+    code, value, canonical unit, event timestamp (UTC instant) plus the
+    station timezone, retrieval timestamp, data nature, freshness status,
+    quality, confidence (nullable), provenance (source, endpoint
+    identifier, sync batch, optional raw-content hash) and a deterministic
+    deduplication key (source + station + inverter + metric + timestamp +
+    period). No migration is created in this phase; this is the model
+    future schemas must implement.
+2.  Provisional metric mapping (PROTOTYPE OBSERVATION evidence, verify in
+    G1): current AC power (flow/telemetry `pAc`/`pSystem`, kW) →
+    instantaneous generation ACTUAL; 5-minute `pAc` time series → power
+    curve ACTUAL; `proSystemTotalStats` (kWh, per day) → daily generation
+    total ACTUAL; `profitProStats` (currency) → provider-claimed revenue,
+    stored only as non-authoritative context — SPMS F5 computes cost and
+    never trusts provider profit figures; `proGridStats` /
+    `proPurchaseStats` → provisional daily grid feed-in/purchase kWh,
+    consumed as ACTUAL metered evidence ONLY where station metering is
+    confirmed — F4's POTENTIAL semantics are unchanged regardless.
+3.  Nature assignment at ingestion: provider-reported measurements are
+    ACTUAL; provider forecasts (e.g. statisticsAndPre-style endpoints) are
+    PREDICTED with provider provenance and must never be merged into
+    SPMS-generated predictions; demo/test datasets use the existing
+    DEMO_TEST/SIMULATED rules (D-049, docs/01 §39). ESTIMATED arises only
+    in SPMS domain services, never from raw ingestion. Ingestion never
+    upgrades nature.
+4.  Quality rules: missing identity/timestamp → reject the record (never
+    persist INVALID); partial optional fields → PARTIAL/POOR quality
+    ceiling; unit/parsing anomalies → reject plus integration error
+    event. Telemetry numeric-as-string payloads require strict
+    locale-independent parsing. Quality ceilings propagate through the
+    existing worst-of semantics (F4/F6 rules); ingestion adds no new
+    semantics.
+5.  Freshness model: staleness is a derived status, never a relabeling.
+    Provisional thresholds pending G1-validated provider update cadence:
+    instantaneous readings become STALE beyond 3× their poll interval;
+    daily totals remain reconcilable (revisions) for a minimum 48h
+    grace window after station-local day end. "Live" is not an SPMS
+    state; UI truthfulness uses FRESH/STALE/DEGRADED/UNAVAILABLE with
+    retrieval timestamps.
+6.  Raw-response retention (G0 decision): canonical records only in the
+    MVP. Raw provider bodies are NOT persisted permanently; optional
+    per-record raw-content hashes preserve integrity, and a bounded,
+    encrypted, config-gated debug ring for anomalous/failed responses may
+    be introduced in G2 only if justified. Station address/coordinate/
+    owner-name fields from provider responses are PII-adjacent: retained
+    only where the household profile explicitly needs them, never in
+    metric rows, React payloads or AI prompts.
+7.  Synchronization lifecycle: near-real-time poll for current state +
+    daily-total reconciliation (fixed-lag backfill of the trailing days)
+    + post-recovery catch-up; every sync is a batch with a batch id;
+    upserts are idempotent through the dedup key; revisions of a day's
+    value create provenance-linked replacement records rather than silent
+    mutation. Concrete intervals and rate budgets are provisional until
+    official rate limits are established (no evidence exists yet).
+8.  Degradation behavior (reuses the existing model): provider
+    unreachable/timeout → last canonical data kept, derived status ages
+    FRESH → STALE → DEGRADED/UNAVAILABLE per read-time rules; auth
+    failure after exactly one re-auth attempt → integration health
+    DEGRADED + security/audit event; empty results are honest "no data
+    yet", never zero; recovery → resync/backfill, no fabricated
+    intermediates.
+9.  Downstream boundary: F4/F5/F6 consume ONLY canonical records via the
+    existing domain/adapter seams — no GoodWe-aware branching inside the
+    analytical engines; integration availability/freshness insights flow
+    through the existing F6 data-limitation mechanism.
+
+## D-061 — GoodWe Provider Authentication/Credential Architecture and G1 Validation Gate — Integration
+
+Status: RATIFIED (G0 framework; provider facts classified, not assumed).
+
+1.  Evidence classification at G0: the prototype's SEMS+ website
+    cross-login (`account` + `pwd = base64(md5(password))`, JSON `token`
+    header, `X-Signature`, per-session dynamic `api` base URL) is
+    PROTOTYPE OBSERVATION of a browser-oriented protocol — validity from
+    a server-side client, anti-bot behavior, token TTL and ToS posture
+    are UNKNOWN/REQUIRES VALIDATION. GoodWe has historically offered a
+    developer/open-API surface with app credentials (AppId/AppSecret
+    style signing), but current official documentation could not be
+    reached during G0 from this environment — therefore the official
+    mechanism remains an OFFLINE VERIFICATION ITEM, not a decision input.
+2.  Mechanism preference order for SPMS: (a) official open API with
+    per-integration app credentials; (b) official user-authorized token
+    flow if one exists; (c) website credential replay strictly last, and
+    only if ToS/acceptability is explicitly established. SPMS does not
+    assume any mechanism before G1 verification.
+3.  Credential storage architecture (mode-independent rules): GoodWe
+    secrets are never stored in `accounts` (D-049) or hashed with
+    SPMS-password mechanics (D-059 §5). A replayable GoodWe secret (if
+    the final mechanism requires one) is protected with authenticated
+    encryption at rest (AEAD, AES-256-GCM class) in the future
+    household-bound integration record; encryption keys live outside the
+    database and repository (environment/secret manager; the project
+    follows the existing single-config convention for key material).
+    Non-replayable app secrets follow the same protection class.
+4.  Provider tokens: server-side only; in-memory reuse until expiry with
+    single-flight re-authentication is the MVP default; persistence of
+    provider session tokens in the database is deliberately deferred and
+    forbidden until G1 evidence shows a need (and then encrypted,
+    expiring, never logged). No login-per-request (D-059 §10).
+5.  Transport posture: HTTPS only; the integration accepts only the
+    provider-supplied base origin resolved at auth time for that
+    household session; strict log-redaction list for
+    `token`/`X-Signature`/`pwd`/app-secret values; request logging is
+    metadata-only (endpoint id, status, duration).
+6.  Household binding: the integration record (credential or
+    app-credential reference) belongs to a household
+    (household_id RESTRICT, unique provider + external station identity);
+    authorization is membership-based (W3); prototype environment-variable
+    configuration is never inherited as production ownership semantics.
+7.  G1 VALIDATION GATE — mandatory before any production integration
+    code: (i) obtain and archive the official GoodWe/SEMS API
+    documentation (developer portal / partner access — network-restricted
+    environments like this one cannot substitute for it); (ii) one
+    owner-authorized, isolated manual probe using the sanctioned
+    explicit-enable pattern established by W1.1 (research CLI +
+    separate opt-in flag; never in automated tests) to establish: server-
+    side auth viability, token TTL, base-URL/region behavior, metering
+    availability on the target station, endpoint list confirmation and
+    observed rate-limit signals; (iii) ToS/acceptable-use confirmation;
+    (iv) findings recorded as amendments to D-060/D-061. Until G1 passes,
+    endpoint contracts in D-060 §2 stay PROVISIONAL and no GoodWe HTTP
+    client, migration, controller or route may be implemented.
+
+## D-062 — GoodWe G1 Validation Round Results and Continued Gate Status — Integration
+
+Status: RATIFIED (records G1 round-1 findings with evidence classes).
+The G1 gate from D-061 §7 remains OPEN — production authentication
+decision NOT made; production code remains forbidden.
+
+1.  OFFICIAL documentation — evidence class: UNAVAILABLE (G1 round 1).
+    Every legitimate route failed from the research environment: the
+    developer portals (direct attempts across two sessions), archived
+    copies (Wayback holds zero captures of the developer hosts; CDX
+    verified), the global-portal legacy API-help path (HTTP 403/404), and
+    search routes (blocked). Official terms of API access are therefore
+    UNKNOWN, and their absence must not be read as permission. Resolution
+    is an owner-side action item (browser access / GoodWe partner
+    inquiry).
+2.  Live host observation (document level only): the legacy global portal
+    host still serves, but its published API-help page is gone.
+    Whether the SEMS+ login/data hosts behave from this network remains
+    UNTESTED (no credentials, no probing without owner authorization).
+    [LIVE PROVIDER OBSERVATION / UNKNOWN split as noted.]
+3.  Prototype authentication mechanics re-validated
+    [PROTOTYPE OBSERVATION]: cross-login payload
+    {account, agreement:1, isChinese:false, isLocal:false,
+    pwd:base64(md5(password))}; session fields {uid, token, timestamp,
+    client:"semsPlusWeb", api, region, uuid}; per-request signed headers
+    (JSON token header + X-Signature =
+    base64(sha256Hex("<ts>@<uid>@<token>") . "@" . "<ts>"), fresh ms
+    timestamp) with browser-mimicking Origin/Referer/uuid/os/brand.
+    Validity from a server-side client is a PROTOTYPE OBSERVATION only
+    (executed in a browser-like Node context); it is not evidence that
+    the provider sanctions automated use.
+4.  Gateway topology [PROTOTYPE OBSERVATION]: login is served on the
+    SEMS+ host, while the data API base is returned per session and may
+    point at a REGION GATEWAY on a different portal domain (observed
+    fallback: an "hk-gateway" host). Production integration MUST resolve
+    the base URL from the auth response and never hard-code it; the
+    prototype's hard-coded IP-fallback hack is research damage-control
+    and is banned from production.
+5.  Envelope/error facts [PROTOTYPE OBSERVATION]: success codes
+    {"00000","0",0}; error text in description/msg/message; prototype
+    retry taxonomy retries transport errors (DNS/connect/timeout codes)
+    and HTTP 5xx with linear backoff (500ms×n, default 4 attempts) and
+    never retries 4xx/business-code failures. These are prototype
+    conventions, NOT a provider rate-limit contract; official rate limits
+    remain UNKNOWN. G0's bounded retry posture stands.
+6.  Metric semantics evidence [PROTOTYPE OBSERVATION — platform UI
+    translation keys]: proSystemTotalStats = power_generation (kWh);
+    proGridStats = "grid_energy_1" (kWh — direction/name ambiguity
+    unresolved); proPurchaseStats = purchased_electricity (kWh);
+    proCharStats/proDischarStats = battery charge/discharge (kWh);
+    installedPower = rated_power (kW). This strengthens (does not
+    finalize) D-060 §2 provisional mappings.
+7.  Metering capability [PROTOTYPE OBSERVATION]: grid/consumption data
+    are capability- and meter-dependent (consumFlag indicator; sample
+    station without metering returned no grid/consumption values).
+    Generation is the guaranteed class for GoodWe-inverter stations;
+    consumption/grid/battery fields are conditional. SPMS must never
+    claim provider-measured consumption or grid flow where the provider
+    only has POTENTIAL derivations (locked F4 semantics unchanged).
+8.  Multi-inverter [PROTOTYPE OBSERVATION]: station-scoped endpoints
+    return station-level aggregates; device-scoped series require a
+    serial. Canonical scope keeps station totals and per-inverter series
+    distinct, and SPMS must never sum inverter series to reconstruct
+    station totals (G0 posture confirmed, no change).
+9.  Control surfaces [PROTOTYPE OBSERVATION]: the discovered registry
+    contains a remote-settings service base (device function menus and
+    Modbus-address parameter endpoints). Reaffirms D-059 §8: ALL
+    sems-remote functionality is out of the MVP boundary, and the
+    research probe allowlist structurally excludes it (no such endpoint
+    is callable). Alarms remain deferred (G2+).
+10. Research probe (G1 tooling, non-production):
+    `scripts/goodwe-research-probe.php` — default path performs zero
+    network calls; live mode requires BOTH `GOODWE_LIVE_PROBE=1` and the
+    explicit `--confirm` phrase; fixed read-only endpoint allowlist;
+    credentials read only via the existing backend env mechanism;
+    never prints credentials, tokens, or request headers; fingerprints
+    every identifier; writes no files. Automated tests cannot and do not
+    invoke it (mirrors the W1.1 real-email isolation philosophy).
+11. Authentication decision: **NO PRODUCTION AUTHENTICATION DECISION
+    YET.** Blocking evidence: (a) official API existence/terms for
+    SEMS+ accounts (owner-side documentation/partner access);
+    (b) the single owner-authorized live probe run establishing
+    server-side cross-login viability and token expiration signals.
+    Website credential replay remains the last-resort option under the
+    D-061 §2 preference order and is NOT normalized by this round.
+12. Token lifecycle, rate limits, and acceptable-use posture remain
+    UNKNOWN (D-061 unchanged); persistent provider-token storage stays
+    prohibited until measured.
+
 **END OF DECISION LOG**
