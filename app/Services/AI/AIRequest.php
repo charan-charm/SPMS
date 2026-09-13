@@ -35,7 +35,8 @@ final class AIRequest
         private readonly float $temperature,
         private readonly bool $wantsStructuredOutput,
         private readonly ?array $structuredSchema,
-        private readonly ?string $correlationId
+        private readonly ?string $correlationId,
+        private readonly bool $sendInferenceConfig = true
     ) {
         if ($maxTokens < 1 || $maxTokens > self::MAX_TOKENS_CEILING) {
             throw AIException::invalidRequest('maxTokens must be between 1 and ' . self::MAX_TOKENS_CEILING . '.');
@@ -81,7 +82,8 @@ final class AIRequest
             $this->temperature,
             true,
             $schema,
-            $this->correlationId
+            $this->correlationId,
+            $this->sendInferenceConfig
         );
     }
 
@@ -95,8 +97,36 @@ final class AIRequest
             $this->temperature,
             $this->wantsStructuredOutput,
             $this->structuredSchema,
-            $this->correlationId
+            $this->correlationId,
+            $this->sendInferenceConfig
         );
+    }
+
+    /**
+     * Diagnostic shape (docs/10 D-066 validation debugging): omit the
+     * ENTIRE inferenceConfig block — every Converse request member
+     * except modelId is optional per the installed model. Used to
+     * isolate whether provider-side parameter validation is the
+     * rejection cause; never implied, always explicit.
+     */
+    public function withoutInferenceConfig(): self
+    {
+        return new self(
+            $this->prompt,
+            $this->images,
+            $this->systemPrompt,
+            $this->maxTokens,
+            $this->temperature,
+            $this->wantsStructuredOutput,
+            $this->structuredSchema,
+            $this->correlationId,
+            false
+        );
+    }
+
+    public function sendsInferenceConfig(): bool
+    {
+        return $this->sendInferenceConfig;
     }
 
     /**

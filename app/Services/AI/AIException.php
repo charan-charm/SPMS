@@ -24,7 +24,8 @@ final class AIException extends RuntimeException
         public readonly string $category,
         public readonly string $providerCode,
         string $message,
-        private readonly ?Throwable $underlying = null
+        private readonly ?Throwable $underlying = null,
+        private readonly ?string $awsErrorCode = null
     ) {
         parent::__construct($message);
     }
@@ -104,5 +105,20 @@ final class AIException extends RuntimeException
     public function underlying(): ?Throwable
     {
         return $this->underlying;
+    }
+
+    /**
+     * Sanitized AWS provider error CODE (e.g. "ValidationException") —
+     * machine metadata, safe to log. Never the provider message, body
+     * or any credential material (docs/10 D-066 §6-§7).
+     */
+    public function awsErrorCode(): ?string
+    {
+        return $this->awsErrorCode;
+    }
+
+    public function withAwsErrorCode(?string $code): self
+    {
+        return new self($this->category, $this->providerCode, $this->getMessage(), $this->underlying, $code);
     }
 }

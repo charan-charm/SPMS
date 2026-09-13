@@ -102,6 +102,10 @@ final class BedrockAIProvider implements AIProviderInterface
         try {
             $result = $this->dispatch($payload);
         } catch (Throwable $e) {
+            // Safe provider metadata only: the sanitized error CODE
+            // (e.g. "ValidationException"). The provider message/body
+            // is never logged and never reaches callers (D-066 §6-§7).
+            $awsCode = $e instanceof AIException ? $e->awsErrorCode() : BedrockErrorMapper::awsErrorCode($e);
             $category = $e instanceof AIException
                 ? $e->category()
                 : BedrockErrorMapper::category($e);
@@ -109,11 +113,14 @@ final class BedrockAIProvider implements AIProviderInterface
             $this->log('error', 'ai.bedrock.converse.failed', $region, $model, $correlationId, [
                 'status' => 'failure',
                 'error_category' => $category,
+                'aws_error_code' => $awsCode,
             ]);
 
-            throw $e instanceof AIException
-                ? $e
-                : AIException::fromCategory($category, $e);
+            if ($e instanceof AIException) {
+                throw $e;
+            }
+
+            throw AIException::fromCategory($category, $e)->withAwsErrorCode($awsCode);
         }
 
         $response = $this->normalize($result, $model, $correlationId);
@@ -159,13 +166,16 @@ final class BedrockAIProvider implements AIProviderInterface
             'messages' => [
                 ['role' => 'user', 'content' => $content],
             ],
-            'inferenceConfig' => [
+        ];
+
+        if ($request->sendsInferenceConfig()) {
+            $payload['inferenceConfig'] = [
                 'maxTokens' => $request->maxTokens(),
                 // Conservative deterministic default; quality tuning
                 // is explicitly NOT this milestone.
                 'temperature' => $request->temperature(),
-            ],
-        ];
+            ];
+        }
 
         if ($request->systemPrompt() !== null && trim($request->systemPrompt()) !== '') {
             $payload['system'] = [['text' => $request->systemPrompt()]];

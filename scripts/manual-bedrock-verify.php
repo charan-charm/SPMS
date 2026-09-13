@@ -16,6 +16,11 @@ declare(strict_types=1);
  * Usage (text only, one tiny deterministic request):
  *   php scripts/manual-bedrock-verify.php --confirm=BEDROCK-CONVERSE-VERIFY
  *
+ * Bare diagnostic shape (omits inferenceConfig entirely — the smallest
+ * request the installed Converse model permits, used to isolate
+ * provider-side parameter validation):
+ *   php scripts/manual-bedrock-verify.php --confirm=BEDROCK-CONVERSE-VERIFY --bare
+ *
  * Optional single text+image round-trip (explicit local file only;
  * JPEG/PNG, never URLs, never automatic):
  *   php scripts/manual-bedrock-verify.php --confirm=BEDROCK-CONVERSE-VERIFY --image=path\to\sample.jpg
@@ -50,6 +55,7 @@ array_shift($argvCopy);
 
 $confirm = null;
 $imagePath = null;
+$bare = false;
 $prompt = 'Reply with exactly one word: ready';
 
 foreach ($argvCopy as $arg) {
@@ -59,6 +65,11 @@ foreach ($argvCopy as $arg) {
         $imagePath = substr($arg, strlen('--image='));
     } elseif (str_starts_with($arg, '--text=')) {
         $prompt = substr($arg, strlen('--text='));
+    } elseif ($arg === '--bare') {
+        // Diagnostic shape: no inferenceConfig at all (the request
+        // members Bedrock's model declares fully optional). Used to
+        // isolate provider-side parameter validation failures.
+        $bare = true;
     } else {
         fwrite(STDERR, "Unknown argument: {$arg}\n");
         exit(1);
@@ -91,6 +102,11 @@ try {
         ? AIRequest::text($prompt)
         : AIRequest::textWithImages($prompt, [manualImageFromFile($imagePath)]);
 
+    if ($bare) {
+        $request = $request->withoutInferenceConfig();
+    }
+    echo "Shape    : " . ($bare ? 'bare (no inferenceConfig)' : 'default (bounded inferenceConfig)') . "\n";
+
     $provider = new BedrockAIProvider(null, $logger);
     $factory = new AIProviderFactory($provider);
     $response = $factory->complete($request);
@@ -103,8 +119,13 @@ try {
     exit(0);
 } catch (AIException $e) {
     // AIException messages are constructed safe by this codebase:
-    // fixed text, no credentials, no provider internals.
-    fwrite(STDERR, "FAILED [" . $e->providerCode() . '] ' . $e->getMessage() . "\n");
+    // fixed text, no credentials, no provider internals. The AWS
+    // error CODE (when present) is sanitized machine metadata.
+    $detail = $e->providerCode();
+    if ($e->awsErrorCode() !== null) {
+        $detail .= '/' . $e->awsErrorCode();
+    }
+    fwrite(STDERR, 'FAILED [' . $detail . '] ' . $e->getMessage() . "\n");
     fwrite(STDERR, "Diagnostics: check storage/logs for the correlation id above.\n");
     exit(1);
 }

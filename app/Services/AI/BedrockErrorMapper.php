@@ -90,15 +90,26 @@ final class BedrockErrorMapper
         return AIErrorCategory::PROVIDER_FAILURE;
     }
 
-    private static function awsErrorCode(Throwable $e): ?string
+    /**
+     * Sanitized AWS provider error CODE (e.g. "ValidationException").
+     * Codes are machine metadata and safe for diagnostics; anything
+     * that does not look like a bare code token is dropped entirely.
+     * The provider MESSAGE/BODY is never returned by this API.
+     */
+    public static function awsErrorCode(Throwable $e): ?string
     {
-        if (method_exists($e, 'getAwsErrorCode')) {
-            $code = $e->getAwsErrorCode();
+        $code = null;
 
-            return is_string($code) && $code !== '' ? $code : null;
+        if (method_exists($e, 'getAwsErrorCode')) {
+            $raw = $e->getAwsErrorCode();
+            $code = is_string($raw) ? $raw : null;
         }
 
-        return null;
+        if ($code === null || preg_match('/^[A-Za-z][A-Za-z0-9_.\-]{0,63}$/', $code) !== 1) {
+            return null;
+        }
+
+        return $code;
     }
 
     private static function awsStatus(Throwable $e): ?int

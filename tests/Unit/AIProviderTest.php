@@ -550,6 +550,103 @@ final class AIProviderTest
                 Assert::same(null, $plain->stopReason());
             }),
 
+            TestResult::check('TASK 1: AWS error code is exposed as safe metadata while provider raw detail stays hidden', function (): void {
+                $secretDetail = 'RAW-AWS-MESSAGE-DO-NOT-LEAK-' . strtoupper(bin2hex(random_bytes(6)));
+
+                // A ValidationException carrying a sensitive provider message.
+                $awsException = new BedrockRuntimeException(
+                    $secretDetail,
+                    new Command('Converse'),
+                    ['code' => 'ValidationException', 'message' => $secretDetail, 'response' => new PsrResponse(400)]
+                );
+
+                self::withConfig(['BEDROCK_ALLOW_REAL_CALLS' => '1'], function () use ($awsException, $secretDetail): void {
+                    $provider = self::providerWithTransport(self::cannedResponse(), new ArrayObject(), $awsException);
+
+                    try {
+                        $provider->complete(AIRequest::text('x', correlationId: 'corr-code-1'));
+                        Assert::true(false, 'expected a categorized failure');
+                    } catch (AIException $e) {
+                        // Normalized category preserved.
+                        Assert::same(AIErrorCategory::INVALID_REQUEST, $e->category());
+                        Assert::same('AI_INVALID_REQUEST', $e->providerCode());
+                        // Sanitized code surfaced.
+                        Assert::same('ValidationException', $e->awsErrorCode(), 'safe AWS error code is available');
+                        // Public message stays generic.
+                        Assert::notContains($secretDetail, $e->getMessage(), 'public message never carries provider detail');
+                        // Raw exception kept only as server-side diagnostics, not the message.
+                        Assert::true($e->underlying() === $awsException);
+                    }
+                });
+            }),
+
+            TestResult::check('TASK 1: mapper sanitizes malformed/oversized AWS codes to null', function (): void {
+                // Newline-injection and over-long codes must be dropped.
+                foreach (["Val\nidation", 'x' . str_repeat('A', 70), 'ok code with spaces', ''] as $raw) {
+                    $e = new BedrockRuntimeException('m', new Command('Converse'), ['code' => $raw, 'response' => new PsrResponse(400)]);
+                    Assert::same(null, BedrockErrorMapper::awsErrorCode($e), 'malformed code must not be surfaced: ' . json_encode($raw));
+                }
+
+                // A well-formed code passes.
+                $good = new BedrockRuntimeException('m', new Command('Converse'), ['code' => 'ModelNotReadyException', 'response' => new PsrResponse(400)]);
+                Assert::same('ModelNotReadyException', BedrockErrorMapper::awsErrorCode($good));
+            }),
+
+            TestResult::check('TASK 1: failure log carries aws_error_code but never the provider raw message', function (): void {
+                $dir = sys_get_temp_dir() . '/spms-ai-code-' . bin2hex(random_bytes(4));
+                $logger = new Logger($dir, 'debug');
+                $secret = 'LEAK-CHECK-' . strtoupper(bin2hex(random_bytes(6)));
+
+                self::withConfig(['BEDROCK_ALLOW_REAL_CALLS' => '1'], function () use ($logger, $dir, $secret): void {
+                    $failure = new BedrockRuntimeException($secret, new Command('Converse'), ['code' => 'ThrottlingException', 'message' => $secret, 'response' => new PsrResponse(429)]);
+                    $provider = new BedrockAIProvider(static fn (array $p): array => throw $failure, $logger);
+
+                    try {
+                        $provider->complete(AIRequest::text('x', correlationId: 'corr-code-log'));
+                    } catch (AIException $e) {
+                        Assert::same('ThrottlingException', $e->awsErrorCode());
+                    }
+                });
+
+                $line = (string) file_get_contents($dir . '/app-' . gmdate('Y-m-d') . '.log');
+                Assert::contains('"aws_error_code":"ThrottlingException"', $line, 'safe code is logged');
+                Assert::contains('throttling', $line, 'normalized category is logged');
+                Assert::notContains($secret, $line, 'provider raw message is never logged');
+            }),
+
+            TestResult::check('TASK 4: bare diagnostic payload removes inferenceConfig and all optional fields', function (): void {
+                $provider = new BedrockAIProvider();
+
+                $bare = $provider->conversePayload(
+                    AIRequest::text('Reply with exactly one word: ready')->withoutInferenceConfig(),
+                    'nvidia.nemotron-nano-12b-v2'
+                );
+
+                Assert::same(
+                    ['modelId', 'messages'],
+                    array_keys($bare),
+                    'the minimal request is modelId + a single user message only'
+                );
+                Assert::false(array_key_exists('inferenceConfig', $bare), 'inferenceConfig is entirely absent in bare mode');
+                Assert::false(array_key_exists('system', $bare), 'no system prompt unless required');
+                Assert::false(array_key_exists('toolConfig', $bare), 'no tools');
+                Assert::false(array_key_exists('toolChoice', $bare), 'no tool choice');
+                Assert::same('user', $bare['messages'][0]['role']);
+                Assert::same([['text' => 'Reply with exactly one word: ready']], $bare['messages'][0]['content']);
+
+                // Contrast: the DEFAULT path still sends inferenceConfig (unchanged).
+                $default = $provider->conversePayload(AIRequest::text('same'), 'm');
+                Assert::true(isset($default['inferenceConfig']), 'default mapping still includes inferenceConfig');
+            }),
+
+            TestResult::check('TASK 4: withoutInferenceConfig flag survives derived requests', function (): void {
+                $bare = AIRequest::text('x')->withoutInferenceConfig();
+                Assert::false($bare->sendsInferenceConfig());
+                Assert::false($bare->withStructuredOutput(['type' => 'object'])->sendsInferenceConfig(), 'flag survives withStructuredOutput');
+                Assert::false($bare->withMaxTokens(128)->sendsInferenceConfig(), 'flag survives withMaxTokens');
+                Assert::true(AIRequest::text('x')->sendsInferenceConfig(), 'default is to send it');
+            }),
+
             TestResult::check('CREDENTIAL BRIDGE: configured bearer token reaches SDK client options only at construction', function (): void {                $key = 'bedrock-test-key-DO-NOT-LEAK';
                 $seen = new ArrayObject();
 
