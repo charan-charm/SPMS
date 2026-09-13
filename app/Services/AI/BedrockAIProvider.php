@@ -48,11 +48,12 @@ final class BedrockAIProvider implements AIProviderInterface
     public const SDK_LATEST = 'latest';
 
     /**
-     * Injectable Converse seam: callable(array $payload): array
-     * (Converse-shaped result). Null → lazily construct the real
-     * BedrockRuntimeClient. Tests pass a fake — zero AWS contact.
+     * Injectable Converse seam: callable(array $payload): array|object
+     * (Converse-shaped result — a plain array or an Aws\Result).
+     * Null → lazily construct the real BedrockRuntimeClient.
+     * Tests pass a fake — zero AWS contact.
      *
-     * @var (callable(array<string, mixed>): array<string, mixed>)|null
+     * @var (callable(array<string, mixed>): (array<string, mixed>|object))|null
      */
     private $converseTransport;
 
@@ -199,14 +200,14 @@ final class BedrockAIProvider implements AIProviderInterface
 
     /**
      * Converse result (SDK object or array) → normalized AIResponse.
-     * Exposed for tests against canned, Converse-shaped arrays.
+     * Exposed for tests against canned, Converse-shaped results.
      *
      * @param array<string, mixed>|object $result
      */
     public function normalize(array|object $result, string $model, string $correlationId): AIResponse
     {
-        $decoded = json_decode(json_encode($result, JSON_PARTIAL_OUTPUT_ON_ERROR), true);
-        if (!is_array($decoded)) {
+        $decoded = self::decodeResult($result);
+        if ($decoded === null) {
             throw AIException::providerFailure();
         }
 
@@ -248,6 +249,33 @@ final class BedrockAIProvider implements AIProviderInterface
             correlationId: $correlationId,
             structuredOutput: $structured
         );
+    }
+
+    /**
+     * Result object → plain array.
+     *
+     * The AWS SDK returns Aws\Result for converse(): an
+     * ArrayAccess/IteratorAggregate wrapper whose payload lives in
+     * PRIVATE state and which is NOT JsonSerializable. json_encode()
+     * on it silently produces {} — which previously turned every real
+     * Converse response into an empty AIResponse. The exposed
+     * key/value view is therefore the primary decode path (nested
+     * members are plain arrays built by the SDK parser); the JSON
+     * round-trip remains only for plain arrays and simple test doubles.
+     */
+    private static function decodeResult(array|object $result): ?array
+    {
+        if (is_array($result)) {
+            return $result;
+        }
+
+        if ($result instanceof \ArrayAccess && $result instanceof \Traversable) {
+            return iterator_to_array($result);
+        }
+
+        $decoded = json_decode(json_encode($result, JSON_PARTIAL_OUTPUT_ON_ERROR), true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 
     /**

@@ -58,11 +58,11 @@ final class AIProviderTest
     }
 
     /**
-     * @param array<string, mixed>|callable(array): mixed $resultOrFn
+     * @param array<string, mixed>|object|callable(array): mixed $resultOrFn
      */
-    private static function providerWithTransport(array|callable $resultOrFn, \ArrayObject $calls, ?\Throwable $throw = null): BedrockAIProvider
+    private static function providerWithTransport(array|object|callable $resultOrFn, \ArrayObject $calls, ?\Throwable $throw = null): BedrockAIProvider
     {
-        $transport = static function (array $payload) use ($calls, $resultOrFn, $throw): array {
+        $transport = static function (array $payload) use ($calls, $resultOrFn, $throw): array|object {
             $calls->append($payload);
 
             if ($throw !== null) {
@@ -460,8 +460,97 @@ final class AIProviderTest
                 });
             }),
 
-            TestResult::check('CREDENTIAL BRIDGE: configured bearer token reaches SDK client options only at construction', function (): void {
-                $key = 'bedrock-test-key-DO-NOT-LEAK';
+            TestResult::check('REAL SDK SHAPE: an Aws\Result response normalizes fully (the live-response regression)', function (): void {
+                // Faithful ConverseResponse shape verified against the
+                // installed SDK model (bedrock-runtime 2023-09-30):
+                // output.message.content[], stopReason, usage counters,
+                // metrics. The provider must extract from Aws\Result
+                // exactly as from a plain array — the private-state
+                // object silently decoded to {} once and turned every
+                // real call into an empty response.
+                $shape = [
+                    'output' => ['message' => [
+                        'role' => 'assistant',
+                        'content' => [['text' => 'ready'], ['text' => ' now']],
+                    ]],
+                    'stopReason' => 'end_turn',
+                    'usage' => ['inputTokens' => 9, 'outputTokens' => 2, 'totalTokens' => 11, 'cacheReadInputTokens' => 'n/a'],
+                    'metrics' => ['latencyMs' => 421],
+                ];
+
+                $fromResult = (new BedrockAIProvider())->normalize(new \Aws\Result($shape), 'm', 'c');
+                $fromArray = (new BedrockAIProvider())->normalize($shape, 'm', 'c');
+
+                Assert::same('ready now', $fromResult->text(), 'Aws\Result text extraction');
+                Assert::same('end_turn', $fromResult->stopReason(), 'Aws\Result stopReason extraction');
+                Assert::same(['input_tokens' => 9, 'output_tokens' => 2, 'total_tokens' => 11], $fromResult->usage(), 'Aws\Result usage extraction; non-numeric members ignored');
+                Assert::same($fromArray->text(), $fromResult->text(), 'object and array paths agree');
+                Assert::same($fromArray->usage(), $fromResult->usage());
+                Assert::same($fromArray->stopReason(), $fromResult->stopReason());
+
+                // Raw SDK-only fields never leak into the normalized response.
+                Assert::notContains('latencyMs', json_encode($fromResult) ?: '', 'metrics are not application data');
+                Assert::notContains('metrics', json_encode($fromResult) ?: '');
+            }),
+
+            TestResult::check('REAL SDK SHAPE via transport: complete() delivers text/usage/stop from an Aws\Result', function (): void {
+                $result = new \Aws\Result([
+                    'output' => ['message' => ['content' => [['text' => 'via real result']]]],
+                    'stopReason' => 'max_tokens',
+                    'usage' => ['inputTokens' => 5, 'outputTokens' => 3, 'totalTokens' => 8],
+                ]);
+
+                self::withConfig(['BEDROCK_ALLOW_REAL_CALLS' => '1'], function () use ($result): void {
+                    $provider = self::providerWithTransport($result, new ArrayObject());
+                    $response = $provider->complete(AIRequest::text('ping', correlationId: 'corr-result-1'));
+
+                    Assert::same('via real result', $response->text());
+                    Assert::same('max_tokens', $response->stopReason());
+                    Assert::same(['input_tokens' => 5, 'output_tokens' => 3, 'total_tokens' => 8], $response->usage());
+                    Assert::same('corr-result-1', $response->correlationId());
+                });
+            }),
+
+            TestResult::check('Normalization edge shapes never throw and never fabricate', function (): void {
+                $provider = new BedrockAIProvider();
+
+                // Empty content list.
+                $empty = $provider->normalize(new \Aws\Result([
+                    'output' => ['message' => ['role' => 'assistant', 'content' => []]],
+                    'stopReason' => 'content_filtered',
+                    'usage' => ['inputTokens' => 4, 'outputTokens' => 0, 'totalTokens' => 4],
+                ]), 'm', 'c');
+                Assert::same('', $empty->text(), 'empty content stays empty — nothing invented');
+                Assert::same('content_filtered', $empty->stopReason());
+                Assert::same(['input_tokens' => 4, 'output_tokens' => 0, 'total_tokens' => 4], $empty->usage(), 'zero counts are real numbers, kept');
+
+                // Missing usage and stopReason entirely.
+                $sparse = $provider->normalize(new \Aws\Result([
+                    'output' => ['message' => ['content' => [['text' => 'only text']]]],
+                ]), 'm', 'c');
+                Assert::same('only text', $sparse->text());
+                Assert::same(null, $sparse->stopReason());
+                Assert::same(null, $sparse->usage());
+
+                // Malformed nesting must not crash and must not leak.
+                $garbage = $provider->normalize([
+                    'output' => ['message' => 'not-a-structure'],
+                    'usage' => 'also-not-numeric',
+                    'stopReason' => 12345,
+                ], 'm', 'c');
+                Assert::same('', $garbage->text());
+                Assert::same(null, $garbage->stopReason(), 'non-string stopReason is not passed through');
+                Assert::same(null, $garbage->usage());
+
+                // Non-decodable object shapes must not crash and must
+                // not leak anything: plain stdClass decodes to {}.
+                $plain = $provider->normalize(new \stdClass(), 'm', 'c');
+                Assert::same('', $plain->text());
+                Assert::same(null, $plain->usage());
+                Assert::same(null, $plain->stopReason());
+            }),
+
+            TestResult::check('CREDENTIAL BRIDGE: configured bearer token reaches SDK client options only at construction', function (): void {                $key = 'bedrock-test-key-DO-NOT-LEAK';
                 $seen = new ArrayObject();
 
                 $stubClient = new class {
