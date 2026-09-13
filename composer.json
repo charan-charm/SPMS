@@ -6,7 +6,8 @@
     "require": {
         "php": ">=8.4",
         "ext-pdo": "*",
-        "ext-pdo_mysql": "*"
+        "ext-pdo_mysql": "*",
+        "aws/aws-sdk-php": "^3.395"
     },
     "autoload": {
         "psr-4": {

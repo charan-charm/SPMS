@@ -26,6 +26,11 @@ Config::initialize($basePath);
 Config::overrideForTesting([
     'MAIL_TRANSPORT' => 'file',
     'BREVO_ALLOW_REAL_SEND' => '0',
+    // AI foundation (docs/10 D-066): the automated suite can never
+    // reach AWS — the fake provider is pinned and the real-call
+    // guard stays off regardless of the developer's local .env.
+    'AI_PROVIDER' => 'fake',
+    'BEDROCK_ALLOW_REAL_CALLS' => '0',
 ]);
 
 $suiteFilter = $argv[1] ?? null;
@@ -41,6 +46,8 @@ $suites = [
         Tests\Unit\AccountTest::class,
         Tests\Unit\MailTransportTest::class,
         Tests\Unit\HouseholdTest::class,
+        Tests\Unit\LoggerRedactionTest::class,
+        Tests\Unit\AIProviderTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,

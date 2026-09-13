@@ -1355,4 +1355,86 @@ by the W3.1 implementation).
     authoritative sources exist — they must not replace its UNAVAILABLE
     states with invented readiness, nor move progress into the client.
 
+## D-066 — AI Foundation: Amazon Bedrock Runtime Seam (Provider Abstraction, Guard, Normalization) — Architecture/AI
+
+Status: RATIFIED (establishes the external-AI boundary; no business
+feature is wired to it yet). Deliberately replicates the approved W1.1
+Brevo seam philosophy (docs/10 D-054): interface + fake default +
+explicit real-call guard + injectable transport + offline test pinning.
+
+1.  Dependency: aws/aws-sdk-php v3 (^3.395) via Composer
+    (composer.json/composer.lock committed; vendor/ stays ignored).
+    Endpoint: Amazon Bedrock Runtime. Primary API: Converse. Initial
+    model: NVIDIA Nemotron Nano 12B v2 VL BF16
+    (AWS_BEDROCK_MODEL_ID=nvidia.nemotron-nano-12b-v2). Initial region:
+    ap-south-1 (AWS_REGION). Defaults live in exactly one place per
+    value (BedrockAIProvider constants); nothing hardcodes region or
+    model elsewhere.
+2.  Abstraction: AIProviderInterface is the only type business code may
+    depend on. Aws\BedrockRuntime\BedrockRuntimeClient and all AWS SDK
+    types stay strictly inside the BedrockAIProvider adapter (its
+    constructor additionally accepts an injectable converse callable —
+    the test seam, mirroring BrevoMailTransport's HTTP seam).
+    FakeAIProvider is the deterministic, offline provider and the
+    AI_PROVIDER default; AIProviderFactory selects by config and
+    rejects unknown names.
+3.  REAL-CALL GUARD: a live Bedrock request requires the explicit
+    BEDROCK_ALLOW_REAL_CALLS=1 flag, checked before any SDK contact.
+    tests/run-tests.php pins AI_PROVIDER=fake and
+    BEDROCK_ALLOW_REAL_CALLS=0 regardless of local .env, so no
+    automated run can ever reach AWS or consume credits. The only
+    sanctioned live path is scripts/manual-bedrock-verify.php — which
+    never enables the flag itself, additionally requires an explicit
+    confirmation token, sends one tiny request (text; image only via
+    an explicit local JPEG/PNG path argument), and prints only safe
+    normalized fields. First real calls are owner-performed after
+    review; model availability/semantics in ap-south-1 (including the
+    Converse tool-channel structured-output shape) are validated then.
+4.  Credentials: resolved ONLY by the AWS SDK's standard
+    credential/provider chain (never parsed from arbitrary files, never
+    accepted from HTTP request bodies, React, URLs or any client
+    channel). .env.example carries configuration names only; no
+    credential value may enter Git, logs, tests, scripts or docs.
+5.  Requests/responses: AIRequest (text, optional system prompt,
+    optional AIImage list, conservative bounded defaults — max 4096
+    output tokens, temperature 0.0) and AIResponse (text, provider,
+    model, normalized usage counters, stop reason, correlation id,
+    structured output) are provider-neutral. Images: explicitly
+    declared image/jpeg|image/png raw bytes, non-empty, bounded (5
+    MiB), forwarded verbatim — no URL fetching, no PDF yet, no silent
+    conversion. Structured output is PREPARED ONLY: an opaque schema
+    rides the adapter's Converse tool channel; no business schema
+    (Bill Analyzer or otherwise) may live in the generic seam. Raw AWS
+    result objects never cross the adapter; full model responses are
+    never automatically persisted.
+6.  Failures: raw AWS/Guzzle exceptions never leak across application
+    boundaries. AIException carries a normalized AIErrorCategory
+    (configuration, authentication, model_unavailable, throttling,
+    timeout, invalid_request, provider_failure), a stable AI_* machine
+    code, a fixed safe message, and the underlying exception retained
+    for server-side diagnostics only. Classification keys off AWS
+    error code + HTTP status + connection-error signals, because
+    bedrock-runtime surfaces failures through one generic exception
+    class.
+7.  Observability: every invocation carries a correlation id (the
+    request's, else the RequestId pipeline). Logging is metadata-only
+    (provider, operation, region, model, correlation, status,
+    normalized error category, safe usage counters); prompts, image
+    bytes and model responses are never logged. Credential-shaped
+    keys are centrally suppressed: Logger::isSensitiveKey is a
+    case-insensitive fragment classifier (secret/token/credential/
+    api_key/authorization/bearer/session/cookie/access_key/
+    private_key/x-amz/password/passwd) that redacts AWS-shaped names
+    (aws_access_key_id, aws_secret_access_key, aws_session_token,
+    aws_bearer_token_bedrock, bedrock_api_key, ...) by rule, not by
+    per-caller special cases; the only carve-out is numeric plural
+    usage counters (…_tokens). No new logging framework was added.
+8.  Product boundary inherited, not re-litigated: Bedrock produces
+    explanation/interpretation wording only — validated numerical
+    facts remain SPMS-computed (docs/02 §9 intelligence boundary).
+    This milestone implements NO business feature: no Bill Analyzer,
+    no document extraction workflow, no AI chat UI, no insight/
+    prediction/GoodWe/frontend changes. Those are later milestones
+    that must consume this seam, never bypass it.
+
 **END OF DECISION LOG**
