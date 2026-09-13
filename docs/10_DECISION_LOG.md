@@ -1395,6 +1395,17 @@ explicit real-call guard + injectable transport + offline test pinning.
     accepted from HTTP request bodies, React, URLs or any client
     channel). .env.example carries configuration names only; no
     credential value may enter Git, logs, tests, scripts or docs.
+    AMENDMENT (credential bridge): a short-term Bedrock API key may be
+    kept in the LOCAL gitignored .env as AWS_BEARER_TOKEN_BEDROCK
+    (.env.example lists the empty name only).
+    BedrockAIProvider::clientConfig() reads it as configuration and
+    hands it directly to the SDK's official `token` +
+    `auth_scheme_preference` client options at the single moment the
+    runtime client is constructed — scoped to that call, never
+    putenv()'d, never stored in global state, never logged, never part
+    of a Converse payload, response or error. When unset, the SDK's own
+    environment detection and the standard credential chain remain the
+    untouched fallback.
 5.  Requests/responses: AIRequest (text, optional system prompt,
     optional AIImage list, conservative bounded defaults — max 4096
     output tokens, temperature 0.0) and AIResponse (text, provider,

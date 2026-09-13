@@ -8,6 +8,7 @@ use App\Support\Config;
 use App\Support\Logger;
 use App\Support\RequestId;
 use Aws\BedrockRuntime\BedrockRuntimeClient;
+use Aws\Token\BedrockTokenProvider;
 use Throwable;
 
 /**
@@ -29,9 +30,15 @@ use Throwable;
  * sanctioned real path is the dedicated manual tool
  * (scripts/manual-bedrock-verify.php) run by the owner.
  *
- * Credentials are resolved exclusively by the AWS SDK's standard
- * credential/provider chain (never from request payloads, React, or
- * hand-parsed files) and are never logged or included in errors.
+ * Credentials: a short-lived Bedrock API key may live in the local,
+ * gitignored .env as AWS_BEARER_TOKEN_BEDROCK (docs/10 D-066 §4
+ * amendment). It is read here and handed directly to the SDK's official
+ * `token` + `auth_scheme_preference` client options at the single
+ * moment the client is constructed (clientConfig()). No putenv(), no
+ * global storage, no logging, no response/error surface. When the key
+ * is not configured, the SDK's own AWS_BEARER_TOKEN_BEDROCK environment
+ * detection and the standard AWS credential chain remain untouched as
+ * the fallback path.
  */
 final class BedrockAIProvider implements AIProviderInterface
 {
@@ -49,9 +56,23 @@ final class BedrockAIProvider implements AIProviderInterface
      */
     private $converseTransport;
 
-    public function __construct(?callable $converseTransport = null, private readonly ?Logger $logger = null)
-    {
+    /**
+     * Client-construction seam: callable(array $clientConfig): object
+     * (anything exposing converse()). Null → construct the real
+     * BedrockRuntimeClient. Tests inject a recorder — the real client
+     * class is never touched by the automated suite.
+     *
+     * @var (callable(array<string, mixed>): object)|null
+     */
+    private $clientFactory;
+
+    public function __construct(
+        ?callable $converseTransport = null,
+        private readonly ?Logger $logger = null,
+        ?callable $clientFactory = null
+    ) {
         $this->converseTransport = $converseTransport;
+        $this->clientFactory = $clientFactory;
     }
 
     public function name(): string
@@ -230,6 +251,42 @@ final class BedrockAIProvider implements AIProviderInterface
     }
 
     /**
+     * THE credential handoff point (docs/10 D-066 §4 amendment).
+     *
+     * Builds the BedrockRuntimeClient constructor options. When a
+     * short-lived Bedrock API key is present in the local, gitignored
+     * .env (AWS_BEARER_TOKEN_BEDROCK), it is passed directly to the
+     * SDK's official `token` client option, with `auth_scheme_preference`
+     * set to bearer — the same mechanism the SDK itself applies when it
+     * auto-detects the environment variable. The value is scoped to
+     * this single construction call: never putenv()'d, never stored in
+     * static/global state, never logged, never part of a Converse
+     * payload, response, or error.
+     *
+     * When the key is not configured, no token options are added —
+     * the SDK's standard credential chain (and its own env detection)
+     * remains fully in charge as before.
+     *
+     * @return array<string, mixed>
+     */
+    public function clientConfig(): array
+    {
+        $config = [
+            'region' => trim(Config::get('AWS_REGION', self::DEFAULT_REGION) ?? self::DEFAULT_REGION),
+            'version' => self::SDK_LATEST,
+        ];
+
+        $bearerToken = Config::get('AWS_BEARER_TOKEN_BEDROCK');
+
+        if (is_string($bearerToken) && trim($bearerToken) !== '') {
+            $config['token'] = ['token' => trim($bearerToken)];
+            $config['auth_scheme_preference'] = [BedrockTokenProvider::BEARER_AUTH];
+        }
+
+        return $config;
+    }
+
+    /**
      * @param array<string, mixed> $payload
      * @return array<string, mixed>|object
      */
@@ -239,14 +296,14 @@ final class BedrockAIProvider implements AIProviderInterface
             return ($this->converseTransport)($payload);
         }
 
-        // Real path: standard SDK credential chain, no explicit
-        // credential handling anywhere in this codebase.
-        $client = new BedrockRuntimeClient([
-            'region' => trim(Config::get('AWS_REGION', self::DEFAULT_REGION) ?? self::DEFAULT_REGION),
-            'version' => self::SDK_LATEST,
-        ]);
+        // Real path: reached only after the guard passed. The client
+        // factory seam keeps even this constructible offline in tests;
+        // production default constructs the official SDK client with
+        // the scoped credential handoff from clientConfig().
+        $factory = $this->clientFactory
+            ?? static fn (array $clientConfig): BedrockRuntimeClient => new BedrockRuntimeClient($clientConfig);
 
-        return $client->converse($payload);
+        return $factory($this->clientConfig())->converse($payload);
     }
 
     /**

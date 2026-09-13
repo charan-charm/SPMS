@@ -52,6 +52,7 @@ final class AIProviderTest
                 'BEDROCK_ALLOW_REAL_CALLS' => '0',
                 'AWS_REGION' => 'ap-south-1',
                 'AWS_BEDROCK_MODEL_ID' => 'nvidia.nemotron-nano-12b-v2',
+                'AWS_BEARER_TOKEN_BEDROCK' => '',
             ]);
         }
     }
@@ -457,6 +458,156 @@ final class AIProviderTest
                     Assert::same('nvidia.nemotron-nano-12b-v2', $calls[0]['modelId']);
                     Assert::same('nvidia.nemotron-nano-12b-v2', $response->model());
                 });
+            }),
+
+            TestResult::check('CREDENTIAL BRIDGE: configured bearer token reaches SDK client options only at construction', function (): void {
+                $key = 'bedrock-test-key-DO-NOT-LEAK';
+                $seen = new ArrayObject();
+
+                $stubClient = new class {
+                    public function converse(array $payload): array
+                    {
+                        return ['output' => ['message' => ['content' => [['text' => 'via-real-path']]]], 'stopReason' => 'end_turn'];
+                    }
+                };
+
+                self::withConfig([
+                    'BEDROCK_ALLOW_REAL_CALLS' => '1',
+                    'AWS_BEARER_TOKEN_BEDROCK' => $key,
+                ], function () use ($seen, $key, $stubClient): void {
+                    $provider = new BedrockAIProvider(
+                        null,
+                        null,
+                        static function (array $args) use ($seen, $stubClient): object {
+                            $seen->append($args);
+
+                            return $stubClient;
+                        }
+                    );
+
+                    $response = $provider->complete(AIRequest::text('ping', correlationId: 'corr-bridge-1'));
+
+                    Assert::same(1, count($seen), 'client constructed exactly once per real call');
+                    $args = $seen[0];
+                    Assert::same('via-real-path', $response->text(), 'response came through the constructed (stub) SDK client');
+                    Assert::same('bedrock', $response->provider());
+                    Assert::same('ap-south-1', $args['region']);
+                    Assert::same('latest', $args['version']);
+                    Assert::same(['token' => $key], $args['token'], 'official token client option, exact value, scoped to construction');
+                    Assert::same(['smithy.api#httpBearerAuth'], $args['auth_scheme_preference'], 'bearer scheme explicitly preferred');
+
+                    // The credential never enters the request payload…
+                    Assert::notContains($key, json_encode($provider->conversePayload(AIRequest::text('ping'))) ?: '', 'Converse payload is credential-free');
+                    // …nor the normalized response.
+                    Assert::notContains($key, json_encode($response) ?: '', 'AIResponse is credential-free');
+                });
+            }),
+
+            TestResult::check('CREDENTIAL BRIDGE: unset token leaves client options at SDK defaults (chain fallback intact)', function (): void {
+                $seen = new ArrayObject();
+
+                $stubClient = new class {
+                    public function converse(array $payload): array
+                    {
+                        return ['output' => ['message' => ['content' => [['text' => 'fallback']]]]];
+                    }
+                };
+
+                self::withConfig([
+                    'BEDROCK_ALLOW_REAL_CALLS' => '1',
+                    'AWS_BEARER_TOKEN_BEDROCK' => '',
+                ], function () use ($seen, $stubClient): void {
+                    $provider = new BedrockAIProvider(
+                        null,
+                        null,
+                        static function (array $args) use ($seen, $stubClient): object {
+                            $seen->append($args);
+
+                            return $stubClient;
+                        }
+                    );
+
+                    $response = $provider->complete(AIRequest::text('ping'));
+                    Assert::same('fallback', $response->text());
+
+                    $args = $seen[0];
+                    Assert::false(array_key_exists('token', $args), 'no token option when unconfigured — SDK standard chain stays in charge');
+                    Assert::false(array_key_exists('auth_scheme_preference', $args), 'no scheme preference injected when unconfigured');
+                });
+            }),
+
+            TestResult::check('GUARD vs BRIDGE: disabled flag prevents ANY client construction even with a configured key', function (): void {
+                $constructed = new ArrayObject();
+
+                self::withConfig([
+                    'BEDROCK_ALLOW_REAL_CALLS' => '0',
+                    'AWS_BEARER_TOKEN_BEDROCK' => 'bedrock-test-key-never-armed',
+                ], function () use ($constructed): void {
+                    $provider = new BedrockAIProvider(
+                        null,
+                        null,
+                        static function (array $args) use ($constructed): object {
+                            $constructed->append($args);
+
+                            throw new \RuntimeException('unreachable');
+                        }
+                    );
+
+                    try {
+                        $provider->complete(AIRequest::text('x'));
+                        Assert::true(false, 'expected guard rejection');
+                    } catch (AIException $e) {
+                        Assert::same('AI_REAL_CALLS_DISABLED', $e->providerCode());
+                    }
+                });
+
+                Assert::same(0, count($constructed), 'no client may be constructed while the guard is off');
+            }),
+
+            TestResult::check('GUARD vs BRIDGE: an injected transport never constructs the SDK client at all', function (): void {
+                self::withConfig([
+                    'BEDROCK_ALLOW_REAL_CALLS' => '1',
+                    'AWS_BEARER_TOKEN_BEDROCK' => 'bedrock-test-key-unused',
+                ], function (): void {
+                    $provider = new BedrockAIProvider(
+                        static fn (array $payload): array => self::cannedResponse('transport path'),
+                        null,
+                        static function (array $args): object {
+                            throw new \RuntimeException('client construction must not happen when a transport is injected');
+                        }
+                    );
+
+                    Assert::same('transport path', $provider->complete(AIRequest::text('x'))->text());
+                });
+            }),
+
+            TestResult::check('CREDENTIAL BRIDGE: bearer key never appears in structured logs', function (): void {
+                $dir = sys_get_temp_dir() . '/spms-ai-bridge-' . bin2hex(random_bytes(4));
+                $logger = new Logger($dir, 'debug');
+                $key = 'bedrock-log-canary-' . strtoupper(bin2hex(random_bytes(8)));
+
+                $stubClient = new class {
+                    public function converse(array $payload): array
+                    {
+                        return ['output' => ['message' => ['content' => [['text' => 'ok']]]], 'stopReason' => 'end_turn', 'usage' => ['inputTokens' => 2, 'outputTokens' => 1, 'totalTokens' => 3]];
+                    }
+                };
+
+                self::withConfig([
+                    'BEDROCK_ALLOW_REAL_CALLS' => '1',
+                    'AWS_BEARER_TOKEN_BEDROCK' => $key,
+                ], function () use ($logger, $dir, $key, $stubClient): void {
+                    $provider = new BedrockAIProvider(
+                        null,
+                        $logger,
+                        static fn (array $args): object => $stubClient
+                    );
+                    $provider->complete(AIRequest::text('bridge prompt', correlationId: 'corr-bridge-log'));
+                });
+
+                $line = (string) file_get_contents($dir . '/app-' . gmdate('Y-m-d') . '.log');
+                Assert::notContains($key, $line, 'the bearer key must never reach disk through logging');
+                Assert::contains('corr-bridge-log', $line, 'the call itself IS diagnosable by correlation id');
             }),
         ];
     }

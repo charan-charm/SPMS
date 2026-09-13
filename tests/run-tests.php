@@ -27,10 +27,13 @@ Config::overrideForTesting([
     'MAIL_TRANSPORT' => 'file',
     'BREVO_ALLOW_REAL_SEND' => '0',
     // AI foundation (docs/10 D-066): the automated suite can never
-    // reach AWS — the fake provider is pinned and the real-call
-    // guard stays off regardless of the developer's local .env.
+    // reach AWS — the fake provider is pinned, the real-call guard
+    // stays off, and the Bedrock bearer key is blanked (even an
+    // accidental client construction cannot be armed with a
+    // developer's local .env key) regardless of local configuration.
     'AI_PROVIDER' => 'fake',
     'BEDROCK_ALLOW_REAL_CALLS' => '0',
+    'AWS_BEARER_TOKEN_BEDROCK' => '',
 ]);
 
 $suiteFilter = $argv[1] ?? null;
