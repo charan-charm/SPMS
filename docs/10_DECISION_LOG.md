@@ -1130,4 +1130,174 @@ decision NOT made; production code remains forbidden.
     UNKNOWN (D-061 unchanged); persistent provider-token storage stays
     prohibited until measured.
 
+## D-063 — GoodWe G1 Round 2A: Official OpenAPI Discovery and Contract Evidence — Integration
+
+Status: RATIFIED (records officially documented provider facts with
+citations; the G1 gate remains OPEN pending owner-side GoodWe
+authorization and target-plant applicability confirmation).
+
+1.  OFFICIAL evidence obtained (sources cited; accessed 2026-09-12):
+    the GOODWE Open Platform (GoodWe 固德威技术股份有限公司) publishes
+    developer documentation at developers.we.goodwe.com/docs (version
+    "main"), serving the WE-platform open API hosted at
+    we.goodwe.com/api/openapi/v1/. A separate international developer
+    portal (openapi.goodwe.com, "GOODWE OpenAPI Developer Platform")
+    exists — its content is a JS application shell and was not
+    retrievable from the research environment. Classification: the
+    we.goodwe.com contract below is OFFICIAL; the international
+    portal's contract is UNKNOWN.
+2.  OFFICIAL authentication: POST we.goodwe.com/api/openapi/v1/common/
+    login with {grantType: "client_credentials", appId, appSecret};
+    success envelope code "00000"; TOKEN returned in the response
+    headers and as data.accessToken (bearer-class, sample expiresIn
+    ≈12507 s); documented TOKEN lifetime 4 hours, reusable until
+    expiry, re-login afterwards. appId/appSecret are described as
+    obtained "through GoodWe authorization-service registration"
+    (注册固德威授权服务) — there is NO documented self-service path.
+    Documented login rate limit: 10 requests/minute/IP.
+3.  OFFICIAL onboarding model: (a) caller IPs are submitted and entered
+    into a whitelist by an administrator; (b) the administrator
+    provisions tenant (租户) information and issues AppId/AppSecret;
+    (c) all subsequent calls carry the TOKEN. Individual household
+    SEMS+ account holders are not documented as able to self-provision
+    OpenAPI credentials; whether GoodWe grants such access is
+    CONDITIONAL on GoodWe business/authorization contact.
+4.  OFFICIAL asset/authorization model: resources are scoped to the
+    tenant; station/device/system list endpoints return per-tenant
+    collections with isShared flags and an assetScope parameter
+    (own / shared-from-other-tenant); an error sample (A1008) proves
+    token-level device-range enforcement. Identifiers are platform
+    Long ids (station id, device nodeId, systemId) plus serial numbers
+    (sn); devices without a nodeId are documented to have no
+    real-time/historical point data.
+5.  OFFICIAL MVP-relevant endpoints (WE platform, all POST,
+    Authorization header, documented limit 10 req/min/IP each):
+    getTenantStationList (C1); getStationPointsDayMonthYearDataList
+    (C2; dimension day/month/year/total; ≤50 stations/call; day
+    dimension ≤31 days/call); getDeviceRealTimeData (C3; ≤100
+    devices/call; metric tp/tpTime collection timestamp);
+    getDevicePointsDayMonthYearDataList and the system-level variant
+    (C4 at day granularity and coarser); getTenantDeviceList (C5;
+    device type enum incl. Inverter/ElectricMeter/EnvironmentalTester/
+    BMS/PCS; state enum 1000 running…1005 offline, 1011 abnormal).
+    NO documented intraday (sub-day) historical series endpoint
+    exists in the official API; provider-side intra-day curves remain
+    a PROTOTYPE-ONLY capability (SEMS+ timeSeriesData). SPMS option:
+    accumulate its own ACTUAL series by polling the real-time
+    endpoint within rate limits (decision at G2).
+6.  OFFICIAL data semantics (station history appendix): eTotal =
+    generation (kWh), gridE = energy sold to grid (kWh), ep = grid
+    (mains) consumption (kWh), selfUseE = self-consumption (kWh),
+    per day/month/year/total dimensions, plus profit fields in CNY —
+    profit fields are non-authoritative for SPMS F5 (existing rule).
+    Inverter real-time dictionary: p = active power in W (unit
+    differs from the prototype's kW — normalization must convert),
+    eDay = daily generation kWh, plus errorCode/warningCode/eventCode.
+    Device-level 上行/下行 (uplink/downlink) energy direction labels
+    require careful G2 confirmation per device type. Official null
+    rule "unlisted fields default to 0" cannot be distinguished from
+    measured zero — the normalization layer must treat missing-then-
+    zero fields cautiously (presence policy at G2).
+7.  OFFICIAL error taxonomy (error-samples page): rate-limited → HTTP
+    503 {error_msg: too fast}; expired/invalid token → HTTP 200 with
+    code A0312; non-whitelisted IP → HTTP 200 with code A0201;
+    device-range violation → code A1008; business errors carry
+    description/errorMsg fields. SPMS retry policy maps to: 503 →
+    bounded backoff; A0312 → single re-login; A0201/A1008 →
+    configuration fault (no retry).
+8.  No official contract found for: weather, provider forecasts,
+    alarms beyond getDeviceAlarmInformation (deferred), consumption
+    without metering, EU/US regional openapi.semsportal.com surfaces
+    (only legacy/internal warranty/datalogger help pages observed —
+    not adopted), and ToS/acceptable-use terms (UNKNOWN; absence of
+    documented prohibition is not permission).
+9.  PRODUCTION DIRECTION (recommendation, not yet authorization):
+    Option A — official WE-platform-style OpenAPI — remains the
+    preferred architecture and is technically sufficient for SPMS
+    MVP capabilities C1/C2/C3/C5 and day-granularity C4. Closure of
+    the G1 gate now depends on exactly two owner-side facts:
+    (i) obtaining GoodWe OpenAPI authorization (tenant + AppId/
+    AppSecret + IP whitelist, incl. confirming whether the SEMS+
+    international account/plant can be served — possibly via
+    openapi.goodwe.com rather than we.goodwe.com); (ii) one live
+    validation round with provisioned credentials (the existing
+    gated probe pattern extended to the official login flow).
+    Website credential replay remains the last-resort option under
+    D-061 §2 and is NOT adopted by this round.
+10. Evidence-discipline note: official WE endpoints and prototype
+    SEMS+ endpoints are DIFFERENT platform surfaces and must not be
+    mapped onto each other without new evidence; the prototype
+    remains PROTOTYPE OBSERVATION only.
+
+G1 Round 2A.1 research note (2026-09-12; a note, not a new decision):
+the official onboarding question is routed through verified GoodWe
+channels — GoodWe India (en.goodwe.com/india): service email
+Service.in@goodwe.com, regional sales contacts, and the official
+Zendesk support portal linked from en.goodwe.com ("reply within 1
+working day" stated on the official contact page) [OFFICIAL —
+existence of channels]; the international developer portal
+openapi.goodwe.com exists but its registration surface was not
+retrievable [UNKNOWN]; third-party integrators report that SEMS-portal
+API access is requested through the GoodWe sales channel and may
+require an NDA [THIRD-PARTY — not relied upon as permission]. Whether
+a residential SEMS+ plant in India can be bound to an OpenAPI tenant
+remains UNKNOWN pending GoodWe's answer to the owner inquiry (the
+official help center does document an SEMS "add visitor for plant"
+sharing feature — an account-sharing capability, NOT evidence of
+OpenAPI tenant eligibility [OFFICIAL fact, INFERENCE boundary]).
+
+## D-064 — W3 Household Context Resolution and F6 Ownership Closure — Database/Auth
+
+Status: RATIFIED (implements the boundaries reserved by D-050/D-056/
+D-057/D-058; the resolution rules and API-shape choices below are new
+decisions established by the W3 implementation).
+
+1.  Household lifecycle is a soft-state mirror of the account lifecycle
+    (docs/01 §31): ACTIVE, DELETION_PENDING, DELETED. No hard-deletion
+    path exists in W3 — RESTRICT foreign keys make silent loss
+    impossible, and physical removal remains a W5 retention-policy
+    decision. Analytical history (insights and onward) is never
+    destroyed by a household lifecycle transition.
+2.  Effective household resolution: exactly one ACTIVE household
+    reached through household_memberships of the authenticated account,
+    deterministically (oldest membership). DELETION_PENDING/DELETED
+    households and membership-less accounts resolve to a null context —
+    never treated as active. V1 one-household-per-account is enforced
+    at this service layer (D-050), while the schema stays N:N-capable;
+    only the OWNER role exists.
+3.  F6 ownership closure (closes the D-057 §4 transitional fact):
+    insight reads require authentication; the household scope is derived
+    server-side (session → account → membership → household). A
+    household-scoped listing returns owned rows plus system-scope (NULL)
+    rows; cross-household detail ids return the same 404 as unknown ids
+    (existence never disclosed); a client claim of any household other
+    than the caller's derived scope is rejected 403
+    HOUSEHOLD_ACCESS_DENIED — a client-supplied household_id can only
+    restate the server-derived value, never widen reach.
+4.  POST /api/v1/household is the v1 onboarding primitive (CSRF-
+    protected like every authenticated mutation). Registration does not
+    auto-create households — onboarding stays a separate, explicit,
+    authenticated step until the dashboard milestone defines its UX.
+    A second creation attempt is refused 409 HOUSEHOLD_EXISTS; existing
+    households are never replaced implicitly.
+5.  There is no GET /api/v1/households/{id} and no household-id-
+    addressed read surface: household context is always fetched through
+    the caller's own authenticated route. Future multi-household work
+    must re-open this deliberately, not incrementally.
+6.  ADMIN receives no implicit household reach (D-055 applied):
+    resolution is role-agnostic; administrative capabilities will
+    require explicit, audited rules — never membership bypass.
+7.  Migration 0007 (executed per the D-058 sequence) performed the
+    D-058 residue handling deterministically: insight rows whose
+    synthetic household scope referenced nothing that exists (98 rows
+    of pre-W3 F6 test fixtures) were removed, system-scope NULL rows
+    were preserved, household_id was narrowed to CHAR(36) with the
+    dedup unique key rebuilt around it, and the ratified RESTRICT
+    foreign key was added. The same rule is asserted in tests: no
+    insight may reference a non-existent household.
+8.  Test-fixture consequence: F6 integration tests now use real
+    household rows (the synthetic 'f6-hh-*' identifiers are rejected by
+    the FK by design); the W3 fixture helpers create account + ACTIVE
+    household + OWNER membership through the production service layer.
+
 **END OF DECISION LOG**

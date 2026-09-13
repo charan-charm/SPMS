@@ -9,7 +9,9 @@ use App\Domain\Intelligence\InsightLifecycle;
 use App\Domain\Intelligence\InsightSignificance;
 use App\Domain\Intelligence\InsightTaxonomy;
 use App\Domain\Intelligence\IntelligenceService;
+use App\Domain\Household\HouseholdService;
 use App\Repositories\InsightRepository;
+use App\Security\Authorization;
 use App\Support\AppException;
 use App\Support\Request;
 use App\Support\Response;
@@ -28,6 +30,12 @@ use App\Support\Response;
  * only through the controlled internal IntelligenceService seam (docs/10
  * D-047), which future ingestion paths invoke. There is no public
  * generation endpoint.
+ *
+ * W3 (docs/10 D-050/D-057): both endpoints require authentication and
+ * resolve the caller's household scope server-side from membership.
+ * Client-supplied household identifiers can only restate the caller's
+ * own derived scope; any other claim is rejected (403 for filter
+ * claims, 404 for cross-household resources).
  */
 final class IntelligenceController
 {
@@ -36,13 +44,34 @@ final class IntelligenceController
     private const OFFSET_MAX = 10_000;
 
     public function __construct(
-        private readonly IntelligenceService $service = new IntelligenceService(new InsightRepository())
+        private readonly IntelligenceService $service = new IntelligenceService(new InsightRepository()),
+        private readonly HouseholdService $households = new HouseholdService()
     ) {
     }
 
     public function list(Request $request): Response
     {
+        // W3 (docs/10 D-050, D-057 §4): closes the pre-W3 transitional
+        // cross-household visibility. The effective scope is derived
+        // server-side from the authenticated account's membership — the
+        // session → account → membership → household chain. A client
+        // claiming any other household is rejected, never honored.
+        $account = Authorization::requireAccount($request);
+        $scopeHouseholdId = $this->households->activeHouseholdId($account);
+
         $filters = $this->validatedFilters($request);
+
+        $claimed = $filters['household_id'] ?? null;
+        if ($claimed !== null && $claimed !== $scopeHouseholdId) {
+            throw new AppException(
+                'HOUSEHOLD_ACCESS_DENIED',
+                'You do not have access to this household scope.',
+                403
+            );
+        }
+
+        $filters['household_id'] = $scopeHouseholdId;
+        $filters['system_scoped_included'] = true;
 
         $insights = $this->service->listInsights($filters);
 
@@ -62,12 +91,23 @@ final class IntelligenceController
 
     public function show(Request $request): Response
     {
+        // Authenticated household scope, derived server-side (W3).
+        $account = Authorization::requireAccount($request);
+        $scopeHouseholdId = $this->households->activeHouseholdId($account);
+
+        $claimed = $this->validatedHouseholdId($request->queryParam('household_id'));
+        if ($claimed !== null && $claimed !== $scopeHouseholdId) {
+            throw new AppException(
+                'HOUSEHOLD_ACCESS_DENIED',
+                'You do not have access to this household scope.',
+                403
+            );
+        }
+
         $id = $this->extractId($request->path());
         if ($id === null) {
             throw new AppException('NOT_FOUND', 'Insight not found.', 404);
         }
-
-        $householdId = $this->validatedHouseholdId($request->queryParam('household_id'));
 
         $insight = $this->service->findInsight($id);
         if ($insight === null) {
@@ -75,11 +115,10 @@ final class IntelligenceController
         }
 
         // Ownership boundary: a household-scoped insight is only returned
-        // when the request is scoped to the owning household. A mismatch
-        // returns 404 (existence is not disclosed).
-        if ($insight->householdId() !== null
-            && $householdId !== null
-            && $insight->householdId() !== $householdId) {
+        // to its own household; system-scope (NULL) insights are visible
+        // to every authenticated household. A mismatch returns 404 —
+        // existence is never disclosed — regardless of any client claim.
+        if ($insight->householdId() !== null && $insight->householdId() !== $scopeHouseholdId) {
             throw new AppException('NOT_FOUND', 'Insight not found.', 404);
         }
 

@@ -16,6 +16,7 @@ use App\Controllers\EnergyBalanceController;
 use App\Controllers\EnergyCostController;
 use App\Controllers\IntelligenceController;
 use App\Controllers\AuthController;
+use App\Controllers\HouseholdController;
 use App\Repositories\HealthRepository;
 use App\Security\AuthMiddleware;
 use App\Services\HealthService;
@@ -164,6 +165,12 @@ final class App
         $router->add('GET', '/api/v1/auth/session', [AuthController::class, 'session']);
         $router->add('POST', '/api/v1/auth/recovery/request', [AuthController::class, 'recoveryRequest']);
         $router->add('POST', '/api/v1/auth/recovery/confirm', [AuthController::class, 'recoveryConfirm']);
+
+        // W3 — Household ownership context (versioned API boundary). The
+        // household is always derived server-side from membership; there
+        // is no household-id-addressed read route by design (docs/10 D-050).
+        $router->add('GET', '/api/v1/household', [HouseholdController::class, 'current']);
+        $router->add('POST', '/api/v1/household', [HouseholdController::class, 'create']);
     }
 
     private function internalErrorResponse(): Response

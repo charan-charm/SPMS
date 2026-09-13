@@ -21,6 +21,7 @@ use App\Support\RequestId;
 use App\Support\Router;
 use PDO;
 use Tests\Support\Assert;
+use Tests\Support\AuthTesting;
 use Tests\TestResult;
 
 /**
@@ -33,17 +34,25 @@ use Tests\TestResult;
  * the simulated evidence path, duplicate-key convergence under a lost
  * first-observation race, and the absence of any public generation
  * endpoint.
+ *
+ * W3 (docs/10 D-050, D-057 §4): reads are authenticated and the effective
+ * household scope is derived server-side from membership; fixtures use
+ * real household rows (the synthetic 'f6-hh-*' identifiers are no longer
+ * referencable since migration 0007). Insight semantics are unchanged.
  */
 final class InsightApiTest
 {
-    private static function uniqueHouseholdId(): string
-    {
-        return 'f6-hh-' . bin2hex(random_bytes(6));
-    }
-
     private static function listController(): IntelligenceController
     {
         return new IntelligenceController();
+    }
+
+    /**
+     * @param array<string, string> $query
+     */
+    private static function authedList(Request $request, array $fixture): mixed
+    {
+        return self::listController()->list(AuthTesting::authed($request, $fixture['account']));
     }
 
     /**
@@ -85,10 +94,34 @@ final class InsightApiTest
     public static function run(): array
     {
         return [
-            TestResult::check('GET insights returns 200 envelope with insights, count and echoed filters', function (): void {
+            TestResult::check('Insight reads require authentication; anonymous list/detail are rejected', function (): void {
+                AuthTesting::configure();
                 RequestId::set(RequestId::new());
 
-                $response = self::listController()->list(Request::create('GET', '/api/v1/intelligence/insights'));
+                foreach (['list', 'show'] as $action) {
+                    try {
+                        self::listController()->{$action}(Request::create(
+                            'GET',
+                            $action === 'list'
+                                ? '/api/v1/intelligence/insights'
+                                : '/api/v1/intelligence/insights/00000000-0000-4000-8000-000000000000'
+                        ));
+                        Assert::true(false, 'Expected AppException for anonymous ' . $action);
+                    } catch (AppException $e) {
+                        Assert::same('UNAUTHENTICATED', $e->errorCode());
+                        Assert::same(401, $e->httpStatus());
+                    }
+                }
+            }),
+
+            TestResult::check('GET insights returns 200 envelope with insights, count and echoed filters', function (): void {
+                $fixture = AuthTesting::householdFixture();
+                RequestId::set(RequestId::new());
+
+                $response = self::authedList(
+                    Request::create('GET', '/api/v1/intelligence/insights'),
+                    $fixture
+                );
 
                 Assert::same(200, $response->status());
                 $body = $response->body();
@@ -99,6 +132,16 @@ final class InsightApiTest
                 Assert::same('DETERMINISTIC_V1', $body['data']['generation']['mode']);
                 Assert::same(50, $body['data']['filters']['limit']);
 
+                // W3: the echoed household scope is the server-derived
+                // membership household, not a client choice.
+                Assert::same($fixture['household_id'], $body['data']['filters']['household_id']);
+                foreach ($body['data']['insights'] as $insight) {
+                    Assert::true(
+                        $insight['household_id'] === null || $insight['household_id'] === $fixture['household_id'],
+                        'Reads never surface another household\'s insights'
+                    );
+                }
+
                 ob_start();
                 $response->send();
                 $raw = (string) ob_get_clean();
@@ -107,6 +150,7 @@ final class InsightApiTest
             }),
 
             TestResult::check('Controlled internal seam persists one deduplicated data limitation insight', function (): void {
+                $fixture = AuthTesting::householdFixture();
                 $repository = new InsightRepository();
                 $service = new IntelligenceService($repository);
 
@@ -144,16 +188,16 @@ final class InsightApiTest
                 Assert::same($before, $limitationRows(), 'Repeated controlled evaluations must not duplicate the limitation insight');
 
                 // The persisted insight is queryable through the read path.
-                $listed = self::listController()->list(Request::create(
-                    'GET',
-                    '/api/v1/intelligence/insights',
-                    query: ['type' => 'DATA_LIMITATION']
-                ));
+                $listed = self::authedList(
+                    Request::create('GET', '/api/v1/intelligence/insights', query: ['type' => 'DATA_LIMITATION']),
+                    $fixture
+                );
                 Assert::same(200, $listed->status());
                 Assert::true($listed->body()['data']['count'] >= 1);
             }),
 
             TestResult::check('GET /insights is strictly read-only: no INSERT or UPDATE on reads', function (): void {
+                $fixture = AuthTesting::householdFixture();
                 $repository = new InsightRepository();
 
                 $snapshot = static function () use ($repository): array {
@@ -171,16 +215,16 @@ final class InsightApiTest
 
                 $before = $snapshot();
 
-                self::listController()->list(Request::create('GET', '/api/v1/intelligence/insights'));
-                self::listController()->list(Request::create('GET', '/api/v1/intelligence/insights', query: [
+                self::authedList(Request::create('GET', '/api/v1/intelligence/insights'), $fixture);
+                self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: [
                     'category' => 'GENERAL',
                     'significance' => 'LOW',
                     'status' => 'ONGOING',
                     'limit' => '10',
-                ]));
-                self::listController()->list(Request::create('GET', '/api/v1/intelligence/insights', query: [
+                ]), $fixture);
+                self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: [
                     'type' => 'DATA_LIMITATION',
-                ]));
+                ]), $fixture);
 
                 $after = $snapshot();
 
@@ -189,11 +233,12 @@ final class InsightApiTest
             }),
 
             TestResult::check('Filters are backend-owned: valid filters apply, unknown values are rejected', function (): void {
-                $response = self::listController()->list(Request::create(
-                    'GET',
-                    '/api/v1/intelligence/insights',
-                    query: ['category' => 'GENERAL', 'significance' => 'LOW']
-                ));
+                $fixture = AuthTesting::householdFixture();
+
+                $response = self::authedList(
+                    Request::create('GET', '/api/v1/intelligence/insights', query: ['category' => 'GENERAL', 'significance' => 'LOW']),
+                    $fixture
+                );
                 $body = $response->body();
                 Assert::same(200, $response->status());
                 Assert::same('GENERAL', $body['data']['filters']['category']);
@@ -204,11 +249,7 @@ final class InsightApiTest
                 }
 
                 try {
-                    self::listController()->list(Request::create(
-                        'GET',
-                        '/api/v1/intelligence/insights',
-                        query: ['type' => 'MAGIC_TYPE']
-                    ));
+                    self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: ['type' => 'MAGIC_TYPE']), $fixture);
                     Assert::true(false, 'Expected AppException was not thrown');
                 } catch (AppException $e) {
                     Assert::same('VALIDATION_ERROR', $e->errorCode());
@@ -217,11 +258,7 @@ final class InsightApiTest
                 }
 
                 try {
-                    self::listController()->list(Request::create(
-                        'GET',
-                        '/api/v1/intelligence/insights',
-                        query: ['limit' => '0']
-                    ));
+                    self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: ['limit' => '0']), $fixture);
                     Assert::true(false, 'Expected AppException was not thrown');
                 } catch (AppException $e) {
                     Assert::same('VALIDATION_ERROR', $e->errorCode());
@@ -230,11 +267,7 @@ final class InsightApiTest
                 }
 
                 try {
-                    self::listController()->list(Request::create(
-                        'GET',
-                        '/api/v1/intelligence/insights',
-                        query: ['status' => 'MAGIC_STATE']
-                    ));
+                    self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: ['status' => 'MAGIC_STATE']), $fixture);
                     Assert::true(false, 'Expected AppException was not thrown');
                 } catch (AppException $e) {
                     Assert::same('VALIDATION_ERROR', $e->errorCode());
@@ -244,25 +277,36 @@ final class InsightApiTest
             }),
 
             TestResult::check('ONGOING status filter is normalized to UPDATED, never persisted verbatim', function (): void {
-                $response = self::listController()->list(Request::create(
-                    'GET',
-                    '/api/v1/intelligence/insights',
-                    query: ['status' => 'ONGOING']
-                ));
+                $fixture = AuthTesting::householdFixture();
+
+                $response = self::authedList(
+                    Request::create('GET', '/api/v1/intelligence/insights', query: ['status' => 'ONGOING']),
+                    $fixture
+                );
 
                 Assert::same(200, $response->status());
                 Assert::same('UPDATED', $response->body()['data']['filters']['status']);
             }),
 
             TestResult::check('Detail endpoint returns one persisted insight and honest 404 for unknown ids', function (): void {
+                $fixture = AuthTesting::householdFixture();
                 $controller = self::listController();
-                $listResponse = $controller->list(Request::create('GET', '/api/v1/intelligence/insights'));
+
+                // System-scope insight (NULL household): visible to every
+                // authenticated household through the derived scope rule.
+                $listResponse = self::authedList(
+                    Request::create('GET', '/api/v1/intelligence/insights', query: ['type' => 'DATA_LIMITATION']),
+                    $fixture
+                );
                 $insights = $listResponse->body()['data']['insights'];
                 Assert::true(count($insights) >= 1);
 
                 $knownId = (string) $insights[0]['id'];
 
-                $showResponse = $controller->show(Request::create('GET', '/api/v1/intelligence/insights/' . $knownId));
+                $showResponse = $controller->show(AuthTesting::authed(
+                    Request::create('GET', '/api/v1/intelligence/insights/' . $knownId),
+                    $fixture['account']
+                ));
                 Assert::same(200, $showResponse->status());
                 Assert::same(true, $showResponse->body()['success']);
                 Assert::same($knownId, $showResponse->body()['data']['insight']['id']);
@@ -270,87 +314,127 @@ final class InsightApiTest
                 Assert::true(isset($showResponse->body()['data']['insight']['provenance']['engine']));
 
                 try {
-                    $controller->show(Request::create('GET', '/api/v1/intelligence/insights/00000000-0000-4000-8000-000000000000'));
-                    Assert::true(false, 'Expected AppException was not thrown');
-                } catch (AppException $e) {
-                    Assert::same('NOT_FOUND', $e->errorCode());
-                    Assert::same(404, $e->httpStatus());
-                }
-            }),
-
-            TestResult::check('Household-scoped insights are isolated and ownership mismatches return 404', function (): void {
-                $householdId = self::uniqueHouseholdId();
-                $otherHouseholdId = self::uniqueHouseholdId();
-
-                $evidence = InsightEvidenceInput::fromArray([
-                    'household_id' => $householdId,
-                    'balance' => [
-                        self::classifiedBalance('POTENTIAL_SURPLUS', 2.0, '2026-09-01T12:00:00'),
-                        self::classifiedBalance('POTENTIAL_DEFICIT', -2.0, '2026-09-01T19:00:00'),
-                    ],
-                ]);
-
-                $engine = new InsightEngine();
-                $repository = new InsightRepository();
-                $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-
-                $created = 0;
-                foreach ($engine->evaluate($evidence, $now) as $insight) {
-                    $repository->upsert($insight, $now);
-                    $created++;
-                }
-                Assert::same(2, $created, 'Expected mismatch and daytime/evening insights');
-
-                $scoped = self::listController()->list(Request::create(
-                    'GET',
-                    '/api/v1/intelligence/insights',
-                    query: ['household_id' => $householdId]
-                ));
-                $scopedBody = $scoped->body();
-                Assert::same(200, $scoped->status());
-                Assert::same($householdId, $scopedBody['data']['filters']['household_id']);
-                Assert::true($scopedBody['data']['count'] >= 2);
-                foreach ($scopedBody['data']['insights'] as $insight) {
-                    Assert::same($householdId, $insight['household_id']);
-                }
-
-                $types = array_map(static fn (array $insight): string => $insight['type'], $scopedBody['data']['insights']);
-                Assert::true(in_array('SOLAR_DEMAND_MISMATCH', $types, true));
-                Assert::true(in_array('DAYTIME_SURPLUS_EVENING_DEFICIT', $types, true));
-
-                $ownId = null;
-                foreach ($scopedBody['data']['insights'] as $insight) {
-                    if ($insight['type'] === 'SOLAR_DEMAND_MISMATCH') {
-                        $ownId = (string) $insight['id'];
-                    }
-                }
-                Assert::true($ownId !== null);
-
-                // Ownership boundary: scoped to another household -> 404.
-                try {
-                    self::listController()->show(Request::create(
-                        'GET',
-                        '/api/v1/intelligence/insights/' . $ownId,
-                        query: ['household_id' => $otherHouseholdId]
+                    $controller->show(AuthTesting::authed(
+                        Request::create('GET', '/api/v1/intelligence/insights/00000000-0000-4000-8000-000000000000'),
+                        $fixture['account']
                     ));
                     Assert::true(false, 'Expected AppException was not thrown');
                 } catch (AppException $e) {
                     Assert::same('NOT_FOUND', $e->errorCode());
                     Assert::same(404, $e->httpStatus());
                 }
+            }),
 
-                // Matching scope returns the insight.
-                $matching = self::listController()->show(Request::create(
-                    'GET',
-                    '/api/v1/intelligence/insights/' . $ownId,
-                    query: ['household_id' => $householdId]
+            TestResult::check('Household insights are isolated server-side from authenticated membership', function (): void {
+                $householdA = AuthTesting::householdFixture();
+                $householdB = AuthTesting::householdFixture();
+
+                $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+                $engine = new InsightEngine();
+                $repository = new InsightRepository();
+
+                $persistFor = static function (string $householdId, string $day) use ($engine, $repository, $now): array {
+                    $evidence = InsightEvidenceInput::fromArray([
+                        'household_id' => $householdId,
+                        'balance' => [
+                            self::classifiedBalance('POTENTIAL_SURPLUS', 2.0, $day . 'T12:00:00'),
+                            self::classifiedBalance('POTENTIAL_DEFICIT', -2.0, $day . 'T19:00:00'),
+                        ],
+                    ]);
+
+                    $created = [];
+                    foreach ($engine->evaluate($evidence, $now) as $insight) {
+                        $created[] = $repository->upsert($insight, $now);
+                    }
+
+                    return $created;
+                };
+
+                $day = '2026-09-0' . random_int(1, 8);
+                $insightsA = $persistFor($householdA['household_id'], $day);
+                $insightsB = $persistFor($householdB['household_id'], $day);
+                Assert::same(2, count($insightsA), 'Expected mismatch and daytime/evening insights');
+                Assert::same(2, count($insightsB));
+
+                // A's listing never contains B's rows.
+                $listA = self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: [
+                    'limit' => '200',
+                ]), $householdA);
+                $rowsA = $listA->body()['data']['insights'];
+                foreach ($rowsA as $insight) {
+                    Assert::true(
+                        $insight['household_id'] === $householdA['household_id'] || $insight['household_id'] === null,
+                        'A must never see another household\'s insights'
+                    );
+                }
+                $idsA = array_map(static fn (array $i): string => $i['id'], $rowsA);
+                foreach ($insightsB as $bInsight) {
+                    Assert::true(!in_array($bInsight->id(), $idsA, true), 'B-scoped insight leaked into A listing');
+                }
+
+                // Types are visible to their owner (evidence semantics intact).
+                $typesA = array_map(static fn (array $i): string => $i['type'], array_values(array_filter(
+                    $rowsA,
+                    static fn (array $i): bool => $i['household_id'] === $householdA['household_id']
+                )));
+                Assert::true(in_array('SOLAR_DEMAND_MISMATCH', $typesA, true));
+                Assert::true(in_array('DAYTIME_SURPLUS_EVENING_DEFICIT', $typesA, true));
+
+                // Cross-household detail: 404 for B, 200 for A — existence
+                // is not disclosed and no client claim can change that.
+                $bId = (string) $insightsB[0]->id();
+                $aId = (string) $insightsA[0]->id();
+
+                try {
+                    self::listController()->show(AuthTesting::authed(
+                        Request::create('GET', '/api/v1/intelligence/insights/' . $bId),
+                        $householdA['account']
+                    ));
+                    Assert::true(false, 'Expected 404 for cross-household detail');
+                } catch (AppException $e) {
+                    Assert::same('NOT_FOUND', $e->errorCode());
+                    Assert::same(404, $e->httpStatus());
+                }
+
+                $matching = self::listController()->show(AuthTesting::authed(
+                    Request::create('GET', '/api/v1/intelligence/insights/' . $aId),
+                    $householdA['account']
                 ));
                 Assert::same(200, $matching->status());
-                Assert::same($ownId, $matching->body()['data']['insight']['id']);
+                Assert::same($aId, $matching->body()['data']['insight']['id']);
+
+                // A client-supplied household_id can only restate the
+                // caller's own derived scope; any other claim is rejected
+                // outright (403) — never honored.
+                try {
+                    self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: [
+                        'household_id' => $householdB['household_id'],
+                    ]), $householdA);
+                    Assert::true(false, 'Expected 403 for a foreign household claim');
+                } catch (AppException $e) {
+                    Assert::same('HOUSEHOLD_ACCESS_DENIED', $e->errorCode());
+                    Assert::same(403, $e->httpStatus());
+                }
+
+                $restated = self::authedList(Request::create('GET', '/api/v1/intelligence/insights', query: [
+                    'household_id' => $householdA['household_id'],
+                ]), $householdA);
+                Assert::same(200, $restated->status());
+
+                // An account with no household sees only system-scope rows.
+                $accountless = AuthTesting::activateAccount();
+                $listEmpty = self::listController()->list(AuthTesting::authed(
+                    Request::create('GET', '/api/v1/intelligence/insights'),
+                    $accountless
+                ));
+                Assert::same(null, $listEmpty->body()['data']['filters']['household_id']);
+                foreach ($listEmpty->body()['data']['insights'] as $insight) {
+                    Assert::same(null, $insight['household_id'], 'Membership-less accounts see system scope only');
+                }
             }),
 
             TestResult::check('Simulated evidence path stays simulated end to end with dedup lifecycle', function (): void {
-                $householdId = self::uniqueHouseholdId();
+                $householdId = AuthTesting::bareHouseholdId();
 
                 $evidence = EnergyIntelligenceAdapter::fromF4F5ResultsWithEvidence(
                     null,
@@ -392,7 +476,7 @@ final class InsightApiTest
             }),
 
             TestResult::check('Duplicate-key convergence: a lost first-observation race merges, never fails', function (): void {
-                $householdId = self::uniqueHouseholdId();
+                $householdId = AuthTesting::bareHouseholdId();
 
                 $evidence = InsightEvidenceInput::fromArray([
                     'household_id' => $householdId,

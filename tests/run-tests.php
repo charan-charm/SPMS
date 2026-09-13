@@ -40,11 +40,13 @@ $suites = [
         Tests\Unit\InsightTest::class,
         Tests\Unit\AccountTest::class,
         Tests\Unit\MailTransportTest::class,
+        Tests\Unit\HouseholdTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
         Tests\Integration\MigrationRunnerTest::class,
         Tests\Integration\AuthMigrationsTest::class,
+        Tests\Integration\HouseholdMigrationsTest::class,
     ],
     'API' => [
         Tests\API\HealthApiTest::class,
@@ -52,13 +54,16 @@ $suites = [
         Tests\API\EnergyCostApiTest::class,
         Tests\API\InsightApiTest::class,
         Tests\API\AuthApiTest::class,
+        Tests\API\HouseholdApiTest::class,
     ],
     'Security' => [
         Tests\Security\SafeErrorsTest::class,
         Tests\Security\AuthSecurityTest::class,
+        Tests\Security\OwnershipSecurityTest::class,
     ],
     'Workflow' => [
         Tests\Workflow\AuthWorkflowTest::class,
+        Tests\Workflow\HouseholdOwnershipWorkflowTest::class,
     ],
 ];
 

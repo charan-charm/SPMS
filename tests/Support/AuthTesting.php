@@ -129,4 +129,97 @@ final class AuthTesting
 
         return is_string($token) ? $token : null;
     }
+
+    // ---------------------------------------------------------------
+    // W3 — household ownership fixtures
+    // ---------------------------------------------------------------
+
+    /**
+     * Register + verify a fresh ACTIVE account through the real auth
+     * service and mail sink. Returns the activated Account entity.
+     */
+    public static function activateAccount(string $prefix = 'w1-'): Account
+    {
+        self::configure();
+
+        $service = new AccountService();
+        $email = $prefix . bin2hex(random_bytes(6)) . '@example.test';
+
+        $service->register($email, 'correct-horse-battery', self::uniqueIpAddress());
+
+        $token = self::latestMailToken('Verify your email');
+        if ($token === null) {
+            throw new \RuntimeException('W3 fixture: no verification mail token found in sink.');
+        }
+
+        return $service->verifyEmail($token);
+    }
+
+    /**
+     * A synthetic authenticated context for controller-boundary tests.
+     * Middleware normally builds this; direct-controller tests inject
+     * the equivalent object without weakening the boundary under test
+     * (authorization decisions live in the service layer, not here).
+     */
+    public static function contextFor(Account $account): \App\Security\AuthContext
+    {
+        return \App\Security\AuthContext::authenticated($account, [
+            'id' => 'w3-fixture-session',
+            'account_id' => $account->id(),
+            'csrf_token' => 'w3-fixture-csrf',
+        ]);
+    }
+
+    public static function authed(\App\Support\Request $request, Account $account): \App\Support\Request
+    {
+        return $request->withAuthContext(self::contextFor($account));
+    }
+
+    /**
+     * Full W3 fixture: ACTIVE account owning one fresh household
+     * (real rows, FK-valid — the synthetic 'f6-hh-*' IDs can no longer
+     * be referenced since migration 0007).
+     *
+     * @return array{account: Account, household_id: string, context: \App\Security\AuthContext}
+     */
+    public static function householdFixture(?string $label = null): array
+    {
+        $account = self::activateAccount();
+
+        $householdId = (new \App\Domain\Household\HouseholdService())->createForAccount(
+            $account,
+            $label ?? 'w3-test-' . bin2hex(random_bytes(4)),
+            'Asia/Kolkata',
+            null,
+            new \DateTimeImmutable('now', new \DateTimeZone('UTC'))
+        )['household']->id();
+
+        return [
+            'account' => $account,
+            'household_id' => $householdId,
+            'context' => self::contextFor($account),
+        ];
+    }
+
+    /**
+     * A real, FK-valid household row (no account/membership) for tests
+     * that persist insights at the repository/service layer and only need
+     * a household the foreign key can resolve to. Replaces the pre-W3
+     * synthetic 'f6-hh-*' identifiers that migration 0007 now rejects.
+     */
+    public static function bareHouseholdId(string $labelPrefix = 'w3-fixture'): string
+    {
+        self::configure();
+
+        $household = \App\Domain\Household\Household::create(
+            $labelPrefix . '-' . bin2hex(random_bytes(4)),
+            'Asia/Kolkata',
+            null,
+            new \DateTimeImmutable('now', new \DateTimeZone('UTC'))
+        );
+
+        (new \App\Repositories\HouseholdRepository())->insert($household);
+
+        return $household->id();
+    }
 }

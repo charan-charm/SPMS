@@ -121,9 +121,24 @@ class InsightRepository
         $conditions = [];
         $params = [];
 
-        if (isset($filters['household_id'])) {
-            $conditions[] = 'household_id = :household_id';
-            $params['household_id'] = $filters['household_id'];
+        // W3 household scoping (docs/10 D-050, D-057): a null value means
+        // "system scope only" (the caller has no household yet); the
+        // optional system-scope inclusion lets an owned household also
+        // see NULL-scope (undetermined/system) insights. Direct internal
+        // callers that pass neither convention keep the exact pre-W3
+        // equality semantics.
+        if (array_key_exists('household_id', $filters)) {
+            $household = $filters['household_id'];
+
+            if ($household === null) {
+                $conditions[] = 'household_id IS NULL';
+            } elseif (!empty($filters['system_scoped_included'])) {
+                $conditions[] = '(household_id = :household_id OR household_id IS NULL)';
+                $params['household_id'] = $household;
+            } else {
+                $conditions[] = 'household_id = :household_id';
+                $params['household_id'] = $household;
+            }
         }
 
         if (isset($filters['category'])) {

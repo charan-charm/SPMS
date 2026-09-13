@@ -1,0 +1,103 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\Household;
+
+use App\Domain\Account\Account;
+use App\Repositories\HouseholdRepository;
+use App\Repositories\MembershipRepository;
+use App\Support\AppException;
+use DateTimeImmutable;
+use InvalidArgumentException;
+
+/**
+ * W3 — Household use-cases (docs/10 D-050, D-055, D-056).
+ *
+ * Server-side ownership resolution and the v1 onboarding primitive.
+ *
+ * The effective household for an authenticated account is derived here,
+ * from memberships over the account's own identity — never from a
+ * client-supplied identifier. ADMIN receives no special resolution:
+ * like every account, its reach is exactly its memberships (docs/10
+ * D-055: ADMIN is not unrestricted cross-household access).
+ *
+ * v1 business rule (D-050): one account, one household — enforced by
+ * this application layer while the schema stays N:N-capable.
+ */
+final class HouseholdService
+{
+    public function __construct(
+        private readonly HouseholdRepository $households = new HouseholdRepository(),
+        private readonly MembershipRepository $memberships = new MembershipRepository()
+    ) {
+    }
+
+    /**
+     * The account's active household context, or null when the account
+     * has none yet (or its only household is no longer ACTIVE — deleted
+     * households never resolve as active context).
+     *
+     * @return array{household: Household, membership: Membership}|null
+     */
+    public function activeHouseholdFor(Account $account): ?array
+    {
+        return $this->memberships->findActiveByAccount($account->id());
+    }
+
+    public function activeHouseholdId(Account $account): ?string
+    {
+        $context = $this->activeHouseholdFor($account);
+
+        return $context === null ? null : $context['household']->id();
+    }
+
+    /**
+     * Membership check for later household-scoped operations (insight
+     * detail, bills, integrations): the caller's own derived household
+     * must match the resource's household exactly.
+     */
+    public function assertsMembership(Account $account, string $householdId): bool
+    {
+        return $this->memberships->exists($householdId, $account->id());
+    }
+
+    /**
+     * V1 onboarding primitive: create the account's household plus its
+     * OWNER membership atomically. Status and role are server-assigned
+     * only; the caller only supplies display context.
+     *
+     * @return array{household: Household, membership: Membership}
+     */
+    public function createForAccount(
+        Account $account,
+        ?string $label,
+        string $timezone,
+        ?string $locationLabel,
+        DateTimeImmutable $now
+    ): array {
+        if ($this->memberships->countForAccount($account->id()) > 0) {
+            throw new AppException(
+                'HOUSEHOLD_EXISTS',
+                'This account already has a household.',
+                409
+            );
+        }
+
+        try {
+            $household = Household::create($label, $timezone, $locationLabel, $now);
+            $membership = Membership::create($household->id(), $account->id(), Membership::ROLE_OWNER, $now);
+        } catch (InvalidArgumentException $e) {
+            $message = $e->getMessage();
+            $field = str_starts_with($message, 'location_label')
+                ? 'location_label'
+                : (str_starts_with($message, 'label') ? 'label' : (str_starts_with($message, 'timezone') ? 'timezone' : 'timezone'));
+
+            throw new AppException('VALIDATION_ERROR', $message, 422, ['field' => $field]);
+        }
+
+        $this->households->insertWithOwnerMembership($household, $membership);
+
+        return ['household' => $household, 'membership' => $membership];
+    }
+}
