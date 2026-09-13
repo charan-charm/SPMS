@@ -94,6 +94,29 @@ final class HouseholdRepository
         ]);
     }
 
+    /**
+     * W3.1 (docs/10 D-065) — current-profile modification: only the
+     * display/context columns and updated_at are written. The primary
+     * key is the server-derived id; status and memberships are not
+     * addressable through this path at all.
+     */
+    public function updateProfile(Household $household): void
+    {
+        $statement = $this->connection()->prepare(
+            'UPDATE households SET label = :label, timezone = :timezone,
+                    location_label = :location_label, updated_at = :updated_at
+             WHERE id = :id'
+        );
+
+        $statement->execute([
+            'label' => $household->label(),
+            'timezone' => $household->timezone(),
+            'location_label' => $household->locationLabel(),
+            'updated_at' => $household->updatedAt(),
+            'id' => $household->id(),
+        ]);
+    }
+
     private function connection(): PDO
     {
         return $this->pdo ??= Database::connection();

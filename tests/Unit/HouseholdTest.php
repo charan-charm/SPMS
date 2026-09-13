@@ -98,6 +98,75 @@ final class HouseholdTest
                 });
             }),
 
+            TestResult::check('W3.1 withProfile changes current context only — identity, status and history are preserved', function (): void {
+                $household = Household::create('Home', 'Asia/Kolkata', 'City', self::now());
+
+                // Null arguments keep current values; partial modification works.
+                $edited = $household->withProfile(null, 'Europe/Berlin', null, self::now());
+                Assert::same($household->id(), $edited->id(), 'profile modification never re-keys the household');
+                Assert::same(Household::STATUS_ACTIVE, $edited->status(), 'status is not modifiable here');
+                Assert::same('Home', $edited->label());
+                Assert::same('Europe/Berlin', $edited->timezone());
+                Assert::same('City', $edited->locationLabel());
+                Assert::same($household->createdAt(), $edited->createdAt(), 'created_at is historical truth');
+
+                // Explicit empty strings clear the nullable display fields.
+                $cleared = $edited->withProfile('', null, '', self::now());
+                Assert::same(null, $cleared->label());
+                Assert::same(null, $cleared->locationLabel());
+                Assert::same('Europe/Berlin', $cleared->timezone());
+
+                // Same field semantics as creation — validated, never coerced.
+                Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
+                    $household->withProfile(null, 'Not/AZone/Nope', null, self::now());
+                });
+                Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
+                    $household->withProfile(null, '', null, self::now());
+                });
+                Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
+                    $household->withProfile(str_repeat('l', 121), null, null, self::now());
+                });
+                Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
+                    $household->withProfile(null, str_repeat('Z', 65), null, self::now());
+                });
+                Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
+                    $household->withProfile(null, null, str_repeat('L', 191), self::now());
+                });
+
+                // Lifecycle is independent of profile editing.
+                $pending = $household->withStatus(Household::STATUS_DELETION_PENDING, self::now());
+                Assert::same(Household::STATUS_DELETION_PENDING, $pending->withProfile('New', null, null, self::now())->status());
+            }),
+
+            TestResult::check('W3.1 onboarding readiness derives facts and never invents numbers', function (): void {
+                $none = \App\Domain\Household\OnboardingReadiness::derive(true, null);
+                Assert::same(true, $none['email_verified']);
+                Assert::same(false, $none['timezone_set']);
+                Assert::same(false, $none['location_provided']);
+                Assert::same('UNAVAILABLE', $none['solar']);
+                Assert::same('UNAVAILABLE', $none['verified_bills']);
+                Assert::same('LIMITED', $none['analysis']);
+
+                $withLocation = \App\Domain\Household\OnboardingReadiness::derive(
+                    false,
+                    Household::create('H', 'UTC', 'Anantapur', self::now())
+                );
+                Assert::same(false, $withLocation['email_verified']);
+                Assert::same(true, $withLocation['timezone_set']);
+                Assert::same(true, $withLocation['location_provided']);
+
+                // Whitespace is not a meaningful location.
+                $blankLocation = \App\Domain\Household\OnboardingReadiness::derive(
+                    true,
+                    Household::create('H', 'UTC', '   ', self::now())
+                );
+                Assert::same(false, $blankLocation['location_provided']);
+
+                foreach ($none as $key => $value) {
+                    Assert::true(is_bool($value) || is_string($value), $key . ' must stay non-numeric');
+                }
+            }),
+
             TestResult::check('Storage rows round-trip through the models', function (): void {
                 $household = Household::create('Home', 'Asia/Kolkata', 'City', self::now());
                 $row = $household->toStorageRow();

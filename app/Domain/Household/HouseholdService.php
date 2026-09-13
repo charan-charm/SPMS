@@ -88,16 +88,73 @@ final class HouseholdService
             $household = Household::create($label, $timezone, $locationLabel, $now);
             $membership = Membership::create($household->id(), $account->id(), Membership::ROLE_OWNER, $now);
         } catch (InvalidArgumentException $e) {
-            $message = $e->getMessage();
-            $field = str_starts_with($message, 'location_label')
-                ? 'location_label'
-                : (str_starts_with($message, 'label') ? 'label' : (str_starts_with($message, 'timezone') ? 'timezone' : 'timezone'));
-
-            throw new AppException('VALIDATION_ERROR', $message, 422, ['field' => $field]);
+            throw self::validationError($e);
         }
 
         $this->households->insertWithOwnerMembership($household, $membership);
 
         return ['household' => $household, 'membership' => $membership];
+    }
+
+    /**
+     * W3.1 — Household profile completion (docs/10 D-065, W4-lite):
+     * modify the caller's own ACTIVE household's current display
+     * context only. The target household is derived through the same
+     * membership resolution as every other household read — a client
+     * never selects it. With no active household the result is an
+     * honest 404: this operation never creates implicitly, redirects,
+     * or manufactures readiness.
+     *
+     * @param array{label?: ?string, timezone?: ?string, location_label?: ?string} $changes
+     *        supplied keys only; a nullable key set to '' clears it
+     *
+     * @return array{household: Household, membership: Membership}
+     */
+    public function updateProfile(Account $account, array $changes, DateTimeImmutable $now): array
+    {
+        $context = $this->activeHouseholdFor($account);
+
+        if ($context === null) {
+            throw new AppException(
+                'NOT_FOUND',
+                'The caller has no active household context to modify.',
+                404
+            );
+        }
+
+        try {
+            $updated = $context['household']->withProfile(
+                array_key_exists('label', $changes) ? $changes['label'] : null,
+                array_key_exists('timezone', $changes) ? $changes['timezone'] : null,
+                array_key_exists('location_label', $changes) ? $changes['location_label'] : null,
+                $now
+            );
+        } catch (InvalidArgumentException $e) {
+            throw self::validationError($e);
+        }
+
+        $noChange = $updated->label() === $context['household']->label()
+            && $updated->timezone() === $context['household']->timezone()
+            && $updated->locationLabel() === $context['household']->locationLabel();
+
+        if (!$noChange) {
+            $this->households->updateProfile($updated);
+        }
+
+        return ['household' => $updated, 'membership' => $context['membership']];
+    }
+
+    /**
+     * Map a domain validation failure onto the project's field-scoped
+     * 422 envelope (shared by creation and profile modification).
+     */
+    private static function validationError(InvalidArgumentException $e): AppException
+    {
+        $message = $e->getMessage();
+        $field = str_starts_with($message, 'location_label')
+            ? 'location_label'
+            : (str_starts_with($message, 'label') ? 'label' : 'timezone');
+
+        return new AppException('VALIDATION_ERROR', $message, 422, ['field' => $field]);
     }
 }

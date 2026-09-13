@@ -169,8 +169,11 @@ final class App
         // W3 — Household ownership context (versioned API boundary). The
         // household is always derived server-side from membership; there
         // is no household-id-addressed read route by design (docs/10 D-050).
+        // W3.1 — PATCH completes the profile: own-route current-context
+        // modification only, scope still server-derived (docs/10 D-065).
         $router->add('GET', '/api/v1/household', [HouseholdController::class, 'current']);
         $router->add('POST', '/api/v1/household', [HouseholdController::class, 'create']);
+        $router->add('PATCH', '/api/v1/household', [HouseholdController::class, 'update']);
     }
 
     private function internalErrorResponse(): Response

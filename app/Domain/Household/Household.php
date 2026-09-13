@@ -38,6 +38,61 @@ final class Household
 
     public static function create(?string $label, string $timezone, ?string $locationLabel, DateTimeImmutable $now): self
     {
+        $timezone = self::validateTimezone($timezone);
+        $label = self::validateLabel($label);
+        $locationLabel = self::validateLocationLabel($locationLabel);
+
+        $stamp = $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+
+        return new self(
+            id: self::uuid(),
+            label: $label,
+            timezone: $timezone,
+            locationLabel: $locationLabel,
+            status: self::STATUS_ACTIVE,
+            createdAt: $stamp,
+            updatedAt: $stamp
+        );
+    }
+
+    /**
+     * W3.1 (D-065) — current-profile modification (W4-lite boundary): a
+     * new value object with the same id/status and the supplied display
+     * fields replaced. Ownership (memberships), lifecycle (status), the
+     * identifier itself and any historical/analytical data are outside
+     * this operation by construction. Null arguments mean "keep the
+     * current value"; explicit clearing passes an empty string for the
+     * nullable fields.
+     */
+    public function withProfile(
+        ?string $label,
+        ?string $timezone,
+        ?string $locationLabel,
+        DateTimeImmutable $now
+    ): self {
+        $timezone = self::validateTimezone($timezone ?? $this->timezone);
+        $label = $label === null ? $this->label : self::validateLabel($label === '' ? null : $label);
+        $locationLabel = $locationLabel === null
+            ? $this->locationLabel
+            : self::validateLocationLabel($locationLabel === '' ? null : $locationLabel);
+
+        return new self(
+            $this->id,
+            $label,
+            $timezone,
+            $locationLabel,
+            $this->status,
+            $this->createdAt,
+            $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s')
+        );
+    }
+
+    /**
+     * Shared field semantics for create() and withProfile() — identical
+     * messages, so validation behavior is ratified once, not forked.
+     */
+    private static function validateTimezone(string $timezone): string
+    {
         $timezone = trim($timezone);
 
         if ($timezone === '' || mb_strlen($timezone) > 64) {
@@ -52,25 +107,25 @@ final class Household
             throw new InvalidArgumentException('timezone must be a valid IANA time zone identifier.');
         }
 
+        return $timezone;
+    }
+
+    private static function validateLabel(?string $label): ?string
+    {
         if ($label !== null && (trim($label) === '' || mb_strlen($label) > 120)) {
             throw new InvalidArgumentException('label must be null or a non-empty string of at most 120 characters.');
         }
 
+        return $label !== null ? trim($label) : null;
+    }
+
+    private static function validateLocationLabel(?string $locationLabel): ?string
+    {
         if ($locationLabel !== null && mb_strlen($locationLabel) > 190) {
             throw new InvalidArgumentException('location_label must be null or a string of at most 190 characters.');
         }
 
-        $stamp = $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
-
-        return new self(
-            id: self::uuid(),
-            label: $label !== null ? trim($label) : null,
-            timezone: $timezone,
-            locationLabel: $locationLabel,
-            status: self::STATUS_ACTIVE,
-            createdAt: $stamp,
-            updatedAt: $stamp
-        );
+        return $locationLabel;
     }
 
     public static function fromStorageRow(array $row): self
@@ -89,6 +144,26 @@ final class Household
     public function id(): string
     {
         return $this->id;
+    }
+
+    public function label(): ?string
+    {
+        return $this->label;
+    }
+
+    public function locationLabel(): ?string
+    {
+        return $this->locationLabel;
+    }
+
+    public function createdAt(): string
+    {
+        return $this->createdAt;
+    }
+
+    public function updatedAt(): string
+    {
+        return $this->updatedAt;
     }
 
     public function status(): string

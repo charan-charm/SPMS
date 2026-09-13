@@ -55,6 +55,7 @@ $suites = [
         Tests\API\InsightApiTest::class,
         Tests\API\AuthApiTest::class,
         Tests\API\HouseholdApiTest::class,
+        Tests\API\HouseholdProfileTest::class,
     ],
     'Security' => [
         Tests\Security\SafeErrorsTest::class,
@@ -64,6 +65,7 @@ $suites = [
     'Workflow' => [
         Tests\Workflow\AuthWorkflowTest::class,
         Tests\Workflow\HouseholdOwnershipWorkflowTest::class,
+        Tests\Workflow\HouseholdProfileWorkflowTest::class,
     ],
 ];
 

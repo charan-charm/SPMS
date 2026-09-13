@@ -1300,4 +1300,59 @@ decisions established by the W3 implementation).
     the FK by design); the W3 fixture helpers create account + ACTIVE
     household + OWNER membership through the production service layer.
 
+## D-065 — W3.1 Household Profile Completion and Derived Onboarding Readiness — Database/Auth
+
+Status: RATIFIED (implements the onboarding deferral boundary reserved
+by D-064 §4 and the W4 profile-modification workflow; the PATCH shape
+and the readiness-projection rules below are new decisions established
+by the W3.1 implementation).
+
+1.  PATCH /api/v1/household is the current household-profile
+    modification primitive (W4-lite): own-route only, scope derived
+    server-side through the same membership resolution as every other
+    household read — D-064 §5's "no household-id addressing" stands.
+    The body accepts exactly timezone, label and location_label;
+    unknown fields (including any household_id/status/role claim) and
+    malformed types fail closed with a field-scoped 422 and write
+    nothing. Null or empty-string on a nullable field clears it; the
+    fields share one validator with creation, so POST and PATCH
+    semantics can never drift apart.
+2.  The modification changes current display context only. The
+    household id, status, memberships, roles, created_at and every
+    historical/analytical row are outside the operation by
+    construction; updated_at moves when a value actually changes.
+    An empty PATCH is a valid no-op. This is the W4 boundary from
+    docs/02 §9: profile changes do not rewrite the past.
+3.  With no ACTIVE household context the PATCH answers 404 NOT_FOUND
+    (the honest existing not-found envelope) — it never creates
+    implicitly, never redirects, and never manufactures readiness.
+    Non-ACTIVE households (DELETION_PENDING/DELETED) keep resolving to
+    the null context per D-064 §2, so they are equally unmodifiable.
+4.  GET /api/v1/household gained a derived `readiness` projection
+    (additive; the W3 shape is unchanged). It is computed from
+    authoritative facts on every read and is NEVER persisted: no
+    onboarding_progress table, no wizard state, no step/progress
+    storage exists or is introduced. The frontend reconstructs
+    onboarding from API state, per docs/04 §35.
+5.  The projection is exactly: email_verified (account truth),
+    timezone_set and location_provided (household field truth), and
+    the capability states solar=UNAVAILABLE, verified_bills=UNAVAILABLE
+    and analysis=LIMITED. UNAVAILABLE means the source does not exist
+    in this system yet — never a queried-and-empty zero, never
+    "connected", and it keeps the docs/04 §15 boundary that "not
+    connected" and service "unavailable" are not conflated into a fake
+    positive. No number, percentage, score or prediction is
+    fabricated (docs/04 §15/§20; D-042 verified-bill honesty).
+6.  W3.1 introduces no GoodWe, bills, AWS/Bedrock, location-
+    structuring or forecast dependency: GoodWe stays behind the open
+    G1 gate (D-061–D-063), bills behind the future F13/W9–W10
+    persistence, and the wizard UX still lands with the dashboard
+    milestone (D-064 §4). Authentication, CSRF (the middleware
+    already treats PATCH as a mutating method), the one-household v1
+    rule and the F6 closure from D-064 §3 are inherited unchanged.
+7.  Future milestones (structured location/W12, solar integration/
+    W6, bills/W9–W10, dashboard) extend the readiness projection when
+    authoritative sources exist — they must not replace its UNAVAILABLE
+    states with invented readiness, nor move progress into the client.
+
 **END OF DECISION LOG**

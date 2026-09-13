@@ -16,8 +16,9 @@ use Tests\TestResult;
 /**
  * W3 — Household context API boundary (docs/10 D-050, D-055).
  *
- * GET/POST /api/v1/household: authenticated, membership-derived, no
- * client-selected household identifier anywhere on either route.
+ * GET/POST /api/v1/household (plus the W3.1 PATCH route registered
+ * alongside them): authenticated, membership-derived, no
+ * client-selected household identifier anywhere on any route.
  */
 final class HouseholdApiTest
 {
@@ -145,20 +146,27 @@ final class HouseholdApiTest
                 Assert::true(str_contains($body, '"role":"OWNER"'), 'membership role is disclosed — it is not sensitive, the boundary is server-side');
             }),
 
-            TestResult::check('Router registers exactly the two household routes', function (): void {
+            TestResult::check('Router registers exactly the three household routes (W3.1 adds PATCH)', function (): void {
                 $router = new Router();
                 $router->add('GET', '/api/v1/household', [HouseholdController::class, 'current']);
                 $router->add('POST', '/api/v1/household', [HouseholdController::class, 'create']);
+                $router->add('PATCH', '/api/v1/household', [HouseholdController::class, 'update']);
 
                 [$class, $action] = $router->dispatch('GET', '/api/v1/household');
                 Assert::same(HouseholdController::class, $class);
                 Assert::same('current', $action);
 
-                try {
-                    $router->dispatch('PUT', '/api/v1/household');
-                    Assert::true(false, 'PUT must not be routable');
-                } catch (\App\Support\MethodNotAllowedException) {
-                    Assert::true(true);
+                [$patchClass, $patchAction] = $router->dispatch('PATCH', '/api/v1/household');
+                Assert::same(HouseholdController::class, $patchClass);
+                Assert::same('update', $patchAction);
+
+                foreach (['PUT', 'DELETE'] as $verb) {
+                    try {
+                        $router->dispatch($verb, '/api/v1/household');
+                        Assert::true(false, $verb . ' must not be routable');
+                    } catch (\App\Support\MethodNotAllowedException) {
+                        Assert::true(true);
+                    }
                 }
 
                 try {
