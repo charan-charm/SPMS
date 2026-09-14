@@ -15,7 +15,8 @@ final class Request
         private readonly array $body,
         private readonly array $headers,
         private readonly ?string $ipAddress = null,
-        private readonly ?AuthContext $authContext = null
+        private readonly ?AuthContext $authContext = null,
+        private readonly array $files = []
     ) {
     }
 
@@ -53,6 +54,22 @@ final class Request
                 }
                 $body = $decoded;
             }
+        } elseif (str_contains($contentType, 'multipart/form-data')) {
+            // B2 (docs/10 D-068): text parts of a multipart request are
+            // exposed to the body like any other form field — endpoints
+            // decide (strictly) what may be there at all. Uploaded FILE
+            // parts are separate: they come from $_FILES and are never
+            // interpreted as body data.
+            $body = is_array($_POST) ? $_POST : [];
+        }
+
+        // B2: raw $_FILES specs are exposed untouched-but-untrusted; every
+        // consumer must re-validate them fail-closed (BillUpload does).
+        $files = [];
+        foreach ((is_array($_FILES) ? $_FILES : []) as $name => $spec) {
+            if (is_array($spec)) {
+                $files[(string) $name] = $spec;
+            }
         }
 
         $headers = [];
@@ -66,17 +83,17 @@ final class Request
             ? $_SERVER['REMOTE_ADDR']
             : null;
 
-        return new self($method, $path, $query, $body, $headers, $ipAddress);
+        return new self($method, $path, $query, $body, $headers, $ipAddress, null, $files);
     }
 
-    public static function create(string $method, string $path, array $query = [], array $body = [], array $headers = [], ?string $ipAddress = null): self
+    public static function create(string $method, string $path, array $query = [], array $body = [], array $headers = [], ?string $ipAddress = null, array $files = []): self
     {
         $normalized = [];
         foreach ($headers as $name => $value) {
             $normalized[strtolower((string) $name)] = (string) $value;
         }
 
-        return new self(strtoupper($method), $path, $query, $body, $normalized, $ipAddress);
+        return new self(strtoupper($method), $path, $query, $body, $normalized, $ipAddress, null, $files);
     }
 
     public function method(): string
@@ -130,7 +147,23 @@ final class Request
             $this->body,
             $this->headers,
             $this->ipAddress,
-            $authContext
+            $authContext,
+            $this->files
         );
+    }
+
+    /**
+     * The raw $_FILES entry for a field name, or null. UNTRUSTED by
+     * definition — consumers must validate it fail-closed (B2's
+     * BillUpload::fromFilesSpec is that gate; nothing else may open
+     * uploads).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function uploadedFile(string $field): ?array
+    {
+        $spec = $this->files[$field] ?? null;
+
+        return is_array($spec) ? $spec : null;
     }
 }

@@ -17,6 +17,7 @@ use App\Controllers\EnergyCostController;
 use App\Controllers\IntelligenceController;
 use App\Controllers\AuthController;
 use App\Controllers\HouseholdController;
+use App\Controllers\BillController;
 use App\Repositories\HealthRepository;
 use App\Security\AuthMiddleware;
 use App\Services\HealthService;
@@ -174,6 +175,11 @@ final class App
         $router->add('GET', '/api/v1/household', [HouseholdController::class, 'current']);
         $router->add('POST', '/api/v1/household', [HouseholdController::class, 'create']);
         $router->add('PATCH', '/api/v1/household', [HouseholdController::class, 'update']);
+
+        // B2 — Secure bill document intake (docs/10 D-068). Authenticated,
+        // CSRF-protected multipart upload; household derived server-side;
+        // intake + temporary private storage only — no OCR, no drafts.
+        $router->add('POST', '/api/v1/bills/upload', [BillController::class, 'upload']);
     }
 
     private function internalErrorResponse(): Response

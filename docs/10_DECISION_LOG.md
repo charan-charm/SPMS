@@ -1533,4 +1533,84 @@ B2/B3 consumers of exactly these invariants).
     readiness's verified_bills fact can be wired to VERIFIED rows in the
     dashboard milestone (D-065), not before.
 
+## D-068 — B2 Secure Bill Upload & Temporary Private Storage — API/Bills
+
+Status: RATIFIED (intake boundary only: no OCR, no provider wiring, no
+draft creation — B3 consumes exactly what this produces).
+
+1.  Inheritance: the endpoint reuses the ratified pipeline untouched —
+    AuthMiddleware session + CSRF synchronizer token (D-052),
+    Authorization::requireAccount, server-side household derivation
+    through the W3 membership rule (D-050/D-064), and the B1 bill
+    lifecycle: intake alone can only ever move UPLOADED → PROCESSING.
+    VERIFIED/EXTRACTED states are unreachable from B2 by construction,
+    and no extraction draft is created (B1's draft table stays
+    extraction-only, D-067 §3).
+2.  POST /api/v1/bills/upload (multipart/form-data) accepts EXACTLY one
+    part: the file named "file". Any text field whatsoever is rejected
+    422 field-scoped — household_id, status, role or anything else can
+    never be claimed here (stricter than ignoring). JSON/base64 uploads
+    are not accepted (explicit MVP boundary).
+3.  Fail-closed intake validation (App\Domain\Bill\BillUpload): PHP
+    upload error codes mapped first (INI/FORM size → FILE_TOO_LARGE,
+    others → INVALID_UPLOAD); real on-disk size (client-claimed size
+    discarded) with EMPTY_FILE and a fixed 25 MiB ceiling
+    (MAX_BILL_UPLOAD_BYTES, sized for the future Mistral path);
+    extension gate ONLY on a lowercase alphanumeric tail of the client
+    name, controlled map to jpg/jpeg/png/pdf; then the magic signature
+    must AGREE with it — JPEG FF D8 FF, PNG 89 50 4E 47 0D 0A 1A 0A,
+    PDF 25 50 44 46 2D (the ratified Mistral-diagnostic approach; this
+    build has no fileinfo, and where fileinfo exists it may only tighten
+    the gate). Client-declared Content-Type is ignored entirely. The
+    VO retains only (server source path, canonical MIME, actual size) —
+    the original filename is never kept, so no downstream layer can
+    echo or persist it.
+4.  Private temporary storage (App\Services\Files): interface-only for
+    the domain (store/exists/read/delete — key-based, never path-based);
+    local implementation roots at storage/private/bills/tmp, outside the
+    public/ web root (gitignored; BILL_TMP_DIR may relocate it, relative
+    values resolve against the project base). Storage keys are
+    implementation-invisible UUIDs from the temp-document record plus
+    the canonical extension ("<uuid>.<jpg|png|pdf>"); every storage
+    operation re-validates the key against an exact opaque-name regex,
+    structurally excluding traversal, separators, NUL, control bytes and
+    executable extensions regardless of caller. Files never execute:
+    outside the docroot, never included/required, canonical-safe
+    extensions only. Cloud storage implements the same seam later.
+5.  Temporary reference (migration 0014 bill_temp_documents): id,
+    bill_id (CASCADE — aggregate child), storage_key, mime_type,
+    size_bytes, state AVAILABLE→DELETED, created_at/expires_at/
+    deleted_at/updated_at. No filename, no path, no content, no PII —
+    the document itself never enters the database (D-067 §1 holds:
+    only normalized operational metadata). Retention is configurable
+    (BILL_TEMP_RETENTION_HOURS, bounded 1..168, ratified default 24).
+6.  Ordering & compensation (file+DB cannot be one atomic unit):
+    validate → write private file → single transaction persisting
+    bill(UPLOADED row) + PROCESSING transition + temp reference;
+    storage failure means NO bill is ever persisted; a failed
+    transaction compensates by deleting the just-written file before
+    the error surfaces. A crash between commit and later phases leaves
+    a recoverable, expiring pair, never an uncontrolled orphan — and
+    BillTempCleanupService (internal only, no route, no client input)
+    is idempotent, file-missing-tolerant and per-record failure-safe.
+    No scheduler is invented (none exists in the project); operations
+    run purgeExpired() when infrastructure provides a timer.
+7.  Response is the §14-minimal envelope: {bill_id, status,
+    document{type, size_bytes}} — never the storage key, path, root,
+    original filename, content, or any AI/OCR data (B2 has none).
+    Error surface uses the standard envelope with safe codes
+    (INVALID_UPLOAD, UNSUPPORTED_FILE_TYPE, INVALID_FILE_SIGNATURE,
+    FILE_TOO_LARGE, EMPTY_FILE, UPLOAD_FAILED, STORAGE_FAILED) —
+    messages carry no paths, no PHP details, no internals.
+8.  Test isolation: run-tests.php additionally pins BILL_TMP_DIR to an
+    OS-temporary per-process directory and BILL_TEMP_RETENTION_HOURS to
+    24, so automated runs can never write into the repository's private
+    storage regardless of local .env. All B2 tests are offline (zero
+    Mistral/Bedrock/GoodWe/network calls); synthetic signature fixtures
+    only; the real bill images stay outside the repository.
+9.  Boundary preserved: no extraction draft, no assessment/confidence
+    persistence, no OCR, no preview/thumbnail, no file-content
+    inspection — those are B3 consumers of the PROCESSING bill +
+    temporary reference this milestone hands over.
+
 **END OF DECISION LOG**

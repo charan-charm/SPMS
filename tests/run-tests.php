@@ -39,6 +39,13 @@ Config::overrideForTesting([
     // regardless of the developer's local .env, and the test client
     // uses injected fakes.
     'MISTRAL_API_KEY' => '',
+    // B2 bill upload (docs/10 D-068): the automated suite's temporary
+    // document storage is pinned OUTSIDE the repository (OS temp, own
+    // process directory) and to the ratified retention — a test that
+    // ever forgets to inject storage can never write into
+    // storage/private/ or inherit a developer-local override.
+    'BILL_TMP_DIR' => sys_get_temp_dir() . '/spms-b2-runner-' . getmypid(),
+    'BILL_TEMP_RETENTION_HOURS' => '24',
 ]);
 
 $suiteFilter = $argv[1] ?? null;
@@ -58,6 +65,7 @@ $suites = [
         Tests\Unit\AIProviderTest::class,
         Tests\Unit\MistralOcrTest::class,
         Tests\Unit\BillDomainTest::class,
+        Tests\Unit\BillUploadTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
@@ -85,6 +93,7 @@ $suites = [
         Tests\Workflow\AuthWorkflowTest::class,
         Tests\Workflow\HouseholdOwnershipWorkflowTest::class,
         Tests\Workflow\HouseholdProfileWorkflowTest::class,
+        Tests\Workflow\BillUploadWorkflowTest::class,
     ],
 ];
 

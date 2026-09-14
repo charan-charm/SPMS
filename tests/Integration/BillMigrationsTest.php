@@ -28,6 +28,7 @@ final class BillMigrationsTest
         'bill_field_provenance',
         'bill_validation_results',
         'bill_quality_flags',
+        'bill_temp_documents', // B2 (docs/10 D-068) joins the aggregate scan
     ];
 
     private static function pdo(): PDO
@@ -60,7 +61,7 @@ final class BillMigrationsTest
     public static function run(): array
     {
         return [
-            TestResult::check('All five B1 migrations are recorded and all five tables exist', function (): void {
+            TestResult::check('B1 migrations are recorded and every bills-aggregate table exists', function (): void {
                 $ids = self::pdo()->query('SELECT id FROM migrations')->fetchAll(PDO::FETCH_COLUMN);
 
                 foreach ([
@@ -168,6 +169,7 @@ final class BillMigrationsTest
                         'bill_extraction_drafts' => 'CASCADE',
                         'bill_field_provenance' => 'CASCADE',
                         'bill_quality_flags' => 'CASCADE',
+                        'bill_temp_documents' => 'CASCADE',
                         'bill_validation_results' => 'CASCADE',
                     ],
                     $found
@@ -201,7 +203,7 @@ final class BillMigrationsTest
                 $statement = self::pdo()->prepare(
                     "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS
                      WHERE TABLE_SCHEMA = DATABASE()
-                       AND TABLE_NAME IN ('bills','bill_extraction_drafts','bill_field_provenance','bill_validation_results','bill_quality_flags')
+                       AND TABLE_NAME IN ('bills','bill_extraction_drafts','bill_field_provenance','bill_validation_results','bill_quality_flags','bill_temp_documents')
                        AND DATA_TYPE IN ('float','double','real','blob','tinyblob','mediumblob','longblob','binary','varbinary','text','tinytext','mediumtext','longtext','json')"
                 );
                 $statement->execute([]);
@@ -246,7 +248,7 @@ final class BillMigrationsTest
                     "SELECT INDEX_NAME, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS cols, MIN(NON_UNIQUE) AS non_unique
                      FROM information_schema.STATISTICS
                      WHERE TABLE_SCHEMA = DATABASE()
-                       AND TABLE_NAME IN ('bills','bill_extraction_drafts','bill_field_provenance','bill_validation_results','bill_quality_flags')
+                       AND TABLE_NAME IN ('bills','bill_extraction_drafts','bill_field_provenance','bill_validation_results','bill_quality_flags','bill_temp_documents')
                      GROUP BY TABLE_NAME, INDEX_NAME"
                 );
                 $statement->execute([]);
