@@ -28,6 +28,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+use App\Services\Mistral\MistralBillValidator;
 use App\Services\Mistral\MistralOcrClient;
 use App\Services\Mistral\MistralOcrException;
 use App\Support\Config;
@@ -55,11 +56,7 @@ if ($filePath === null || $filePath === '') {
     exit(1);
 }
 
-$annotationPrompt = 'This is a household electricity bill analysis task for a solar power management system. '
-    . 'Extract only information visibly supported by the document. Do not calculate derived values during '
-    . 'extraction. Do not treat cumulative meter readings as monthly consumption. Do not fabricate missing '
-    . 'values. Preserve ambiguity and conflicting values. The backend will perform deterministic validation '
-    . 'separately.';
+$annotationPrompt = MistralOcrClient::BILL_ANNOTATION_PROMPT;
 
 $client = new MistralOcrClient();
 
@@ -83,7 +80,7 @@ try {
         $route = 'image → inline data URL → /v1/ocr';
     }
 
-    $result = $client->processOcr($document, billAnnotationSchema(), $annotationPrompt);
+    $result = $client->processOcr($document, MistralOcrClient::billAnnotationSchema(), $annotationPrompt);
 
     echo "MISTRAL OCR TEST\n";
     echo "----------------\n";
@@ -110,9 +107,54 @@ try {
     echo "\nOCR TEXT:\n";
     foreach ($result['pages'] as $page) {
         echo "--- page " . ($page['index'] ?? '?')
-            . " (blocks: " . ($page['blocks'] ?? '-') . ", tables: " . ($page['tables'] ?? '-') . ", images: " . $page['images'] . ") ---\n";
-        echo $page['markdown'] !== '' ? $page['markdown'] : '(empty markdown)' ;
+            . " (blocks: " . ($page['blocks'] ?? '-') . ", tables: " . MistralOcrClient::tableCount($page['tables']) . ", images: " . $page['images'] . ") ---\n";
+        echo $page['markdown'] !== '' ? $page['markdown'] : '(empty markdown)';
         echo "\n";
+    }
+
+    // Tables are rendered from the ACTUAL returned content (official
+    // OCRTableObject.content); the page markdown placeholder like
+    // [tbl-0.md] alone is never the evidence. Nothing is reconstructed.
+    echo "\nTABLES:\n";
+    $anyTable = false;
+    foreach ($result['pages'] as $page) {
+        foreach ($page['tables'] ?? [] as $position => $table) {
+            $anyTable = true;
+            echo '--- page ' . ($page['index'] ?? '?') . ' / table '
+                . ($table['id'] ?? ('#' . $position))
+                . (isset($table['format']) && is_string($table['format']) ? ' (format: ' . $table['format'] . ')' : '')
+                . " ---\n";
+            echo $table['content'] !== '' ? $table['content'] : '(empty table content returned)';
+            echo "\n";
+        }
+    }
+    if (!$anyTable) {
+        echo "  (no table content returned)\n";
+    }
+
+    echo "\nDETERMINISTIC VALIDATION:\n";
+    echo "-------------------------\n";
+    $validation = MistralBillValidator::validate(is_array($annotation) ? $annotation : null);
+    $labels = [
+        'meter' => 'Meter consumption relationship',
+        'solar' => 'Solar production relationship',
+        'net' => 'Net units relationship',
+    ];
+    foreach ($validation as $key => $check) {
+        echo $labels[$key] . ': ' . $check['status'];
+        if ($check['status'] === MistralBillValidator::PASS) {
+            echo "\n";
+            continue;
+        }
+
+        echo "\n";
+        foreach ($check as $field => $value) {
+            if ($field === 'status' || !is_scalar($value)) {
+                continue;
+            }
+
+            echo '  ' . $field . '=' . (is_float($value) ? rtrim(rtrim(number_format($value, 3, '.', ''), '0'), '.') : (string) $value) . "\n";
+        }
     }
 
     echo "\nCONFIDENCE:\n";
@@ -138,77 +180,4 @@ try {
         . ($e->status() !== null ? ' HTTP ' . $e->status() : '')
         . '] ' . $e->getMessage() . "\n");
     exit(1);
-}
-
-/**
- * SPMS-normalized extraction schema for THIS controlled test only
- * (per the agreed field set). Every value is nullable — absent means
- * null, never fabricated. Section-level confidence is requested;
- * deterministic validation stays backend-side later.
- *
- * @return array<string, mixed>
- */
-function billAnnotationSchema(): array
-{
-    $nullableNumber = ['type' => ['number', 'null']];
-    $nullableString = ['type' => ['string', 'null']];
-    $confidence = ['type' => ['number', 'null']];
-
-    $section = static function (array $properties) use ($confidence): array {
-        $properties['confidence'] = $confidence;
-
-        return [
-            'type' => 'object',
-            'properties' => $properties,
-            'required' => array_keys($properties),
-            'additionalProperties' => false,
-        ];
-    };
-
-    return [
-        'type' => 'object',
-        'properties' => [
-            'document_assessment' => [
-                'type' => 'object',
-                'properties' => [
-                    'status' => [
-                        'type' => ['string', 'null'],
-                        'enum' => ['VALID', 'VALID_WITH_LIMITATIONS', 'NOT_A_BILL', 'UNREADABLE', 'UNCERTAIN', null],
-                    ],
-                    'reason' => $nullableString,
-                    'confidence' => $confidence,
-                ],
-                'required' => ['status', 'reason', 'confidence'],
-                'additionalProperties' => false,
-            ],
-            'billing_period' => $section(['start' => $nullableString, 'end' => $nullableString]),
-            'consumption' => $section(['consumption_kwh' => $nullableNumber]),
-            'meter_evidence' => $section([
-                'previous_meter_reading' => $nullableNumber,
-                'present_meter_reading' => $nullableNumber,
-            ]),
-            'solar' => $section([
-                'previous_solar_reading' => $nullableNumber,
-                'present_solar_reading' => $nullableNumber,
-                'solar_units_kwh' => $nullableNumber,
-                'net_units_kwh' => $nullableNumber,
-            ]),
-            'cost' => $section([
-                'total_amount' => $nullableNumber,
-                'energy_charges' => $nullableNumber,
-                'fixed_charges' => $nullableNumber,
-                'other_charges' => $nullableNumber,
-                'customer_service_charges' => $nullableNumber,
-                'taxes_adjustments' => $nullableNumber,
-            ]),
-            'context' => $section([
-                'tariff_category' => $nullableString,
-                'meter_type' => $nullableString,
-                'contracted_load' => $nullableString,
-                'utility_provider' => $nullableString,
-            ]),
-        ],
-        'required' => ['document_assessment', 'billing_period', 'consumption', 'meter_evidence', 'solar', 'cost', 'context'],
-        'additionalProperties' => false,
-    ];
 }

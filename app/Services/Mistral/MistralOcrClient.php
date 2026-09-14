@@ -44,6 +44,13 @@ final class MistralOcrClient
     public const TABLE_FORMAT = 'markdown';
     public const CONFIDENCE_GRANULARITY = 'block';
 
+    /**
+     * Bound for table CONTENT / markdown retained by the diagnostic
+     * display — display hygiene, not silent truncation of the model's
+     * answer (the truncation marker makes reduction visible).
+     */
+    public const MAX_DISPLAY_CHARS = 20_000;
+
     /** Local-document bound for this controlled test (25 MiB). */
     public const MAX_FILE_BYTES = 26_214_400;
 
@@ -97,6 +104,115 @@ final class MistralOcrClient
     public function hasApiKey(): bool
     {
         return is_string($this->apiKey) && trim($this->apiKey) !== '';
+    }
+
+    // ---------------------------------------------------------------
+    // SPMS bill annotation schema + prompt (CONTROLLED TEST ONLY —
+    // this is the diagnostic harness's field set, not a production
+    // Bill Analyzer contract; deterministic validation stays outside
+    // the model).
+    // ---------------------------------------------------------------
+
+    /**
+     * The instruction-ratified extraction prompt: never calculate,
+     * never treat cumulative readings as consumption, never fabricate,
+     * and only take total_amount from an explicitly displayed final
+     * amount.
+     */
+    public const BILL_ANNOTATION_PROMPT = 'This is a household electricity bill analysis task for a solar power management system. '
+        . 'Extract only information visibly supported by the document. Do not calculate derived values during extraction. '
+        . 'Do not treat cumulative meter readings as monthly consumption. Do not fabricate missing values. '
+        . 'Preserve ambiguity and conflicting values. The backend will perform deterministic validation separately. '
+        . 'Extract total_amount only when the document explicitly identifies a reliable final bill amount, total amount payable, '
+        . 'net bill amount, amount payable, or equivalent final customer amount. Do not calculate or reconstruct total_amount '
+        . 'from component charges. If no explicit reliable total is visible, return null. '
+        . 'Keep total_amount, energy_charges, fixed_charges, other_charges, customer_service_charges and taxes_adjustments '
+        . 'as distinct fields; never collapse or merge them.';
+
+    /**
+     * SPMS-normalized extraction schema for this controlled test.
+     * Every value is nullable — absent means null, never fabricated.
+     * Section-level confidence is requested; the backend validates
+     * deterministically afterwards.
+     *
+     * @return array<string, mixed>
+     */
+    public static function billAnnotationSchema(): array
+    {
+        $nullableNumber = ['type' => ['number', 'null']];
+        $nullableString = ['type' => ['string', 'null']];
+        $confidence = ['type' => ['number', 'null']];
+
+        $section = static function (array $properties) use ($confidence): array {
+            $properties['confidence'] = $confidence;
+
+            return [
+                'type' => 'object',
+                'properties' => $properties,
+                'required' => array_keys($properties),
+                'additionalProperties' => false,
+            ];
+        };
+
+        $totalAmount = $nullableNumber;
+        $totalAmount['description'] = 'The document\'s explicitly displayed final bill / total amount payable to the customer. '
+            . 'Never a calculated or reconstructed sum of component charges. null when no explicit reliable total is visible.';
+
+        return [
+            'type' => 'object',
+            'properties' => [
+                'document_assessment' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'status' => [
+                            'type' => ['string', 'null'],
+                            'enum' => ['VALID', 'VALID_WITH_LIMITATIONS', 'NOT_A_BILL', 'UNREADABLE', 'UNCERTAIN', null],
+                        ],
+                        'reason' => $nullableString,
+                        'confidence' => $confidence,
+                    ],
+                    'required' => ['status', 'reason', 'confidence'],
+                    'additionalProperties' => false,
+                ],
+                'billing_period' => $section(['start' => $nullableString, 'end' => $nullableString]),
+                'consumption' => $section(['consumption_kwh' => $nullableNumber]),
+                'meter_evidence' => $section([
+                    'previous_meter_reading' => $nullableNumber,
+                    'present_meter_reading' => $nullableNumber,
+                ]),
+                'solar' => $section([
+                    'previous_solar_reading' => $nullableNumber,
+                    'present_solar_reading' => $nullableNumber,
+                    'solar_units_kwh' => $nullableNumber,
+                    'net_units_kwh' => $nullableNumber,
+                ]),
+                'cost' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'total_amount' => $totalAmount,
+                        'energy_charges' => $nullableNumber,
+                        'fixed_charges' => $nullableNumber,
+                        'other_charges' => $nullableNumber,
+                        'customer_service_charges' => $nullableNumber,
+                        'taxes_adjustments' => $nullableNumber,
+                        'confidence' => $confidence,
+                    ],
+                    'required' => [
+                        'total_amount', 'energy_charges', 'fixed_charges', 'other_charges',
+                        'customer_service_charges', 'taxes_adjustments', 'confidence',
+                    ],
+                    'additionalProperties' => false,
+                ],
+                'context' => $section([
+                    'tariff_category' => $nullableString,
+                    'meter_type' => $nullableString,
+                    'contracted_load' => $nullableString,
+                    'utility_provider' => $nullableString,
+                ]),
+            ],
+            'required' => ['document_assessment', 'billing_period', 'consumption', 'meter_evidence', 'solar', 'cost', 'context'],
+            'additionalProperties' => false,
+        ];
     }
 
     // ---------------------------------------------------------------
@@ -318,9 +434,11 @@ final class MistralOcrClient
 
                 $pages[] = [
                     'index' => isset($page['index']) && is_numeric($page['index']) ? (int) $page['index'] : null,
-                    'markdown' => isset($page['markdown']) && is_string($page['markdown']) ? $page['markdown'] : '',
+                    'markdown' => self::boundedDisplay(
+                        isset($page['markdown']) && is_string($page['markdown']) ? $page['markdown'] : ''
+                    ),
                     'images' => isset($page['images']) && is_array($page['images']) ? count($page['images']) : 0,
-                    'tables' => isset($page['tables']) && is_array($page['tables']) ? count($page['tables']) : null,
+                    'tables' => self::parseTables($page['tables'] ?? null),
                     'blocks' => isset($page['blocks']) && is_array($page['blocks']) ? count($page['blocks']) : null,
                     'confidence_scores' => isset($page['confidence_scores']) && is_array($page['confidence_scores'])
                         ? self::sanitizeNumeric($page['confidence_scores'])
@@ -342,6 +460,59 @@ final class MistralOcrClient
             'annotation_error' => $annotation['error'],
             'usage' => $usage,
         ];
+    }
+
+    /**
+     * Official OCRTableObject: {id, content, format, word_confidence_scores?}.
+     * `content` holds the ACTUAL extracted table in the requested format
+     * (the page markdown only carries a `[tbl-N.md](tbl-N.md)`-style
+     * placeholder pointing at it). Never reconstructed, never invented.
+     *
+     * @return array<int, array{id: string|null, content: string, format: string|null}>|null
+     *         null when the response carried no tables field at all.
+     */
+    private static function parseTables(mixed $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $tables = [];
+        foreach ($raw as $table) {
+            if (!is_array($table)) {
+                continue;
+            }
+
+            $tables[] = [
+                'id' => isset($table['id']) && is_string($table['id']) ? $table['id'] : null,
+                'content' => self::boundedDisplay(
+                    isset($table['content']) && is_string($table['content']) ? $table['content'] : ''
+                ),
+                'format' => match (true) {
+                    isset($table['format']) && is_string($table['format']) => $table['format'],
+                    isset($table['format_']) && is_string($table['format_']) => $table['format_'],
+                    default => null,
+                },
+            ];
+        }
+
+        return $tables;
+    }
+
+    /** Table count helper for display summaries. */
+    public static function tableCount(?array $parsedTables): int
+    {
+        return $parsedTables === null ? 0 : count($parsedTables);
+    }
+
+    /** Bounded, display-safe retained content with a visible truncation marker. */
+    private static function boundedDisplay(string $text): string
+    {
+        if (strlen($text) <= self::MAX_DISPLAY_CHARS) {
+            return $text;
+        }
+
+        return substr($text, 0, self::MAX_DISPLAY_CHARS) . "\n…[truncated at " . self::MAX_DISPLAY_CHARS . ' chars]';
     }
 
     /**

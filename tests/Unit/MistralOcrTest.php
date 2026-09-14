@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Services\Mistral\MistralBillValidator;
 use App\Services\Mistral\MistralOcrClient;
 use App\Services\Mistral\MistralOcrException;
 use App\Support\Config;
@@ -77,14 +78,20 @@ final class MistralOcrTest
             'pages' => [
                 [
                     'index' => 0,
-                    'markdown' => "# BILL\n| kwh | 312 |",
+                    'markdown' => "# BILL\n[tbl-0](tbl-0)",
                     'images' => [],
-                    'tables' => [['rows' => 2]],
+                    'tables' => [[
+                        'id' => 'tbl-0',
+                        'content' => "| Item | Amount |\n|---|---|\n| Fixed charges | 30 |\n| Energy charges | 11 |",
+                        'format' => 'markdown',
+                    ]],
                     'blocks' => [['text' => 'a'], ['text' => 'b']],
                     'confidence_scores' => ['block' => ['min' => 0.91, 'mean' => 0.97]],
                 ],
             ],
-            'document_annotation' => '{"document_assessment":{"status":"VALID","reason":"clear","confidence":0.98}}',
+            'document_annotation' => '{"document_assessment":{"status":"VALID","reason":"clear","confidence":0.98},'
+                . '"cost":{"total_amount":521.5,"energy_charges":11,"fixed_charges":30,"other_charges":null,'
+                . '"customer_service_charges":25,"taxes_adjustments":null,"confidence":0.9}}',
             'usage_info' => ['input_tokens' => 1200, 'output_tokens' => 340],
         ]);
     }
@@ -196,11 +203,16 @@ final class MistralOcrTest
                 Assert::same(0, $page['index']);
                 Assert::contains('# BILL', $page['markdown']);
                 Assert::same(2, $page['blocks']);
-                Assert::same(1, $page['tables']);
+                Assert::same(1, count($page['tables']), 'one table object parsed');
+                Assert::same('tbl-0', $page['tables'][0]['id']);
+                Assert::contains('| Fixed charges | 30 |', $page['tables'][0]['content'], 'actual returned table content is kept verbatim');
+                Assert::same('markdown', $page['tables'][0]['format']);
                 Assert::same(0, $page['images']);
                 Assert::same(0.91, $page['confidence_scores']['block']['min']);
                 Assert::same(['input_tokens' => 1200, 'output_tokens' => 340], $result['usage']);
-                Assert::same(['document_assessment' => ['status' => 'VALID', 'reason' => 'clear', 'confidence' => 0.98]], $result['annotation']);
+                Assert::same('VALID', $result['annotation']['document_assessment']['status']);
+                Assert::same(521.5, $result['annotation']['cost']['total_amount'], 'explicit total passes through untouched');
+                Assert::same(11, $result['annotation']['cost']['energy_charges'], 'component charges stay separate from the total');
                 Assert::same(null, $result['annotation_error']);
                 Assert::same(200, $client->lastHttpStatus());
             }),
@@ -301,6 +313,124 @@ final class MistralOcrTest
                 Assert::same(null, $garbage['annotation']);
                 Assert::true($garbage['annotation_error'] !== null);
                 Assert::same(['x' => ['deep' => true]], $garbage['usage'], 'non-numeric junk dropped, safe booleans kept');
+            }),
+
+            TestResult::check('total_amount targeting: schema description + prompt explicitly forbid reconstruction', function (): void {
+                $schema = MistralOcrClient::billAnnotationSchema();
+                $total = $schema['properties']['cost']['properties']['total_amount'];
+
+                Assert::same(['number', 'null'], $total['type'], 'stays nullable');
+                Assert::true(isset($total['description']) && is_string($total['description']), 'total_amount has an explicit description');
+                Assert::contains('explicitly displayed final', $total['description']);
+                Assert::contains('Never a calculated or reconstructed sum', $total['description']);
+
+                $prompt = MistralOcrClient::BILL_ANNOTATION_PROMPT;
+                Assert::contains('Extract total_amount only when the document explicitly identifies', $prompt);
+                Assert::contains('Do not calculate or reconstruct total_amount from component charges', $prompt);
+                Assert::contains('return null', $prompt);
+                Assert::contains('never collapse or merge them', $prompt, 'component charges stay distinct');
+                // The §5 base instructions remain.
+                Assert::contains('Do not treat cumulative meter readings as monthly consumption', $prompt);
+                Assert::contains('deterministic validation', $prompt);
+            }),
+
+            TestResult::check('missing explicit total stays null through parsing; components never merged', function (): void {
+                $raw = '{"cost":{"total_amount":null,"energy_charges":11,"fixed_charges":30,'
+                    . '"other_charges":null,"customer_service_charges":25,"taxes_adjustments":null,"confidence":0.7}}';
+                $parsed = MistralOcrClient::parseAnnotation($raw);
+
+                Assert::same(null, $parsed['value']['cost']['total_amount'], 'null total passes through, never fabricated from 11+30+25');
+                Assert::same(11, $parsed['value']['cost']['energy_charges']);
+                Assert::same(30, $parsed['value']['cost']['fixed_charges']);
+                Assert::same(25, $parsed['value']['cost']['customer_service_charges']);
+            }),
+
+            TestResult::check('table representation follows the official OCRTableObject (content kept verbatim, never invented)', function (): void {
+                // No tables field at all → null; empty list → []; non-string
+                // content → empty string; oversized content → visibly bounded.
+                $absent = MistralOcrClient::parseOcrResponse(['pages' => [['index' => 0, 'markdown' => 'x']]]);
+                Assert::same(null, $absent['pages'][0]['tables'], 'absent tables field is not presented as an empty result');
+                Assert::same(0, MistralOcrClient::tableCount($absent['pages'][0]['tables']));
+
+                $empty = MistralOcrClient::parseOcrResponse(['pages' => [['index' => 0, 'markdown' => 'x', 'tables' => []]]]);
+                Assert::same([], $empty['pages'][0]['tables']);
+                Assert::same(0, MistralOcrClient::tableCount($empty['pages'][0]['tables']));
+
+                $weird = MistralOcrClient::parseOcrResponse([
+                    'pages' => [['index' => 0, 'markdown' => 'x', 'tables' => [['id' => 'tbl-0', 'content' => 12345], 'junk']]],
+                ]);
+                Assert::same(1, count($weird['pages'][0]['tables']));
+                Assert::same('', $weird['pages'][0]['tables'][0]['content'], 'non-string content is never converted into fake markdown');
+
+                $big = str_repeat('| c |\n', MistralOcrClient::MAX_DISPLAY_CHARS);
+                $truncated = MistralOcrClient::parseOcrResponse([
+                    'pages' => [['index' => 0, 'markdown' => '', 'tables' => [['id' => 't', 'content' => $big, 'format' => 'markdown']]]],
+                ]);
+                $content = $truncated['pages'][0]['tables'][0]['content'];
+                Assert::contains('truncated', $content, 'display bounding is visible, not silent truncation');
+                Assert::true(strlen($content) < strlen($big), 'retained content is bounded');
+            }),
+
+            TestResult::check('deterministic validation: PASS on the known live bill relationships', function (): void {
+                $annotation = [
+                    'consumption' => ['consumption_kwh' => 145],
+                    'meter_evidence' => ['previous_meter_reading' => 1315, 'present_meter_reading' => 1460],
+                    'solar' => [
+                        'previous_solar_reading' => 1878,
+                        'present_solar_reading' => 2200,
+                        'solar_units_kwh' => 322,
+                        'net_units_kwh' => -177,
+                    ],
+                ];
+
+                $result = MistralBillValidator::validate($annotation);
+                Assert::same(MistralBillValidator::PASS, $result['meter']['status'], '1460 - 1315 = 145');
+                Assert::same(MistralBillValidator::PASS, $result['solar']['status'], '2200 - 1878 = 322');
+                Assert::same(MistralBillValidator::PASS, $result['net']['status'], '145 - 322 = -177');
+            }),
+
+            TestResult::check('deterministic validation: missing or non-numeric values are NOT_CHECKED, never guessed', function (): void {
+                $result = MistralBillValidator::validate(null);
+                Assert::same(MistralBillValidator::NOT_CHECKED, $result['meter']['status']);
+                Assert::same(MistralBillValidator::NOT_CHECKED, $result['solar']['status']);
+                Assert::same(MistralBillValidator::NOT_CHECKED, $result['net']['status']);
+
+                $partial = MistralBillValidator::validate([
+                    'consumption' => ['consumption_kwh' => 'not-a-number'],
+                    'meter_evidence' => ['previous_meter_reading' => 1315, 'present_meter_reading' => null],
+                    'solar' => ['previous_solar_reading' => 1878, 'present_solar_reading' => 2200, 'solar_units_kwh' => 322],
+                ]);
+                Assert::same(MistralBillValidator::NOT_CHECKED, $partial['meter']['status'], 'null/non-numeric members keep the check unrun');
+                Assert::same(MistralBillValidator::PASS, $partial['solar']['status'], 'complete relationships still validate');
+                Assert::same(MistralBillValidator::NOT_CHECKED, $partial['net']['status']);
+            }),
+
+            TestResult::check('deterministic validation: CONFLICT reports compared values without correcting the AI result', function (): void {
+                $annotation = [
+                    'consumption' => ['consumption_kwh' => 200],
+                    'meter_evidence' => ['previous_meter_reading' => 1315, 'present_meter_reading' => 1460],
+                    'solar' => [
+                        'previous_solar_reading' => 1878,
+                        'present_solar_reading' => 2200,
+                        'solar_units_kwh' => 300,
+                        'net_units_kwh' => -50,
+                    ],
+                ];
+
+                $before = $annotation;
+                $result = MistralBillValidator::validate($annotation);
+
+                Assert::same(MistralBillValidator::CONFLICT, $result['meter']['status']);
+                Assert::same(145.0, $result['meter']['expected'], 'expected = present - previous');
+                Assert::same(200.0, $result['meter']['consumption_kwh'], 'the extracted (conflicting) value is reported as-is');
+                Assert::same(MistralBillValidator::CONFLICT, $result['solar']['status']);
+                Assert::same(322.0, $result['solar']['expected']);
+                Assert::same(MistralBillValidator::CONFLICT, $result['net']['status']);
+                Assert::same(-100.0, $result['net']['expected'], 'expected net = consumption - solar = 200 - 300');
+                Assert::same(-50.0, $result['net']['net_units_kwh'], 'conflicting extracted value is reported, never rewritten');
+
+                // Core safety: the validator NEVER touches the extracted values.
+                Assert::same($before, $annotation, 'input annotation is not modified in any way');
             }),
         ];
     }
