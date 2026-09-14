@@ -1448,4 +1448,89 @@ explicit real-call guard + injectable transport + offline test pinning.
     prediction/GoodWe/frontend changes. Those are later milestones
     that must consume this seam, never bypass it.
 
+## D-067 — B1 Bill Persistence & Lifecycle Foundation — Database/Bills
+
+Status: RATIFIED (establishes the bills schema + domain foundation; no
+route, no upload handling, no Mistral wiring, no frontend — those are
+B2/B3 consumers of exactly these invariants).
+
+1.  Invariant: only useful normalized SPMS data is persistently stored.
+    Raw OCR, raw AI responses, unnecessary PII and original uploaded
+    documents are not persisted by the B1 foundation. The field set is a
+    closed whitelist (App\Domain\Bill\BillField): billing period (2 DATE),
+    energy (7 DECIMAL(14,3): consumption, both meter readings, both solar
+    readings, solar units, net units), money (8 DECIMAL(12,2):
+    bill_amount, arrears, total_due, energy charges, fixed charges,
+    customer-service charges, other charges, taxes/adjustments), context
+    (utility_provider/tariff_category/meter_type VARCHAR + contracted_load
+    DECIMAL(8,2)). There is deliberately no customer-name / Aadhaar /
+    mobile / USC / bill-number / meter-serial / DTR / QR column, no
+    raw_ocr_text, no raw-response or annotation JSON, no document/blob
+    storage — and no generic "all extracted data" dump. A non-whitelisted
+    key is refused structurally by the domain (every entry point), and an
+    integration test scans information_schema to keep both guarantees true.
+2.  Tables (migrations 0009–0013): bills (aggregate root: household_id,
+    status, the 21 normalized fields, verified_at, UTC DATETIME
+    created/updated), bill_extraction_drafts (the immutable AI record:
+    provider, model, extracted_at, document assessment + reason,
+    document_confidence DECIMAL(5,4), and the same normalized values),
+    bill_validation_results (rule/status/expected_value/extracted_value/
+    reason_code), bill_field_provenance (one row per (bill, field):
+    source AI_EXTRACTION|USER_CORRECTION + per-field confidence),
+    bill_quality_flags (controlled data-quality codes, optional field).
+    Aggregate children CASCADE their bill; bills CASCADE-RESTRICT nothing
+    upward: household ownership is ON DELETE RESTRICT / ON UPDATE
+    RESTRICT (D-056 convention, SET NULL never), so a household can never
+    silently lose its bills.
+3.  Draft vs authoritative is a structural split, not a convention: the
+    extraction draft is stored once and addressed by NO update path in
+    BillRepository at all; user corrections write bills values + flip the
+    field's provenance to USER_CORRECTION; verification only flips
+    status + stamps verified_at. "AI extracted 145 / user corrected 148 /
+    authoritative 148" is therefore reconstructable, and test-enforced.
+4.  Confidence honesty: document confidence lives on the draft, field
+    confidence lives in provenance — separate records, so document
+    confidence can never be fanned out into fields (§14); a field without
+    a provider-stated confidence stays NULL (0.0000 is only stored when
+    the provider said zero).
+5.  Lifecycle (BillStatus/BillLifecycle, VARCHAR status validated in the
+    application like every existing SPMS status column): UPLOADED →
+    PROCESSING → EXTRACTED →(optional) NEEDS_REVIEW → VERIFIED, with
+    PROCESSING → {NOT_A_BILL, UNREADABLE, UNCERTAIN, PROCESSING_FAILED}
+    assessment terminals and PROCESSING_FAILED from UPLOADED too.
+    VERIFIED/NOT_A_BILL/UNREADABLE/UNCERTAIN/PROCESSING_FAILED are
+    terminal — no invented reprocessing path. EXTRACTED (AI completed)
+    and VERIFIED (a human accepted) are different facts: transitionTo()
+    cannot produce VERIFIED at all; only Bill::verify() does, as one
+    indivisible status+verified_at act. recordExtraction() can never
+    verify, regardless of confidence or VALID assessment; a CONFLICT
+    validation or limitation forces NEEDS_REVIEW rather than EXTRACTED.
+6.  Value discipline: every data column is NULL-able with NO database
+    default (NULL = unknown/missing; zero is only ever stored when the
+    source says zero — the domain accepts only canonical decimal strings
+    matching the column scale (floats, exponent forms and over-precise
+    decimals are rejected, never coerced or truncated), and the
+    repository binds them as strings so no PHP float touches money).
+    bill_amount/arrears/total_due remain three independent facts (never
+    derived from each other, sign preserved). billing_period_start <=
+    billing_period_end is re-checked on EVERY construction/correction
+    (reversed dates rejected, never reordered).
+7.  Ownership/security: BillRepository has no unscoped lookup — every
+    read and write requires (bill id, household id) together, including
+    a household-bound WHERE on updates; foreign-household ids are
+    indistinguishable from nonexistent ones (same 404, D-064 §3).
+    BillService derives the household from the authenticated account's
+    membership (never from a supplied id) via HouseholdService.
+8.  No over-aggressive uniqueness: bills carry no
+    (household, period) unique key — multiple unverified candidates for
+    the same period are legitimate; B5 will do lifecycle-aware duplicate
+    detection in the service layer. The only uniques are structural
+    (one B1 draft per bill, one current result per (bill, rule), one
+    provenance row per (bill, field), deduplicated quality statements).
+9.  B1 delivers persistence + lifecycle only: no public route, no
+    upload/file handling (B2), no Mistral provider wiring, no Bill
+    Analyzer, no cost/forecast/insight behavior changes. Onboarding
+    readiness's verified_bills fact can be wired to VERIFIED rows in the
+    dashboard milestone (D-065), not before.
+
 **END OF DECISION LOG**

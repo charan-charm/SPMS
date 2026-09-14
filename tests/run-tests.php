@@ -35,9 +35,9 @@ Config::overrideForTesting([
     'BEDROCK_ALLOW_REAL_CALLS' => '0',
     'AWS_BEARER_TOKEN_BEDROCK' => '',
     // Mistral OCR test seam (controlled integration milestone): the
-    // automated suite can never call Mistral — the key is blanked
-    // here regardless of the developer's local .env, and the test
-    // client uses injected fakes.
+    // automated suite can never call Mistral — the key is blanked here
+    // regardless of the developer's local .env, and the test client
+    // uses injected fakes.
     'MISTRAL_API_KEY' => '',
 ]);
 
@@ -57,12 +57,15 @@ $suites = [
         Tests\Unit\LoggerRedactionTest::class,
         Tests\Unit\AIProviderTest::class,
         Tests\Unit\MistralOcrTest::class,
+        Tests\Unit\BillDomainTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
         Tests\Integration\MigrationRunnerTest::class,
         Tests\Integration\AuthMigrationsTest::class,
         Tests\Integration\HouseholdMigrationsTest::class,
+        Tests\Integration\BillMigrationsTest::class,
+        Tests\Integration\BillPersistenceTest::class,
     ],
     'API' => [
         Tests\API\HealthApiTest::class,
