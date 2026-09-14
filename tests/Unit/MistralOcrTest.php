@@ -432,6 +432,185 @@ final class MistralOcrTest
                 // Core safety: the validator NEVER touches the extracted values.
                 Assert::same($before, $annotation, 'input annotation is not modified in any way');
             }),
+
+            TestResult::check('REGRESSION: prompt/schema teach the observed row semantics (generalized, not per-bill)', function (): void {
+                $prompt = MistralOcrClient::BILL_ANNOTATION_PROMPT;
+
+                foreach ([
+                    'KWH with PRESENT and PREVIOUS values represents cumulative meter readings',
+                    'Do not map either cumulative reading to monthly consumption',
+                    'BILLED UNITS',
+                    'BILL UNITS',
+                    'CONSUMPTION',
+                    'UNITS CONSUMED',
+                    'Map the current billing-period BILLED UNITS value to consumption_kwh',
+                    'Do not use the previous-period BILLED UNITS value as the current consumption',
+                    'SOLARKWH with PRESENT and PREVIOUS values represents cumulative solar generation readings',
+                    'SOLAR UNITS represents the billing-period solar generation quantity',
+                    'NET UNITS represents the billing-period net energy quantity',
+                    'Preserve its sign exactly. Do not replace a negative value with zero',
+                    'the first/current value is the current billing period',
+                    'Do not use arithmetic to invent missing extraction fields',
+                    'start is the earlier date and end is the later date (start <= end)',
+                    'Never infer dates that are not visibly supported',
+                    'other_charges merely because it is not classified elsewhere; when classification is ambiguous prefer null',
+                ] as $sentence) {
+                    Assert::contains($sentence, $prompt, 'prompt must carry: ' . $sentence);
+                }
+
+                $schema = MistralOcrClient::billAnnotationSchema();
+                $props = $schema['properties'];
+
+                Assert::contains('BILLED UNITS', $props['consumption']['properties']['consumption_kwh']['description']);
+                Assert::contains('Evidence only', $props['meter_evidence']['properties']['previous_meter_reading']['description']);
+                Assert::contains('Evidence only', $props['meter_evidence']['properties']['present_meter_reading']['description']);
+                Assert::contains('SOLARKWH', $props['solar']['properties']['present_solar_reading']['description']);
+                Assert::contains('not a cumulative SOLARKWH reading', $props['solar']['properties']['solar_units_kwh']['description']);
+                Assert::contains('never become zero', $props['solar']['properties']['net_units_kwh']['description']);
+                Assert::contains('start <= end', $props['billing_period']['properties']['start']['description']);
+            }),
+
+            TestResult::check('REGRESSION: full parser→annotation→validator flow on the exact live-shape bill (three PASS)', function (): void {
+                // Semantic structure of the real bill (test data only —
+                // the image/PDF stays outside the repository). The
+                // annotation is supplied as a JSON STRING inside a real
+                // OCRResponse envelope, exercising the actual parse path.
+                $annotationJson = (string) json_encode([
+                    'document_assessment' => ['status' => 'VALID', 'reason' => 'clear', 'confidence' => 0.99],
+                    'billing_period' => ['start' => '2026-08-01', 'end' => '2026-09-01', 'confidence' => 0.95],
+                    'consumption' => ['consumption_kwh' => 145, 'confidence' => 0.98],
+                    'meter_evidence' => ['previous_meter_reading' => 1315, 'present_meter_reading' => 1460, 'confidence' => 0.99],
+                    'solar' => [
+                        'previous_solar_reading' => 1878,
+                        'present_solar_reading' => 2200,
+                        'solar_units_kwh' => 322,
+                        'net_units_kwh' => -177,
+                        'confidence' => 0.97,
+                    ],
+                    'cost' => [
+                        'total_amount' => null,
+                        'energy_charges' => null,
+                        'fixed_charges' => 30,
+                        'other_charges' => null,
+                        'customer_service_charges' => 25,
+                        'taxes_adjustments' => null,
+                        'confidence' => 0.9,
+                    ],
+                    'context' => [
+                        'tariff_category' => 'DOMESTIC (A)',
+                        'meter_type' => 'SMART SOLAR',
+                        'contracted_load' => '3',
+                        'utility_provider' => null,
+                        'confidence' => 0.95,
+                    ],
+                ]);
+
+                $parsed = MistralOcrClient::parseOcrResponse([
+                    'model' => 'mistral-ocr-latest',
+                    'pages' => [[
+                        'index' => 0,
+                        'markdown' => '[tbl-0](tbl-0)',
+                        'images' => [],
+                        'tables' => [[
+                            'id' => 'tbl-0',
+                            'content' => "KWH | 1460 1315\nSOLARKWH | 2200 1878\nBILLED UNITS | 145.0 172.0\n"
+                                . "SOLAR UNITS | 322.0/0.0\nNET UNITS | -177.0/0.0\nBILL PERIOD | 01.09.26 01.08.26",
+                            'format' => 'markdown',
+                        ]],
+                    ]],
+                    'document_annotation' => $annotationJson,
+                    'usage_info' => ['input_tokens' => 1500, 'output_tokens' => 400],
+                ]);
+
+                // The table row that also contains the previous-period
+                // value 172 is retained as evidence text, and the
+                // parsed consumption must be the CURRENT 145.
+                Assert::contains('172.0', $parsed['pages'][0]['tables'][0]['content']);
+                $annotation = $parsed['annotation'];
+                Assert::same(145, $annotation['consumption']['consumption_kwh'], 'BILLED UNITS current value — never 172');
+                Assert::same(1315, $annotation['meter_evidence']['previous_meter_reading']);
+                Assert::same(1460, $annotation['meter_evidence']['present_meter_reading']);
+                Assert::same(1878, $annotation['solar']['previous_solar_reading']);
+                Assert::same(2200, $annotation['solar']['present_solar_reading']);
+                Assert::same(322, $annotation['solar']['solar_units_kwh']);
+                Assert::same(-177, $annotation['solar']['net_units_kwh'], 'negative sign preserved through the real parser');
+                Assert::same('2026-08-01', $annotation['billing_period']['start'], 'chronological, not reversed');
+                Assert::same('2026-09-01', $annotation['billing_period']['end']);
+                Assert::same(null, $annotation['cost']['total_amount'], 'absent explicit total stays null after full flow');
+
+                $validation = MistralBillValidator::validate($annotation);
+                Assert::same(MistralBillValidator::PASS, $validation['meter']['status']);
+                Assert::same(MistralBillValidator::PASS, $validation['solar']['status']);
+                Assert::same(MistralBillValidator::PASS, $validation['net']['status']);
+            }),
+
+            TestResult::check('REGRESSION: validator labels can never describe another field (the 322-under-consumption bug)', function (): void {
+                // Exact incident replay: consumption_kwh NULL while
+                // solar_units_kwh = 322 and net_units_kwh = 0.
+                $annotation = [
+                    'consumption' => ['consumption_kwh' => null],
+                    'meter_evidence' => ['previous_meter_reading' => 1315, 'present_meter_reading' => 1460],
+                    'solar' => [
+                        'previous_solar_reading' => 1878,
+                        'present_solar_reading' => 2200,
+                        'solar_units_kwh' => 322,
+                        'net_units_kwh' => 0,
+                    ],
+                ];
+
+                $result = MistralBillValidator::validate($annotation);
+
+                // Meter: null consumption must stay null under ITS OWN key.
+                Assert::same(MistralBillValidator::NOT_CHECKED, $result['meter']['status']);
+                Assert::same(null, $result['meter']['consumption_kwh'], 'consumption_kwh describes only consumption/consumption_kwh');
+                Assert::same(1315.0, $result['meter']['previous_meter_reading']);
+                Assert::same(1460.0, $result['meter']['present_meter_reading']);
+
+                // Net: the historical bug reported 322 under
+                // 'consumption_kwh' here. Values must now be exact.
+                Assert::same(MistralBillValidator::NOT_CHECKED, $result['net']['status']);
+                Assert::same(null, $result['net']['consumption_kwh'], 'solar_units must never surface under the consumption label');
+                Assert::same(322.0, $result['net']['solar_units_kwh'], 'solar_units_kwh keeps its own label');
+                Assert::same(0.0, $result['net']['net_units_kwh'], 'zero extracted net is reported as exactly 0, not hidden');
+            }),
+
+            TestResult::check('REGRESSION: zero net units with real consumption/solar produces CONFLICT; negatives preserved', function (): void {
+                $conflict = MistralBillValidator::validate([
+                    'consumption' => ['consumption_kwh' => 145],
+                    'meter_evidence' => ['previous_meter_reading' => 1315, 'present_meter_reading' => 1460],
+                    'solar' => [
+                        'previous_solar_reading' => 1878,
+                        'present_solar_reading' => 2200,
+                        'solar_units_kwh' => 322,
+                        'net_units_kwh' => 0,
+                    ],
+                ]);
+
+                Assert::same(MistralBillValidator::PASS, $conflict['meter']['status']);
+                Assert::same(MistralBillValidator::PASS, $conflict['solar']['status']);
+                Assert::same(MistralBillValidator::CONFLICT, $conflict['net']['status'], '0 net against 145-322 must conflict');
+                Assert::same(-177.0, $conflict['net']['expected']);
+                Assert::same(0.0, $conflict['net']['net_units_kwh'], 'the AI value is reported, never corrected');
+                Assert::contains('must equal consumption_kwh - solar_units_kwh', $conflict['net']['reason'], 'formula direction is labelled correctly');
+
+                // Correctly extracted negative net → PASS.
+                $ok = MistralBillValidator::validate([
+                    'consumption' => ['consumption_kwh' => 145],
+                    'solar' => ['solar_units_kwh' => 322, 'net_units_kwh' => -177],
+                ]);
+                Assert::same(MistralBillValidator::PASS, $ok['net']['status']);
+            }),
+
+            TestResult::check('REGRESSION: confidence semantics stay separate (no implied field confidence)', function (): void {
+                $parsed = MistralOcrClient::parseAnnotation(
+                    '{"document_assessment":{"status":"VALID","reason":"ok","confidence":0.99},'
+                    . '"consumption":{"consumption_kwh":145,"confidence":0.42}}'
+                );
+
+                Assert::same(0.99, $parsed['value']['document_assessment']['confidence']);
+                Assert::same(0.42, $parsed['value']['consumption']['confidence'], 'field confidence is only ever what the model returned');
+                Assert::true(!isset($parsed['value']['meter_evidence']), 'absent sections are not backfilled with document-level confidence');
+            }),
         ];
     }
 }

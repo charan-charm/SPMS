@@ -116,18 +116,37 @@ final class MistralOcrClient
     /**
      * The instruction-ratified extraction prompt: never calculate,
      * never treat cumulative readings as consumption, never fabricate,
-     * and only take total_amount from an explicitly displayed final
-     * amount.
+     * only take total_amount from an explicitly displayed final amount,
+     * and map the standard electricity-bill row labels to the correct
+     * normalized semantics (cumulative evidence vs period quantities).
      */
     public const BILL_ANNOTATION_PROMPT = 'This is a household electricity bill analysis task for a solar power management system. '
         . 'Extract only information visibly supported by the document. Do not calculate derived values during extraction. '
         . 'Do not treat cumulative meter readings as monthly consumption. Do not fabricate missing values. '
         . 'Preserve ambiguity and conflicting values. The backend will perform deterministic validation separately. '
+        . 'KWH with PRESENT and PREVIOUS values represents cumulative meter readings. Map PRESENT to present_meter_reading '
+        . 'and PREVIOUS to previous_meter_reading. Do not map either cumulative reading to monthly consumption. '
+        . 'BILLED UNITS (equivalently labeled BILL UNITS, CONSUMPTION, or UNITS CONSUMED) represents the billing-period '
+        . 'electricity consumption in kWh when present. Map the current billing-period BILLED UNITS value to consumption_kwh. '
+        . 'Do not use the previous-period BILLED UNITS value as the current consumption. '
+        . 'SOLARKWH with PRESENT and PREVIOUS values represents cumulative solar generation readings. Map PRESENT to '
+        . 'present_solar_reading and PREVIOUS to previous_solar_reading. '
+        . 'SOLAR UNITS represents the billing-period solar generation quantity. Map the current-period SOLAR UNITS value '
+        . 'to solar_units_kwh. '
+        . 'NET UNITS represents the billing-period net energy quantity. Map the current-period NET UNITS value to '
+        . 'net_units_kwh. Preserve its sign exactly. Do not replace a negative value with zero. '
+        . 'Where a row contains current and previous values, the first/current value is the current billing period and the '
+        . 'second value is the previous period unless the document explicitly states otherwise. '
+        . 'Do not use arithmetic to invent missing extraction fields. Backend validation performs arithmetic separately. '
+        . 'Billing period: when the document presents a current/end billing date followed by a previous/start billing date, '
+        . 'normalize them chronologically so that start is the earlier date and end is the later date (start <= end). '
+        . 'Never infer dates that are not visibly supported by the document. '
         . 'Extract total_amount only when the document explicitly identifies a reliable final bill amount, total amount payable, '
         . 'net bill amount, amount payable, or equivalent final customer amount. Do not calculate or reconstruct total_amount '
         . 'from component charges. If no explicit reliable total is visible, return null. '
         . 'Keep total_amount, energy_charges, fixed_charges, other_charges, customer_service_charges and taxes_adjustments '
-        . 'as distinct fields; never collapse or merge them.';
+        . 'as distinct fields; never collapse or merge them. Do not assume that an unexplained monetary number is '
+        . 'other_charges merely because it is not classified elsewhere; when classification is ambiguous prefer null.';
 
     /**
      * SPMS-normalized extraction schema for this controlled test.
@@ -154,9 +173,39 @@ final class MistralOcrClient
             ];
         };
 
-        $totalAmount = $nullableNumber;
+        $totalAmount = ['type' => ['number', 'null']];
         $totalAmount['description'] = 'The document\'s explicitly displayed final bill / total amount payable to the customer. '
             . 'Never a calculated or reconstructed sum of component charges. null when no explicit reliable total is visible.';
+
+        $consumptionKwh = ['type' => ['number', 'null']];
+        $consumptionKwh['description'] = 'Billing-period electricity consumption in kWh, taken from the current-period '
+            . 'BILLED UNITS row (or equivalently BILL UNITS / CONSUMPTION / UNITS CONSUMED). Never a cumulative KWH '
+            . 'meter reading and never computed from meter deltas.';
+
+        $previousReading = ['type' => ['number', 'null']];
+        $previousReading['description'] = 'Cumulative meter reading for the PREVIOUS period (second value of the KWH row '
+            . 'unless the document labels it otherwise). Evidence only; not a consumption quantity.';
+        $presentReading = ['type' => ['number', 'null']];
+        $presentReading['description'] = 'Cumulative meter reading for the PRESENT period (first/current value of the KWH '
+            . 'row unless the document labels it otherwise). Evidence only; not a consumption quantity.';
+
+        $previousSolar = ['type' => ['number', 'null']];
+        $previousSolar['description'] = 'Cumulative solar generation reading for the previous period from the SOLARKWH row.';
+        $presentSolar = ['type' => ['number', 'null']];
+        $presentSolar['description'] = 'Cumulative solar generation reading for the present period from the SOLARKWH row.';
+        $solarUnits = ['type' => ['number', 'null']];
+        $solarUnits['description'] = 'Billing-period solar generation quantity from the current-period SOLAR UNITS row; '
+            . 'not a cumulative SOLARKWH reading.';
+        $netUnits = ['type' => ['number', 'null']];
+        $netUnits['description'] = 'Billing-period net quantity from the current-period NET UNITS row. Sign must be '
+            . 'preserved exactly as displayed; a negative value must never become zero.';
+
+        $periodStart = ['type' => ['string', 'null']];
+        $periodStart['description'] = 'Billing period START (the earlier date). When the document lists a current/end date '
+            . 'followed by a previous/start date, normalize chronologically so start <= end. null when unsupported.';
+        $periodEnd = ['type' => ['string', 'null']];
+        $periodEnd['description'] = 'Billing period END (the later date), normalized chronologically against start. '
+            . 'null when unsupported.';
 
         return [
             'type' => 'object',
@@ -174,17 +223,17 @@ final class MistralOcrClient
                     'required' => ['status', 'reason', 'confidence'],
                     'additionalProperties' => false,
                 ],
-                'billing_period' => $section(['start' => $nullableString, 'end' => $nullableString]),
-                'consumption' => $section(['consumption_kwh' => $nullableNumber]),
+                'billing_period' => $section(['start' => $periodStart, 'end' => $periodEnd]),
+                'consumption' => $section(['consumption_kwh' => $consumptionKwh]),
                 'meter_evidence' => $section([
-                    'previous_meter_reading' => $nullableNumber,
-                    'present_meter_reading' => $nullableNumber,
+                    'previous_meter_reading' => $previousReading,
+                    'present_meter_reading' => $presentReading,
                 ]),
                 'solar' => $section([
-                    'previous_solar_reading' => $nullableNumber,
-                    'present_solar_reading' => $nullableNumber,
-                    'solar_units_kwh' => $nullableNumber,
-                    'net_units_kwh' => $nullableNumber,
+                    'previous_solar_reading' => $previousSolar,
+                    'present_solar_reading' => $presentSolar,
+                    'solar_units_kwh' => $solarUnits,
+                    'net_units_kwh' => $netUnits,
                 ]),
                 'cost' => [
                     'type' => 'object',

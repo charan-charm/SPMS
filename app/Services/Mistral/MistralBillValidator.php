@@ -33,75 +33,83 @@ final class MistralBillValidator
     }
 
     /**
-     * @param array<mixed>|null $annotation decoded document_annotation
+     * @param array<mixed>|null $annotation decoded structured extraction
+     *        (exactly the parsed document_annotation — no substitution,
+     *        no fallback, no merge; each field is read from its one
+     *        documented location)
      * @return array{meter: array<string, mixed>, solar: array<string, mixed>, net: array<string, mixed>}
      */
     public static function validate(?array $annotation): array
     {
+        // The ONLY source for each validator input is the exact
+        // structured-extraction location named below. consumption_kwh
+        // can only ever come from consumption/consumption_kwh;
+        // net_units_kwh can only ever come from solar/net_units_kwh.
         $number = static function (string $section, string $key) use ($annotation): ?float {
             $value = $annotation[$section][$key] ?? null;
 
             return is_numeric($value) ? (float) $value : null;
         };
 
+        // Each operand is a [field-name, value] pair — names travel WITH
+        // their values so a reported key can never describe another
+        // field (the positional value/name misalignment that once made
+        // solar_units=322 surface under the consumption_kwh label is
+        // now structurally impossible).
+        $field = static function (string $section, string $key) use ($number): array {
+            return [$key, $number($section, $key)];
+        };
+
         return [
             'meter' => self::difference(
-                $number('meter_evidence', 'previous_meter_reading'),
-                $number('meter_evidence', 'present_meter_reading'),
-                $number('consumption', 'consumption_kwh'),
-                'previous_meter_reading',
-                'present_meter_reading',
-                'consumption_kwh',
+                $field('meter_evidence', 'previous_meter_reading'),
+                $field('meter_evidence', 'present_meter_reading'),
+                $field('consumption', 'consumption_kwh'),
             ),
             'solar' => self::difference(
-                $number('solar', 'previous_solar_reading'),
-                $number('solar', 'present_solar_reading'),
-                $number('solar', 'solar_units_kwh'),
-                'previous_solar_reading',
-                'present_solar_reading',
-                'solar_units_kwh',
+                $field('solar', 'previous_solar_reading'),
+                $field('solar', 'present_solar_reading'),
+                $field('solar', 'solar_units_kwh'),
             ),
             'net' => self::difference(
-                $number('solar', 'solar_units_kwh'),
-                $number('consumption', 'consumption_kwh'),
-                $number('solar', 'net_units_kwh'),
-                'consumption_kwh',
-                'solar_units_kwh',
-                'net_units_kwh',
+                $field('solar', 'solar_units_kwh'),
+                $field('consumption', 'consumption_kwh'),
+                $field('solar', 'net_units_kwh'),
             ),
         ];
     }
 
     /**
-     * minuend − subtrahend = difference, checked against the extracted
-     * value without ever replacing it.
+     * minuend − subtrahend = extracted-difference.
      *
+     * @param array{0: string, 1: float|null} $subtrahend [field name, value]
+     * @param array{0: string, 1: float|null} $minuend    [field name, value]
+     * @param array{0: string, 1: float|null} $extracted  [field name, value]
      * @return array<string, mixed>
      */
-    private static function difference(
-        ?float $subtrahend,
-        ?float $minuend,
-        ?float $extracted,
-        string $subtrahendName,
-        string $minuendName,
-        string $extractedName
-    ): array {
-        if ($subtrahend === null || $minuend === null || $extracted === null) {
+    private static function difference(array $subtrahend, array $minuend, array $extracted): array
+    {
+        [$subtrahendName, $subtrahendValue] = $subtrahend;
+        [$minuendName, $minuendValue] = $minuend;
+        [$extractedName, $extractedValue] = $extracted;
+
+        if ($subtrahendValue === null || $minuendValue === null || $extractedValue === null) {
             return [
                 'status' => self::NOT_CHECKED,
                 'reason' => 'one or more values are missing or non-numeric',
-                $subtrahendName => $subtrahend,
-                $minuendName => $minuend,
-                $extractedName => $extracted,
+                $subtrahendName => $subtrahendValue,
+                $minuendName => $minuendValue,
+                $extractedName => $extractedValue,
             ];
         }
 
-        $expected = $minuend - $subtrahend;
+        $expected = $minuendValue - $subtrahendValue;
+
         $result = [
-            'status' => abs($expected - $extracted) <= self::EPSILON ? self::PASS : self::CONFLICT,
-            $subtrahendName => $subtrahend,
-            $minuendName => $minuend,
-            $extractedName => $extracted,
+            'status' => abs($expected - $extractedValue) <= self::EPSILON ? self::PASS : self::CONFLICT,
+            $subtrahendName => $subtrahendValue,
+            $minuendName => $minuendValue,
+            $extractedName => $extractedValue,
             'expected' => $expected,
         ];
 

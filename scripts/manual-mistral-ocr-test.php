@@ -149,11 +149,17 @@ try {
 
         echo "\n";
         foreach ($check as $field => $value) {
-            if ($field === 'status' || !is_scalar($value)) {
+            if ($field === 'status' || is_array($value)) {
                 continue;
             }
 
-            echo '  ' . $field . '=' . (is_float($value) ? rtrim(rtrim(number_format($value, 3, '.', ''), '0'), '.') : (string) $value) . "\n";
+            $rendered = match (true) {
+                $value === null => 'null',
+                is_bool($value) => $value ? 'true' : 'false',
+                is_float($value) => rtrim(rtrim(number_format($value, 3, '.', ''), '0'), '.'),
+                default => (string) $value,
+            };
+            echo '  ' . $field . '=' . $rendered . "\n";
         }
     }
 
