@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Domain\Bill\Bill;
+use App\Domain\Bill\BillField;
 use App\Domain\Bill\BillProcessingService;
 use App\Domain\Bill\BillQualityFlag;
+use App\Domain\Bill\BillService;
 use App\Domain\Bill\BillUpload;
 use App\Domain\Bill\BillUploadIntakeService;
+use App\Domain\Bill\BillValidation;
 use App\Security\Authorization;
 use App\Support\AppException;
 use App\Support\Request;
@@ -35,6 +39,16 @@ use DateTimeZone;
  * B2 boundary: intake only. No OCR, no draft creation, no verification —
  * the bill is handed to the world as PROCESSING, exactly as B1's
  * lifecycle prescribes, for B3 to consume.
+ *
+ * B3 added POST /api/v1/bills/{bill_id}/process (docs/10 D-069): the
+ * extraction intake, whose response carries normalized, persisted facts
+ * only. B4 added the matching READ surface (GET /api/v1/bills and
+ * GET /api/v1/bills/{bill_id}) for the bills workspace — the same
+ * household scoping, the same data-minimized vocabulary: whitelisted
+ * fields, provenance sources/confidences, deterministic validation
+ * outcomes verbatim, controlled quality codes. Still nothing beyond
+ * that: no paths, no keys, no provider payloads, and no verification —
+ * VERIFIED remains a future B5 operation the reads can only report.
  */
 final class BillController
 {
@@ -49,6 +63,7 @@ final class BillController
     public function __construct(
         private readonly BillUploadIntakeService $intake = new BillUploadIntakeService(),
         private readonly BillProcessingService $processing = new BillProcessingService(),
+        private readonly BillService $billService = new BillService(),
         ?callable $uploadVerifier = null
     ) {
         $this->uploadVerifier = $uploadVerifier !== null ? \Closure::fromCallable($uploadVerifier) : null;
@@ -151,13 +166,116 @@ final class BillController
     }
 
     /**
+     * GET /api/v1/bills — B4 household bill list (read surface).
+     *
+     * Exactly the caller's own household (derived server-side through the
+     * W3 membership rule; nothing is accepted from the client), ordered
+     * newest first. The row shape is the review/history display set only:
+     * lifecycle status, verification stamp, period, headline energy and
+     * money fields as canonical decimal strings or honest nulls. Never:
+     * household id, storage keys, paths, provenance detail, provider text.
+     */
+    public function index(Request $request): Response
+    {
+        $account = Authorization::requireAccount($request);
+
+        $bills = array_map(
+            static fn (Bill $bill): array => [
+                'bill_id' => $bill->id(),
+                'status' => $bill->status(),
+                'billing_period_start' => $bill->value(BillField::BILLING_PERIOD_START),
+                'billing_period_end' => $bill->value(BillField::BILLING_PERIOD_END),
+                'consumption_kwh' => $bill->value('consumption_kwh'),
+                'solar_units_kwh' => $bill->value('solar_units_kwh'),
+                'net_units_kwh' => $bill->value('net_units_kwh'),
+                'bill_amount' => $bill->value('bill_amount'),
+                'total_due' => $bill->value('total_due'),
+                'verified_at' => $bill->verifiedAt(),
+                'updated_at' => $bill->updatedAt(),
+            ],
+            $this->billService->listForAccount($account)
+        );
+
+        return Response::success(['bills' => $bills]);
+    }
+
+    /**
+     * GET /api/v1/bills/{bill_id} — B4 bill review read model.
+     *
+     * The household-scoped aggregate view the workspace renders: current
+     * whitelisted values, per-field provenance (source + provider-stated
+     * confidence, or null where none was stated), the extraction record's
+     * document-level facts, deterministic validation outcomes (expected
+     * vs extracted, verbatim — a CONFLICT is displayed as persisted,
+     * never corrected here) and the controlled quality flags. Foreign or
+     * unknown ids are the established indistinguishable 404.
+     */
+    public function show(Request $request): Response
+    {
+        $account = Authorization::requireAccount($request);
+
+        $billId = $this->extractBillId($request->path(), requireAction: false);
+
+        $bill = $billId === null ? null : $this->billService->get($account, $billId);
+
+        if ($bill === null) {
+            throw new AppException('NOT_FOUND', 'The requested bill was not found.', 404);
+        }
+
+        $draft = $this->billService->draftFor($account, $bill->id());
+
+        $validations = array_map(
+            static fn (BillValidation $v): array => [
+                'rule' => $v->rule(),
+                'status' => $v->status(),
+                'expected_value' => $v->expectedValue(),
+                'extracted_value' => $v->extractedValue(),
+                'reason_code' => $v->reasonCode(),
+            ],
+            $this->billService->validationsFor($account, $bill->id())
+        );
+
+        $flags = array_map(
+            static fn (BillQualityFlag $f): array => [
+                'code' => $f->code(),
+                'field_name' => $f->fieldName(),
+            ],
+            $this->billService->qualityFlagsFor($account, $bill->id())
+        );
+
+        return Response::success([
+            'bill' => [
+                'bill_id' => $bill->id(),
+                'status' => $bill->status(),
+                'verified_at' => $bill->verifiedAt(),
+                'created_at' => $bill->createdAt(),
+                'updated_at' => $bill->updatedAt(),
+                'values' => $bill->values(),
+                'provenance' => $this->billService->provenanceFor($account, $bill->id()),
+                'extraction' => $draft === null ? null : [
+                    'assessment' => $draft->assessment(),
+                    'assessment_reason' => $draft->assessmentReason(),
+                    'document_confidence' => $draft->documentConfidence(),
+                    'extracted_at' => $draft->extractedAt(),
+                ],
+                'validations' => $validations,
+                'quality_flags' => $flags,
+            ],
+        ]);
+    }
+
+    /**
      * Route-parameter extraction follows the ratified F6 pattern
      * (controller reads the id from the path; the router contract stays
      * [class, action]). Only an exact 36-char UUID segment matches.
      */
-    private function extractBillId(string $path): ?string
+    private function extractBillId(string $path, bool $requireAction = true): ?string
     {
-        if (preg_match('#^/api/v1/bills/([0-9a-fA-F][0-9a-fA-F-]{34}[0-9a-fA-F])/process$#', $path, $matches) === 1) {
+        $pattern = $requireAction
+            ? '#^/api/v1/bills/([0-9a-fA-F][0-9a-fA-F-]{34}[0-9a-fA-F])/process$#'
+            : '#^/api/v1/bills/([0-9a-fA-F][0-9a-fA-F-]{34}[0-9a-fA-F])$#';
+
+        if (preg_match($pattern, $path, $matches) === 1) {
             return strtolower($matches[1]);
         }
 

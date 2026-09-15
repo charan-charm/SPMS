@@ -83,8 +83,8 @@ function extractRequestId(payload, response) {
     return response.headers.get('X-Request-Id')
 }
 
-async function request(path, { method = 'GET', body = undefined, query = undefined, signal = undefined, headers = {} } = {}) {
-    const timeoutSignal = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS)
+async function request(path, { method = 'GET', body = undefined, query = undefined, signal = undefined, headers = {}, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs)
     const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
     const requestHeaders = {
@@ -97,7 +97,10 @@ async function request(path, { method = 'GET', body = undefined, query = undefin
         requestHeaders['X-SPMS-CSRF'] = csrfToken
     }
 
-    if (body !== undefined) {
+    // FormData (multipart uploads, e.g. B2 bill intake) must keep its
+    // browser-generated Content-Type boundary; everything else is JSON.
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
+    if (body !== undefined && !isFormData) {
         requestHeaders['Content-Type'] = 'application/json'
     }
 
@@ -106,7 +109,7 @@ async function request(path, { method = 'GET', body = undefined, query = undefin
         response = await fetch(buildApiUrl(path, query), {
             method,
             headers: requestHeaders,
-            body: body === undefined ? undefined : JSON.stringify(body),
+            body: body === undefined || isFormData ? body : JSON.stringify(body),
             credentials: 'include',
             signal: combinedSignal,
         })

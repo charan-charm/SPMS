@@ -3,6 +3,7 @@ import { FoundationPlaceholder } from '../pages/public/FoundationPlaceholder'
 import { EnergyBalancePage } from '../pages/app/EnergyBalancePage'
 import { EnergyCostPage } from '../pages/app/EnergyCostPage'
 import { InsightsPage } from '../pages/app/InsightsPage'
+import { BillsPage } from '../pages/app/BillsPage'
 import { RouteErrorBoundary } from './RouteErrorBoundary'
 import { publicRoutes, protectedRoutes, authRoutes } from './routes'
 import { PublicLayout } from '../layouts/PublicLayout'
@@ -10,6 +11,7 @@ import { AuthLayout } from '../layouts/AuthLayout'
 import { AppLayout } from '../layouts/AppLayout'
 import { DesignSystemPreview } from '../pages/public/DesignSystemPreview'
 import { DashboardShellPreview } from '../pages/public/DashboardShellPreview'
+import { BillsWorkspacePreview } from '../pages/public/BillsWorkspacePreview'
 
 /**
  * Routing foundation integrated with the F3 application shell (docs/03 §4,
@@ -47,7 +49,9 @@ function baseRoutes() {
                         ? { path: route.path, element: <EnergyCostPage /> }
                         : route.path === '/insights'
                             ? { path: route.path, element: <InsightsPage /> }
-                            : placeholderRoute(route.path, route.name),
+                            : route.path === '/bills'
+                                ? { path: route.path, element: <BillsPage /> }
+                                : placeholderRoute(route.path, route.name),
             ),
         },
         {
@@ -79,7 +83,10 @@ const devRouter = import.meta.env.DEV
                   { path: '/', element: <DesignSystemPreview /> },
                   {
                       element: <AppLayout />,
-                      children: [{ path: '/dev/dashboard', element: <DashboardShellPreview /> }],
+                      children: [
+                            { path: '/dev/dashboard', element: <DashboardShellPreview /> },
+                            { path: '/dev/bills', element: <BillsWorkspacePreview /> },
+                        ],
                   },
                   ...baseRoutes(),
               ],

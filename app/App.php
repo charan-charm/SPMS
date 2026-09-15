@@ -187,6 +187,14 @@ final class App
         // the immutable AI draft + provenance + validations + flags and
         // lets the B1 lifecycle decide the honest state. NEVER verifies.
         $router->add('POST', '/api/v1/bills/{bill_id}/process', [BillController::class, 'process']);
+
+        // B4 — bills workspace read surface. Authenticated + household
+        // scoped like every bill route (foreign/unknown ids are the same
+        // indistinguishable 404); reads expose the B1 vocabulary only
+        // (whitelisted values, provenance, validations, quality flags,
+        // document assessment) — never paths, keys, or provider payloads.
+        $router->add('GET', '/api/v1/bills', [BillController::class, 'index']);
+        $router->add('GET', '/api/v1/bills/{bill_id}', [BillController::class, 'show']);
     }
 
     private function internalErrorResponse(): Response

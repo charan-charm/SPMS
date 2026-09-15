@@ -1715,4 +1715,90 @@ and can never directly verify a bill.)
     and performs no verification. B2 upload/CSRF/storage constraints and
     all B1 schema guarantees are unchanged (no migration).
 
+## D-070 - B4 Bills Workspace UI & Bill Read Surface - Bills/Frontend
+
+Status: RATIFIED (presentation milestone: the backend stays the sole
+authority - B4 adds read endpoints and a UI, no new mutations, no
+verification operation, and the owner's visual inspection precedes the
+commit).
+
+1.  Backend gap found and filled minimally: B1-B3 exposed only mutations
+    (POST upload, POST process) - no way to READ bill state. B4 adds
+    exactly two authenticated household-scoped reads:
+    GET /api/v1/bills (summary rows: id, status, period, consumption,
+    solar/net units, bill amount, total due, verified_at, updated_at;
+    newest first) and GET /api/v1/bills/{bill_id} (the full review
+    model: whitelisted values verbatim, field provenance incl.
+    provider-stated confidence, document assessment + confidence from
+    the immutable draft, deterministic validation results with expected
+    vs extracted values, controlled quality flags). Both are composed
+    ONLY from existing BillService/BillRepository scoped methods - zero
+    new SQL, zero new tables, and the same indistinguishable-404 rule
+    for foreign ids. Never exposed: household id, storage keys, paths,
+    provider/model identifiers, raw OCR (which persistence itself
+    refuses to keep).
+2.  The process endpoint stays the application's processing path:
+    upload -> PROCESSING, then the frontend calls
+    POST /bills/{id}/process and re-reads. NO polling loop, no
+    WebSocket, no queue was invented - a bill found PROCESSING on page
+    load offers an explicit user-initiated "Continue analysis" (the
+    PROCESSING-only gate makes double-processing structurally
+    impossible, so a stale button can never re-burn the provider).
+3.  Upload rides the ONE centralized API client: multipart support was
+    added to the existing request() (FormData body skips JSON encoding
+    and Content-Type so the browser owns the boundary) plus a
+    per-request timeoutMs. Bill processing gets 300s (OCR real-world
+    duration); everything else keeps the 15s default. No second fetch
+    layer exists.
+4.  CSRF bootstrap consumes the ratified session read: the workspace
+    calls GET /api/v1/auth/session on mount, hands the returned token
+    to the client's existing in-memory setCsrfToken() (never browser
+    storage), and treats the 401 as an honest signed-out state. B4 adds
+    NO login UI - authentication remains a separate future milestone;
+    B4 only consumes it read-only and the backend stays authoritative.
+5.  Single "Bills" sidebar entry confirmed (never Upload/Review/Verify
+    items): /bills renders the one workspace journey header -> upload ->
+    processing -> review -> (B5 verification seam) -> history. Routing
+    is the existing React Router protected-route pattern; the DEV-only
+    /dev/bills preview mounts the same workspace with sample payloads
+    mirroring the real read contract (DashboardShellPreview precedent),
+    clearly labeled, dead code in production.
+6.  State honesty is the design law: EXTRACTED and NEEDS_REVIEW render
+    as review states ("review it before verification"), never as
+    verified; VERIFIED renders only when the backend reports it;
+    NOT_A_BILL/UNREADABLE/UNCERTAIN/PROCESSING_FAILED get dedicated
+    calm outcome cards with zero fabricated fields; missing values show
+    "Not available" - never 0, "Unknown" or "Estimated". The
+    persisted +177 of test-02 is displayed exactly as stored; the
+    expected -177 exists only inside the expandable "Why does this
+    need review?" disclosure (never a silent correction).
+7.  Document confidence is presented as document-level with an
+    explicit not-a-per-field-guarantee caption; per-field confidence
+    arrives only from bill_field_provenance rows the backend created
+    and lives under progressive disclosure; validation PASS/CONFLICT/
+    NOT_CHECKED map to subtle-positive/amber-review/neutral treatment
+    (a conflict is a review request, not an error page). No invented
+    fourth validation state.
+8.  Provenance is grouped (one AI-extracted statement + a corrections
+    note when the backend reports USER_CORRECTION), not badged on every
+    field; B4 introduces no correction-editing and no fake verify call
+    - the review panel exposes an actions slot exactly where B5 wires
+    the real operations.
+9.  History is honest by label: submitted bills are listed with their
+    true lifecycle statuses, and the verified-history sentence states
+    "No verified bills yet" while none exist - unverified drafts are
+    never presented as history.
+10. Verification tooling added: the frontend had no test runner, so B4
+    establishes Vitest 5 + Testing Library + jsdom (dev-only) covering
+    the upload panel (early type/size rejection, name+size display,
+    loading, server-rejection display), the lifecycle matrix (each B1
+    state, conflict presentation with +177 preserved and -177 only
+    under disclosure, honest nulls, no-VERIFIED-unless-backend), and
+    the container (upload -> PROCESSING -> review transitions driven
+    only by backend answers). The client multipart contract is tested
+    against the real central client with fetch stubbed. 28 frontend
+    checks; backend suite grew to 384 (9 new read-surface checks);
+    zero live Mistral calls in any automated test (fake handlers,
+    key pinned empty by the runner).
+
 **END OF DECISION LOG**
