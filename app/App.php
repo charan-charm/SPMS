@@ -180,6 +180,13 @@ final class App
         // CSRF-protected multipart upload; household derived server-side;
         // intake + temporary private storage only — no OCR, no drafts.
         $router->add('POST', '/api/v1/bills/upload', [BillController::class, 'upload']);
+
+        // B3 — bill extraction workflow (docs/10 D-069). Authenticated +
+        // CSRF + household-scoped (foreign ids are 404). Runs the private
+        // temporary document through the ratified Mistral client, persists
+        // the immutable AI draft + provenance + validations + flags and
+        // lets the B1 lifecycle decide the honest state. NEVER verifies.
+        $router->add('POST', '/api/v1/bills/{bill_id}/process', [BillController::class, 'process']);
     }
 
     private function internalErrorResponse(): Response

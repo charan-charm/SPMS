@@ -118,6 +118,14 @@ final class LocalPrivateBillStorage implements BillTemporaryStorageInterface
         return $contents === false ? null : $contents;
     }
 
+    public function localPath(string $storageKey): ?string
+    {
+        $this->assertSafeKey($storageKey);
+        $path = $this->path($storageKey);
+
+        return is_file($path) ? $path : null;
+    }
+
     public function delete(string $storageKey): bool
     {
         $this->assertSafeKey($storageKey);

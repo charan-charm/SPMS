@@ -39,6 +39,17 @@ interface BillTemporaryStorageInterface
     public function read(string $storageKey): ?string;
 
     /**
+     * Server-side canonical location for internal processing seams that
+     * operate on files rather than byte strings (e.g. the Mistral client's
+     * document validation). Null when nothing is stored. The path is
+     * NEVER part of an API response, log line or persisted record —
+     * callers receive it only to hand to storage-aware processors.
+     * A future non-local backend (object storage) returns null here and
+     * its consumers fall back to read().
+     */
+    public function localPath(string $storageKey): ?string;
+
+    /**
      * Idempotent: a missing file deletes successfully.
      */
     public function delete(string $storageKey): bool;

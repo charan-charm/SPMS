@@ -90,7 +90,7 @@ final class MistralOcrTest
                 ],
             ],
             'document_annotation' => '{"document_assessment":{"status":"VALID","reason":"clear","confidence":0.98},'
-                . '"cost":{"total_amount":521.5,"energy_charges":11,"fixed_charges":30,"other_charges":null,'
+                . '"cost":{"bill_amount":521.5,"arrears":null,"total_due":521.5,"energy_charges":11,"fixed_charges":30,"other_charges":null,'
                 . '"customer_service_charges":25,"taxes_adjustments":null,"confidence":0.9}}',
             'usage_info' => ['input_tokens' => 1200, 'output_tokens' => 340],
         ]);
@@ -211,8 +211,10 @@ final class MistralOcrTest
                 Assert::same(0.91, $page['confidence_scores']['block']['min']);
                 Assert::same(['input_tokens' => 1200, 'output_tokens' => 340], $result['usage']);
                 Assert::same('VALID', $result['annotation']['document_assessment']['status']);
-                Assert::same(521.5, $result['annotation']['cost']['total_amount'], 'explicit total passes through untouched');
-                Assert::same(11, $result['annotation']['cost']['energy_charges'], 'component charges stay separate from the total');
+                Assert::same(521.5, $result['annotation']['cost']['bill_amount'], 'explicit bill amount passes through untouched');
+                Assert::same(521.5, $result['annotation']['cost']['total_due'], 'total_due is the model\'s own figure, kept separate');
+                Assert::same(null, $result['annotation']['cost']['arrears'], 'absent arrears stays null, never 0');
+                Assert::same(11, $result['annotation']['cost']['energy_charges'], 'component charges stay separate from the totals');
                 Assert::same(null, $result['annotation_error']);
                 Assert::same(200, $client->lastHttpStatus());
             }),
@@ -315,31 +317,40 @@ final class MistralOcrTest
                 Assert::same(['x' => ['deep' => true]], $garbage['usage'], 'non-numeric junk dropped, safe booleans kept');
             }),
 
-            TestResult::check('total_amount targeting: schema description + prompt explicitly forbid reconstruction', function (): void {
+            TestResult::check('cost targeting: three money concepts are distinct fields whose descriptions forbid reconstruction', function (): void {
                 $schema = MistralOcrClient::billAnnotationSchema();
-                $total = $schema['properties']['cost']['properties']['total_amount'];
+                $cost = $schema['properties']['cost']['properties'];
 
-                Assert::same(['number', 'null'], $total['type'], 'stays nullable');
-                Assert::true(isset($total['description']) && is_string($total['description']), 'total_amount has an explicit description');
-                Assert::contains('explicitly displayed final', $total['description']);
-                Assert::contains('Never a calculated or reconstructed sum', $total['description']);
+                Assert::false(array_key_exists('total_amount', $cost), 'the collapsed total_amount field is gone from the schema');
+
+                foreach (['bill_amount', 'arrears', 'total_due'] as $field) {
+                    Assert::same(['number', 'null'], $cost[$field]['type'], $field . ' stays nullable');
+                    Assert::true(isset($cost[$field]['description']) && is_string($cost[$field]['description']), $field . ' has an explicit description');
+                }
+
+                Assert::contains('Never reconstructed from total_due and arrears', $cost['bill_amount']['description']);
+                Assert::contains('sign preserved exactly as shown', $cost['arrears']['description']);
+                Assert::contains('NEVER calculated from bill_amount and arrears', $cost['total_due']['description']);
 
                 $prompt = MistralOcrClient::BILL_ANNOTATION_PROMPT;
-                Assert::contains('Extract total_amount only when the document explicitly identifies', $prompt);
-                Assert::contains('Do not calculate or reconstruct total_amount from component charges', $prompt);
-                Assert::contains('return null', $prompt);
+                Assert::contains('Extract bill_amount, arrears and total_due as three DISTINCT fields', $prompt);
+                Assert::contains('never derive bill_amount from total_due and arrears', $prompt);
+                Assert::contains('If a value is not visibly supported, return null', $prompt);
                 Assert::contains('never collapse or merge them', $prompt, 'component charges stay distinct');
+                Assert::contains('never correct suspicious values', $prompt, 'the model never repairs — the backend validates');
                 // The §5 base instructions remain.
                 Assert::contains('Do not treat cumulative meter readings as monthly consumption', $prompt);
                 Assert::contains('deterministic validation', $prompt);
             }),
 
-            TestResult::check('missing explicit total stays null through parsing; components never merged', function (): void {
-                $raw = '{"cost":{"total_amount":null,"energy_charges":11,"fixed_charges":30,'
+            TestResult::check('missing explicit cost fields stay null through parsing; components never merged', function (): void {
+                $raw = '{"cost":{"bill_amount":null,"arrears":null,"total_due":null,"energy_charges":11,"fixed_charges":30,'
                     . '"other_charges":null,"customer_service_charges":25,"taxes_adjustments":null,"confidence":0.7}}';
                 $parsed = MistralOcrClient::parseAnnotation($raw);
 
-                Assert::same(null, $parsed['value']['cost']['total_amount'], 'null total passes through, never fabricated from 11+30+25');
+                Assert::same(null, $parsed['value']['cost']['bill_amount'], 'null bill_amount passes through, never fabricated from 11+30+25');
+                Assert::same(null, $parsed['value']['cost']['arrears'], 'null arrears is not defaulted to zero');
+                Assert::same(null, $parsed['value']['cost']['total_due'], 'null total_due is not reconstructed from the others');
                 Assert::same(11, $parsed['value']['cost']['energy_charges']);
                 Assert::same(30, $parsed['value']['cost']['fixed_charges']);
                 Assert::same(25, $parsed['value']['cost']['customer_service_charges']);
@@ -488,7 +499,9 @@ final class MistralOcrTest
                         'confidence' => 0.97,
                     ],
                     'cost' => [
-                        'total_amount' => null,
+                        'bill_amount' => null,
+                        'arrears' => null,
+                        'total_due' => null,
                         'energy_charges' => null,
                         'fixed_charges' => 30,
                         'other_charges' => null,
@@ -536,7 +549,9 @@ final class MistralOcrTest
                 Assert::same(-177, $annotation['solar']['net_units_kwh'], 'negative sign preserved through the real parser');
                 Assert::same('2026-08-01', $annotation['billing_period']['start'], 'chronological, not reversed');
                 Assert::same('2026-09-01', $annotation['billing_period']['end']);
-                Assert::same(null, $annotation['cost']['total_amount'], 'absent explicit total stays null after full flow');
+                Assert::same(null, $annotation['cost']['bill_amount'], 'absent explicit bill amount stays null after full flow');
+                Assert::same(null, $annotation['cost']['arrears'], 'absent arrears stays null after full flow');
+                Assert::same(null, $annotation['cost']['total_due'], 'absent total_due stays null after full flow');
 
                 $validation = MistralBillValidator::validate($annotation);
                 Assert::same(MistralBillValidator::PASS, $validation['meter']['status']);

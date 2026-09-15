@@ -1613,4 +1613,106 @@ draft creation — B3 consumes exactly what this produces).
     inspection — those are B3 consumers of the PROCESSING bill +
     temporary reference this milestone hands over.
 
+## D-069 — B3 Mistral Bill Extraction & Immutable AI Draft (Processing Workflow) — Bills/AI
+
+Status: RATIFIED (wires the ratified pipeline: B2 secure temporary
+upload → Mistral document extraction → deterministic backend validation
+→ immutable AI draft + provenance + validation evidence → user review
+(B4+) → eventual verification (B5+). AI extraction is NOT authoritative
+and can never directly verify a bill.)
+
+1.  Authority split (unchanged product law, now wired): the AI may
+    provide extracted values, document classification, confidence and
+    semantic interpretation; the BACKEND owns the accepted schema,
+    validation, conflicts, quality flags, persistence, lifecycle and
+    ownership. Every persistence + outcome decision delegates to the
+    ratified B1 BillService::recordExtraction — B3 adds no lifecycle
+    path, no status-string writes, and no verification capability.
+2.  Single provider seam: the existing MistralOcrClient (controlled-test
+    proven, live-validated on two real bills) is promoted to the ONLY
+    production Mistral entry point; no second client, no duplicated
+    HTTP/upload logic. Its schema/prompt were widened to the B1 cost
+    vocabulary: total_amount is REPLACED by distinct bill_amount,
+    arrears and total_due — each described as "explicit document figure,
+    never reconstructed", the prompt forbids deriving one from the
+    others or summing components, forbids correcting suspicious values,
+    and mandates null-when-absent (docs/10 D-067 §6 semantics carried
+    into extraction).
+3.  Anti-corruption mapper (BillAnnotationNormalizer) is the only code
+    that knows both the provider section layout and the persisted
+    vocabulary. Structural guarantees: a closed section→field map drops
+    everything unmapped (stray total_amount, customer names, raw text —
+    data minimization is the mapper's shape, not a filter); non-numeric
+    / non-finite values become NULL (never coerced, never truncated);
+    out-of-range confidences are dropped, never clamped; field
+    confidence is only ever the enclosing section's stated confidence
+    attached to fields that actually have values — document-level
+    confidence NEVER fans out (B1 §8/§14 invariant held end-to-end);
+    a reversed date pair is DISCARDED to NULL (never reordered here),
+    and an unrecognized assessment normalizes honestly to UNCERTAIN.
+4.  Deterministic validation reuses MistralBillValidator unchanged
+    (present−previous rules, ε=0.001, labels bundled with values). Its
+    report becomes B1 bill_validation_results rows: PASS / NOT_CHECKED
+    (NULL operands + whitelisted MISSING_OPERANDS reason) / CONFLICT
+    with expected AND extracted stored verbatim. The observed
+    physical-bill sign flip (+177 extracted vs −177 expected) is
+    preserved in the bill, the draft and the validation row as LIVE
+    re-verified in this milestone — the system exposes conflicts for
+    review; it never silently normalizes.
+5.  Quality flags derive only from the B1 controlled vocabulary and only
+    from deterministic observations (missing consumption/period/meter
+    evidence, meter or net CONFLICT). Deliberately NOT flagged: absent
+    solar data — a non-solar bill is legitimately solar-less, and
+    flagging it would manufacture false review pressure.
+6.  Lifecycle outcome is B1's: usable clean extraction → EXTRACTED; any
+    conflict, limitation assessment or quality flag → NEEDS_REVIEW;
+    NOT_A_BILL / UNREADABLE / UNCERTAIN assessments terminate the bill
+    with zero adopted data (the draft still records the attempt).
+    VERIFIED remains reachable only through the future explicit
+    verify() operation.
+7.  Idempotency & failure safety (no queue, per the milestone brief):
+    PROCESSING is the only processable state, gated BEFORE any provider
+    call — a processed or terminal bill never re-burns the API, and the
+    UNIQUE(bill_id) draft can never be overwritten or duplicated.
+    Provider failure (transport/HTTP/malformed-request classes) →
+    nothing persisted, bill stays PROCESSING, temporary document stays
+    AVAILABLE: plain retry. A received-but-undecodable annotation →
+    honest UNCERTAIN draft (the response WAS the provider's answer;
+    recording that judgment is the recoverable state). A vanished/
+    expired temporary document → DOCUMENT_UNAVAILABLE (410) with the
+    bill marked PROCESSING_FAILED honestly. Persistence failure leaves
+    the committed state untouched (B1 transaction) and reports a safe
+    retryable error.
+8.  Temporary document lifecycle: after a SUCCESSFULLY PERSISTED
+    extraction the file is deleted immediately and its record marked
+    DELETED (best-effort: a failed delete is non-fatal because the B2
+    expiry cleanup service is the durable backstop). On failure paths
+    the document is deliberately RETAINED for retry — the only
+    recoverable input is never blindly deleted.
+9.  HTTP surface: POST /api/v1/bills/{bill_id}/process only —
+    authenticated, CSRF-protected (middleware), household-scoped
+    (foreign bill ids are the established indistinguishable 404).
+    No raw-OCR / raw-response / document endpoints exist. The response
+    carries normalized persisted facts only (status, assessment,
+    document confidence, rule→status map, flag codes). Error surface
+    uses safe codes (EXTRACTION_FAILED with provider CATEGORY only,
+    DOCUMENT_UNAVAILABLE, PERSISTENCE_FAILED) — never paths, keys,
+    names or provider bodies.
+10.  Live validation (this milestone): both controlled documents were
+    re-processed end-to-end through the REAL pipeline (private storage,
+    Mistral, deterministic validation, B1 persistence) via
+    scripts/manual-b3-live-process-test.php. test-01: EXTRACTED, all
+    three relationships PASS, net -177 preserved. test-02: NEEDS_REVIEW
+    with NET_UNITS CONFLICT expected=-177.000 extracted=+177.000 and
+    INCONSISTENT_NET_UNITS — the conflict behavior proven against the
+    real bill. Known model variance (why AI is never authoritative):
+    cost component values can drift between runs (e.g.
+    taxes_adjustments observed 108.56 historically vs 71.69 now); the
+    energy semantics and conflict exposure remained exact.
+11.  Provenance: every adopted non-null field records AI_EXTRACTION with
+    its section confidence; USER_CORRECTION stays reserved for the
+    review workflow (B4) — B3 creates none, writes no drafts' updates,
+    and performs no verification. B2 upload/CSRF/storage constraints and
+    all B1 schema guarantees are unchanged (no migration).
+
 **END OF DECISION LOG**

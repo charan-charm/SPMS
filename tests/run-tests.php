@@ -66,6 +66,7 @@ $suites = [
         Tests\Unit\MistralOcrTest::class,
         Tests\Unit\BillDomainTest::class,
         Tests\Unit\BillUploadTest::class,
+        Tests\Unit\BillExtractionNormalizerTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
@@ -94,6 +95,7 @@ $suites = [
         Tests\Workflow\HouseholdOwnershipWorkflowTest::class,
         Tests\Workflow\HouseholdProfileWorkflowTest::class,
         Tests\Workflow\BillUploadWorkflowTest::class,
+        Tests\Workflow\BillExtractionWorkflowTest::class,
     ],
 ];
 

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Domain\Bill\BillProcessingService;
+use App\Domain\Bill\BillQualityFlag;
 use App\Domain\Bill\BillUpload;
 use App\Domain\Bill\BillUploadIntakeService;
 use App\Security\Authorization;
@@ -46,6 +48,7 @@ final class BillController
 
     public function __construct(
         private readonly BillUploadIntakeService $intake = new BillUploadIntakeService(),
+        private readonly BillProcessingService $processing = new BillProcessingService(),
         ?callable $uploadVerifier = null
     ) {
         $this->uploadVerifier = $uploadVerifier !== null ? \Closure::fromCallable($uploadVerifier) : null;
@@ -94,5 +97,70 @@ final class BillController
                 'size_bytes' => $result['temp']->sizeBytes(),
             ],
         ], 201);
+    }
+
+    /**
+     * POST /api/v1/bills/{bill_id}/process — B3 extraction intake
+     * (docs/10 D-069). Authenticated + CSRF (middleware) + household
+     * scoped through the W3 membership rule: the bill id addresses ONLY
+     * a bill inside the caller's own derived household; anything else
+     * is the established indistinguishable 404.
+     *
+     * The response carries normalized, already-persisted facts only —
+     * lifecycle status, document assessment, deterministic validation
+     * statuses, quality flag codes. No raw OCR, no provider response,
+     * no storage paths or keys, no document content (§21).
+     */
+    public function process(Request $request): Response
+    {
+        $account = Authorization::requireAccount($request);
+
+        $billId = $this->extractBillId($request->path());
+
+        if ($billId === null) {
+            throw new AppException('NOT_FOUND', 'The requested bill was not found.', 404);
+        }
+
+        $result = $this->processing->process(
+            $account,
+            $billId,
+            new DateTimeImmutable('now', new DateTimeZone('UTC'))
+        );
+
+        $validation = [];
+        foreach ($result['validations'] as $v) {
+            $validation[$v->rule()] = $v->status();
+        }
+
+        $flags = array_values(array_map(
+            static fn (BillQualityFlag $flag): string => $flag->code(),
+            $result['quality_flags']
+        ));
+        sort($flags);
+
+        return Response::success([
+            'bill_id' => $result['bill']->id(),
+            'status' => $result['bill']->status(),
+            'extraction' => [
+                'document_assessment' => $result['assessment'],
+                'document_confidence' => $result['document_confidence'],
+                'validation' => $validation,
+                'quality_flags' => $flags,
+            ],
+        ]);
+    }
+
+    /**
+     * Route-parameter extraction follows the ratified F6 pattern
+     * (controller reads the id from the path; the router contract stays
+     * [class, action]). Only an exact 36-char UUID segment matches.
+     */
+    private function extractBillId(string $path): ?string
+    {
+        if (preg_match('#^/api/v1/bills/([0-9a-fA-F][0-9a-fA-F-]{34}[0-9a-fA-F])/process$#', $path, $matches) === 1) {
+            return strtolower($matches[1]);
+        }
+
+        return null;
     }
 }

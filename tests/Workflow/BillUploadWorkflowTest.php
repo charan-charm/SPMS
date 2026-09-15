@@ -150,12 +150,12 @@ final class BillUploadWorkflowTest
     private static function controller(?BillTempDocumentRepository $repo = null, ?BillTemporaryStorageInterface $storage = null): BillController
     {
         return new BillController(
-            new BillUploadIntakeService(
+            intake: new BillUploadIntakeService(
                 $repo ?? new BillTempDocumentRepository(),
                 $storage ?? self::freshStorage(),
                 new HouseholdService()
             ),
-            self::uploadedVerifier()
+            uploadVerifier: self::uploadedVerifier()
         );
     }
 
@@ -406,6 +406,11 @@ final class BillUploadWorkflowTest
                     }
 
                     public function read(string $storageKey): ?string
+                    {
+                        return null;
+                    }
+
+                    public function localPath(string $storageKey): ?string
                     {
                         return null;
                     }

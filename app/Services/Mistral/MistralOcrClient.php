@@ -9,9 +9,14 @@ use GuzzleHttp\Client as GuzzleClient;
 use Throwable;
 
 /**
- * Controlled Mistral OCR integration-test client (NOT the Bill
- * Analyzer). Exists so the owner can run exactly ONE supervised
- * document round-trip against the official Mistral API.
+ * SPMS Mistral OCR provider (B3 production seam; docs/10 D-066 seam
+ * philosophy, D-067 normalization rules, D-068 intake boundary).
+ *
+ * Evolved from the controlled integration test that was validated against
+ * two real electricity bills; from B3 on it is the ONLY Mistral entry
+ * point, consumed by the bill extraction workflow through
+ * BillAnnotationNormalizer — no second client, no duplicated
+ * HTTP/upload logic anywhere in the project.
  *
  * Contract verified against the official Mistral SDK docs (2026):
  *   POST /v1/files        multipart file + purpose=ocr          → {id}
@@ -33,7 +38,8 @@ use Throwable;
  *   already-installed Guzzle; automated tests inject fakes and can
  *   never contact Mistral. No new dependency was added.
  * - Raw provider responses are normalized to plain arrays; unknown or
- *   missing optional fields stay null — never fabricated.
+ *   missing optional fields stay null — never fabricated. The client
+ *   itself persists NOTHING (D-067: raw OCR never reaches storage).
  */
 final class MistralOcrClient
 {
@@ -116,14 +122,17 @@ final class MistralOcrClient
     /**
      * The instruction-ratified extraction prompt: never calculate,
      * never treat cumulative readings as consumption, never fabricate,
-     * only take total_amount from an explicitly displayed final amount,
-     * and map the standard electricity-bill row labels to the correct
-     * normalized semantics (cumulative evidence vs period quantities).
+     * keep the three money concepts (bill amount / arrears / total due)
+     * distinct and unreconstructable, preserve signs exactly, and map
+     * the standard electricity-bill row labels to the correct normalized
+     * semantics (cumulative evidence vs period quantities). The model
+     * extracts what the document says — the backend validates.
      */
     public const BILL_ANNOTATION_PROMPT = 'This is a household electricity bill analysis task for a solar power management system. '
         . 'Extract only information visibly supported by the document. Do not calculate derived values during extraction. '
         . 'Do not treat cumulative meter readings as monthly consumption. Do not fabricate missing values. '
         . 'Preserve ambiguity and conflicting values. The backend will perform deterministic validation separately. '
+        . 'Extract exactly what the document states; never correct suspicious values — backend validation determines conflicts. '
         . 'KWH with PRESENT and PREVIOUS values represents cumulative meter readings. Map PRESENT to present_meter_reading '
         . 'and PREVIOUS to previous_meter_reading. Do not map either cumulative reading to monthly consumption. '
         . 'BILLED UNITS (equivalently labeled BILL UNITS, CONSUMPTION, or UNITS CONSUMED) represents the billing-period '
@@ -141,12 +150,16 @@ final class MistralOcrClient
         . 'Billing period: when the document presents a current/end billing date followed by a previous/start billing date, '
         . 'normalize them chronologically so that start is the earlier date and end is the later date (start <= end). '
         . 'Never infer dates that are not visibly supported by the document. '
-        . 'Extract total_amount only when the document explicitly identifies a reliable final bill amount, total amount payable, '
-        . 'net bill amount, amount payable, or equivalent final customer amount. Do not calculate or reconstruct total_amount '
-        . 'from component charges. If no explicit reliable total is visible, return null. '
-        . 'Keep total_amount, energy_charges, fixed_charges, other_charges, customer_service_charges and taxes_adjustments '
-        . 'as distinct fields; never collapse or merge them. Do not assume that an unexplained monetary number is '
-        . 'other_charges merely because it is not classified elsewhere; when classification is ambiguous prefer null.';
+        . 'Extract bill_amount, arrears and total_due as three DISTINCT fields: bill_amount is the explicit current-period '
+        . 'bill amount (labels such as BILL AMT, BILL AMOUNT or AMOUNT FOR THIS PERIOD); arrears is the explicitly displayed '
+        . 'past-dues amount with its sign preserved exactly as displayed (a credit may be negative); total_due is the '
+        . 'explicit total payable now (labels such as TOTAL DUE, TOTAL AMOUNT DUE or AMOUNT PAYABLE). '
+        . 'Never calculate or reconstruct any of the three from the others or from component charges — in particular never '
+        . 'derive bill_amount from total_due and arrears. '
+        . 'Keep bill_amount, arrears, total_due, energy_charges, fixed_charges, other_charges, customer_service_charges and '
+        . 'taxes_adjustments as distinct fields; never collapse or merge them. Do not assume that an unexplained monetary '
+        . 'number is other_charges merely because it is not classified elsewhere; when classification is ambiguous prefer null. '
+        . 'If a value is not visibly supported, return null.';
 
     /**
      * SPMS-normalized extraction schema for this controlled test.
@@ -173,9 +186,19 @@ final class MistralOcrClient
             ];
         };
 
-        $totalAmount = ['type' => ['number', 'null']];
-        $totalAmount['description'] = 'The document\'s explicitly displayed final bill / total amount payable to the customer. '
-            . 'Never a calculated or reconstructed sum of component charges. null when no explicit reliable total is visible.';
+        $billAmount = ['type' => ['number', 'null']];
+        $billAmount['description'] = 'The document\'s explicit CURRENT-PERIOD bill amount (labels such as BILL AMT, BILL AMOUNT, '
+            . 'AMOUNT FOR THIS PERIOD). Never reconstructed from total_due and arrears and never a sum of components. '
+            . 'null when not explicitly shown.';
+
+        $arrears = ['type' => ['number', 'null']];
+        $arrears['description'] = 'The explicitly displayed past-dues / arrears amount, sign preserved exactly as shown '
+            . '(a credit may be negative). Never inferred. null when the document shows no arrears line.';
+
+        $totalDue = ['type' => ['number', 'null']];
+        $totalDue['description'] = 'The explicitly displayed total payable now (labels such as TOTAL DUE, TOTAL AMOUNT DUE, '
+            . 'AMOUNT PAYABLE). This is the document\'s own figure — NEVER calculated from bill_amount and arrears or from '
+            . 'component charges. null when no explicit payable total is visible.';
 
         $consumptionKwh = ['type' => ['number', 'null']];
         $consumptionKwh['description'] = 'Billing-period electricity consumption in kWh, taken from the current-period '
@@ -238,7 +261,9 @@ final class MistralOcrClient
                 'cost' => [
                     'type' => 'object',
                     'properties' => [
-                        'total_amount' => $totalAmount,
+                        'bill_amount' => $billAmount,
+                        'arrears' => $arrears,
+                        'total_due' => $totalDue,
                         'energy_charges' => $nullableNumber,
                         'fixed_charges' => $nullableNumber,
                         'other_charges' => $nullableNumber,
@@ -247,7 +272,7 @@ final class MistralOcrClient
                         'confidence' => $confidence,
                     ],
                     'required' => [
-                        'total_amount', 'energy_charges', 'fixed_charges', 'other_charges',
+                        'bill_amount', 'arrears', 'total_due', 'energy_charges', 'fixed_charges', 'other_charges',
                         'customer_service_charges', 'taxes_adjustments', 'confidence',
                     ],
                     'additionalProperties' => false,
