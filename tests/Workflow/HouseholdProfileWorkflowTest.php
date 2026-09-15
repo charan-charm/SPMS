@@ -28,7 +28,7 @@ final class HouseholdProfileWorkflowTest
     private static function cookieRequest(string $method, string $path, string $rawSessionToken, array $body = [], array $extraHeaders = []): Request
     {
         return AuthMiddleware::process(Request::create($method, $path, body: $body, headers: array_merge([
-            'Cookie' => 'spms_session=' . $rawSessionToken,
+            'Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawSessionToken,
         ], $extraHeaders), ipAddress: AuthTesting::uniqueIpAddress()));
     }
 

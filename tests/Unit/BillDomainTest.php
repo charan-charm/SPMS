@@ -14,6 +14,7 @@ use App\Domain\Bill\BillValidation;
 use App\Domain\Bill\DocumentAssessment;
 use App\Domain\Bill\ProvenanceSource;
 use App\Domain\Bill\QualityCode;
+use App\Domain\Bill\ServiceNumber;
 use App\Domain\Bill\ValidationRule;
 use App\Domain\Bill\ValidationStatus;
 use DateTimeImmutable;
@@ -121,8 +122,7 @@ final class BillDomainTest
                 Assert::throws(InvalidArgumentException::class, static fn () => $dead->verify(self::now()));
             }),
 
-            TestResult::check('field whitelist: PII-shaped or raw-response keys are structurally impossible', function (): void {
-                foreach ([
+            TestResult::check('field whitelist: PII-shaped or raw-response keys are structurally impossible', function (): void {                foreach ([
                     'customer_name', 'name', 'aadhaar_number', 'mobile', 'account_number', 'usc',
                     'bill_number', 'meter_serial', 'dtr_code', 'qr_payload',
                     'raw_ocr_text', 'raw_response', 'document_annotation', 'all_extracted_data',
@@ -298,6 +298,61 @@ final class BillDomainTest
                 Assert::true(ProvenanceSource::isValid(ProvenanceSource::AI_EXTRACTION));
                 Assert::true(ProvenanceSource::isValid(ProvenanceSource::USER_CORRECTION));
                 Assert::false(ProvenanceSource::isValid('AUTO_ACCEPTED'));
+
+                // D-071: the ownership/evidence codes joined the closed
+                // vocabulary; nothing else may.
+                foreach (
+                    [
+                        QualityCode::NO_BILL_EVIDENCE,
+                        QualityCode::SERVICE_NUMBER_MISMATCH,
+                        QualityCode::SERVICE_NUMBER_MISSING,
+                        QualityCode::HOUSEHOLD_SERVICE_NOT_CONFIGURED,
+                    ] as $code
+                ) {
+                    Assert::true(QualityCode::isValid($code), $code);
+                }
+                Assert::false(QualityCode::isValid('OWNERSHIP_PRETTY_MUCH_CONFIRMED'));
+            }),
+
+            TestResult::check('D-071 service-number canonicalization is conservative, deterministic, and never fuzzy', function (): void {
+                // Decorative separators and case fold; content stays.
+                Assert::same('10002000300', ServiceNumber::canonicalize('1000-2000-300'));
+                Assert::same('10002000300', ServiceNumber::canonicalize(' 1000 2000 300 '));
+                Assert::same('SN1234AB', ServiceNumber::canonicalize('sn/1234.ab'));
+
+                // Leading zeros, length and ORDER are content — preserved.
+                Assert::same('0123456', ServiceNumber::canonicalize(' 0123-456 '));
+                Assert::true(ServiceNumber::canonicalize('123456') !== ServiceNumber::canonicalize('0123456'),
+                    'zero-padded identifiers must not collapse');
+                Assert::true(ServiceNumber::canonicalize('1234AB') !== ServiceNumber::canonicalize('AB1234'),
+                    'reordering is never equivalence');
+
+                // Refusals: too short, too long, non-alphanumeric residue.
+                Assert::same(null, ServiceNumber::canonicalize(null));
+                Assert::same(null, ServiceNumber::canonicalize('   '));
+                Assert::same(null, ServiceNumber::canonicalize('12'));
+                Assert::same(null, ServiceNumber::canonicalize('1 2 3'));
+                Assert::same(null, ServiceNumber::canonicalize('1234 56#89'));
+                Assert::same(null, ServiceNumber::canonicalize(str_repeat('9', 25)));
+
+                // Matching is canonical equality only.
+                Assert::true(ServiceNumber::matches('1000-2000-300', '10002000300'));
+                Assert::true(ServiceNumber::matches('1000-2000-300', '1000-2000-300'));
+                Assert::false(ServiceNumber::matches('10002000300', '1000200030'));
+                Assert::false(ServiceNumber::matches(null, '10002000300'), 'missing never matches');
+                Assert::false(ServiceNumber::matches('10002000300', null));
+                Assert::false(ServiceNumber::matches('123456', '654321'));
+                Assert::false(ServiceNumber::matches('99', '99'), 'a too-short pair never matches');
+
+                // assertCanonical: fail-closed for registration input.
+                Assert::same('456780123', ServiceNumber::assertCanonical('456-780123'));
+                Assert::same(null, ServiceNumber::assertCanonical(null));
+                Assert::throws(InvalidArgumentException::class, static fn () => ServiceNumber::assertCanonical('nope!!'));
+
+                // Masking keeps only the tail for non-owner contexts.
+                Assert::same(str_repeat('•', 7) . '0300', ServiceNumber::mask('10002000300'));
+                Assert::same(str_repeat('•', 4), ServiceNumber::mask('1234'));
+                Assert::same(null, ServiceNumber::mask(null));
             }),
 
             TestResult::check('storage-row round-trips are lossless (strings verbatim, NULLs honest)', function (): void {

@@ -79,6 +79,10 @@ final class BillAnnotationNormalizer
             'tariff_category' => ['tariff_category', 'text'],
             'meter_type' => ['meter_type', 'text'],
             'contracted_load' => ['contracted_load', 'load'],
+            // D-071: captured verbatim (text-cleaned only) into the immutable
+            // draft; ownership canonicalization happens later, in the
+            // persistence layer — never here, so the snapshot stays honest.
+            'service_number' => ['service_number', 'text'],
         ],
     ];
 
@@ -239,6 +243,15 @@ final class BillAnnotationNormalizer
      */
     public static function qualityFlags(array $normalized, array $validations): array
     {
+        // D-071: a terminal assessment (NOT_A_BILL / UNREADABLE /
+        // UNCERTAIN) adopts no values at all — "this bill is missing its
+        // consumption" would be a statement about data that was never
+        // claimed. For those documents the assessment itself is the
+        // finding; data-gap flags only describe adopted bills.
+        if (!DocumentAssessment::isUsable($normalized['assessment'])) {
+            return [];
+        }
+
         $values = $normalized['values'];
 
         $flags = [];

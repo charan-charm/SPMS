@@ -159,15 +159,16 @@ final class InsightApiTest
                     static fn ($insight): bool => $insight->householdId() === null
                 ));
 
-                $before = $limitationRows();
-                Assert::true($before >= 1, 'The first controlled evaluation must detect the limitation insight');
-
                 $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
                 $created = $service->refreshFromEnergyPipeline(null, $now);
 
-                // With the locked F4/F5 read-only stubs, exactly one honest
-                // limitation insight is derivable.
+                // Fresh-database-safe (D-071 W): the first controlled
+                // evaluation CREATES the one honest limitation insight;
+                // any evaluation on a database that already has it
+                // converges on the same row instead. Either way the
+                // global total stays exactly one.
                 Assert::same(1, count($created));
+                Assert::same(1, $limitationRows(), 'a controlled evaluation leaves exactly one global limitation insight');
                 $row = $created[0]->toArray();
                 Assert::same('DATA_LIMITATION', $row['type']);
                 Assert::same(null, $row['household_id']);
@@ -185,7 +186,7 @@ final class InsightApiTest
                 Assert::same(1, count($repeat));
                 Assert::same($created[0]->id(), $repeat[0]->id());
                 Assert::same($created[0]->observationCount() + 1, $repeat[0]->observationCount());
-                Assert::same($before, $limitationRows(), 'Repeated controlled evaluations must not duplicate the limitation insight');
+                Assert::same(1, $limitationRows(), 'Repeated controlled evaluations must not duplicate the limitation insight');
 
                 // The persisted insight is queryable through the read path.
                 $listed = self::authedList(

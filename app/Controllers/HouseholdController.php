@@ -44,8 +44,8 @@ final class HouseholdController
     ) {
     }
 
-    /** Accepted PATCH fields on the own-route household profile (D-065). */
-    private const PATCHABLE_FIELDS = ['timezone', 'label', 'location_label'];
+    /** Accepted PATCH fields on the own-route household profile (D-065, extended by D-071). */
+    private const PATCHABLE_FIELDS = ['timezone', 'label', 'location_label', 'service_number'];
 
     public function current(Request $request): Response
     {
@@ -132,6 +132,12 @@ final class HouseholdController
 
         if (array_key_exists('location_label', $body)) {
             $changes['location_label'] = $this->nullablePatchValue($body['location_label'], 'location_label');
+        }
+
+        // D-071: the registered electricity service/USC number — stored
+        // in canonical form by the domain; '' clears it honestly.
+        if (array_key_exists('service_number', $body)) {
+            $changes['service_number'] = $this->nullablePatchValue($body['service_number'], 'service_number');
         }
 
         $result = $this->households->updateProfile(

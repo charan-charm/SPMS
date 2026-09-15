@@ -29,6 +29,17 @@ final class QualityCode
     public const CONFLICTING_METER_READINGS = 'CONFLICTING_METER_READINGS';
     public const INCONSISTENT_NET_UNITS = 'INCONSISTENT_NET_UNITS';
 
+    /**
+     * D-071 — document-evidence and ownership outcomes. These answer
+     * different questions than the value-consistency codes: an
+     * ownership flag says "we cannot confirm this bill belongs to the
+     * registered service", NEVER that its numbers disagree.
+     */
+    public const NO_BILL_EVIDENCE = 'NO_BILL_EVIDENCE';
+    public const SERVICE_NUMBER_MISMATCH = 'SERVICE_NUMBER_MISMATCH';
+    public const SERVICE_NUMBER_MISSING = 'SERVICE_NUMBER_MISSING';
+    public const HOUSEHOLD_SERVICE_NOT_CONFIGURED = 'HOUSEHOLD_SERVICE_NOT_CONFIGURED';
+
     public const ALL = [
         self::MISSING_CONSUMPTION,
         self::MISSING_BILLING_PERIOD,
@@ -38,6 +49,10 @@ final class QualityCode
         self::AMBIGUOUS_AMOUNT,
         self::CONFLICTING_METER_READINGS,
         self::INCONSISTENT_NET_UNITS,
+        self::NO_BILL_EVIDENCE,
+        self::SERVICE_NUMBER_MISMATCH,
+        self::SERVICE_NUMBER_MISSING,
+        self::HOUSEHOLD_SERVICE_NOT_CONFIGURED,
     ];
 
     public static function isValid(string $code): bool

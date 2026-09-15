@@ -12,6 +12,7 @@ use App\Domain\Bill\BillService;
 use App\Domain\Bill\BillUpload;
 use App\Domain\Bill\BillUploadIntakeService;
 use App\Domain\Bill\BillValidation;
+use App\Domain\Bill\Ownership;
 use App\Security\Authorization;
 use App\Support\AppException;
 use App\Support\Request;
@@ -183,6 +184,7 @@ final class BillController
             static fn (Bill $bill): array => [
                 'bill_id' => $bill->id(),
                 'status' => $bill->status(),
+                'service_number' => $bill->value(BillField::SERVICE_NUMBER),
                 'billing_period_start' => $bill->value(BillField::BILLING_PERIOD_START),
                 'billing_period_end' => $bill->value(BillField::BILLING_PERIOD_END),
                 'consumption_kwh' => $bill->value('consumption_kwh'),
@@ -235,12 +237,26 @@ final class BillController
             $this->billService->validationsFor($account, $bill->id())
         );
 
+        $flagObjects = $this->billService->qualityFlagsFor($account, $bill->id());
+
         $flags = array_map(
             static fn (BillQualityFlag $f): array => [
                 'code' => $f->code(),
                 'field_name' => $f->fieldName(),
             ],
-            $this->billService->qualityFlagsFor($account, $bill->id())
+            $flagObjects
+        );
+
+        // D-071: ownership is its own answer, derived from the stored
+        // service number + the persisted ownership quality flags. The
+        // household's registered number leaves this view MASKED only —
+        // enough for the owner to compare, never a full identifier
+        // broadcast (docs/10 D-071 §N).
+        $ownership = Ownership::derive(
+            $bill->status(),
+            $bill->values(),
+            $flagObjects,
+            $this->billService->householdServiceNumber($account)
         );
 
         return Response::success([
@@ -260,6 +276,7 @@ final class BillController
                 ],
                 'validations' => $validations,
                 'quality_flags' => $flags,
+                'ownership' => $ownership,
             ],
         ]);
     }

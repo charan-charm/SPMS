@@ -50,7 +50,7 @@ final class AuthApiTest
         // The middleware is part of the request pipeline: controllers
         // receive the auth context it injects.
         return AuthMiddleware::process(Request::create($method, $path, body: $body, headers: array_merge([
-            'Cookie' => 'spms_session=' . $rawSessionToken,
+            'Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawSessionToken,
         ], $extraHeaders), ipAddress: self::ip()));
     }
 
@@ -190,7 +190,7 @@ final class AuthApiTest
 
                 Assert::same(200, $response->status());
                 $cookie = $response->headers()['Set-Cookie'] ?? '';
-                Assert::contains('spms_session=', $cookie);
+                Assert::contains(\App\Support\Security\SessionCookie::name() . '=', $cookie);
                 Assert::contains('HttpOnly', $cookie);
                 Assert::contains('SameSite=Lax', $cookie);
                 Assert::contains('Path=/', $cookie);

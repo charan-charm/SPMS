@@ -19,6 +19,16 @@ final class SafeErrorsTest
     {
         return [
             TestResult::check('Database failure yields degraded health without exposing internals', function (): void {
+                // Capture the test-pinned connection settings (D-071: the
+                // suite runs on spms_test — restoring hardcoded dev values
+                // here would silently repoint every later test).
+                $original = [
+                    'DB_HOST' => Config::get('DB_HOST'),
+                    'DB_PORT' => Config::get('DB_PORT'),
+                    'DB_DATABASE' => Config::get('DB_DATABASE'),
+                    'DB_USERNAME' => Config::get('DB_USERNAME'),
+                    'DB_PASSWORD' => Config::get('DB_PASSWORD'),
+                ];
                 Config::overrideForTesting(['DB_PORT' => '1', 'DB_USERNAME' => 'secret_user_test', 'DB_PASSWORD' => 'secret_pass_test']);
                 Database::reset();
 
@@ -35,7 +45,7 @@ final class SafeErrorsTest
                     Assert::notContains($leak, $encoded, "internals leaked: {$leak}");
                 }
 
-                Config::overrideForTesting(['DB_PORT' => '3306', 'DB_USERNAME' => 'root', 'DB_PASSWORD' => '']);
+                Config::overrideForTesting(array_filter($original, static fn (?string $v): bool => $v !== null));
                 Database::reset();
             }),
 

@@ -29,6 +29,11 @@ final class Config
             $values = Env::parse((string) file_get_contents($envFile));
         }
 
+        // D-071: resolve the trusted REAL/DEMO/TEST data environment and
+        // overlay its DB_* connection values BEFORE the singleton exists,
+        // so the choice is immutable per process and never request-driven.
+        $values = DataEnvironments::apply($values);
+
         self::$instance = new self($values);
     }
 

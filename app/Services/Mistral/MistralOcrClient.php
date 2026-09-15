@@ -129,6 +129,9 @@ final class MistralOcrClient
      * extracts what the document says — the backend validates.
      */
     public const BILL_ANNOTATION_PROMPT = 'This is a household electricity bill analysis task for a solar power management system. '
+        . 'First decide whether this document IS a household electricity bill: if it is a logo, brand mark, unrelated photo or image, '
+        . 'blank page, or a document of another kind, set document_assessment.status to NOT_A_BILL and return null for EVERY other '
+        . 'field — never extract values from non-bill documents and never treat graphic or decorative text as bill data. '
         . 'Extract only information visibly supported by the document. Do not calculate derived values during extraction. '
         . 'Do not treat cumulative meter readings as monthly consumption. Do not fabricate missing values. '
         . 'Preserve ambiguity and conflicting values. The backend will perform deterministic validation separately. '
@@ -150,6 +153,12 @@ final class MistralOcrClient
         . 'Billing period: when the document presents a current/end billing date followed by a previous/start billing date, '
         . 'normalize them chronologically so that start is the earlier date and end is the later date (start <= end). '
         . 'Never infer dates that are not visibly supported by the document. '
+        . 'SERVICE NUMBER: when the document shows the electricity consumer service identifier, copy it EXACTLY as printed '
+        . '(digits, letters and any separators) into service_number. Common labels include SERVICE NUMBER, SERVICE NO, '
+        . 'SERVICE NO:, USC NO, USC NUMBER, CONSUMER SERVICE NUMBER and SON OF/DAUGHTER OF SERVICE lines naming the '
+        . 'consumer number. Do not assume one exact label. Never use a bill number, invoice number, receipt number, meter '
+        . 'number or meter serial, consumer name, mobile or phone number, Aadhaar or ID number, DTR or feeder code, '
+        . 'check number, or any amount as the service number. When no explicit service identifier is shown, return null. '
         . 'Extract bill_amount, arrears and total_due as three DISTINCT fields: bill_amount is the explicit current-period '
         . 'bill amount (labels such as BILL AMT, BILL AMOUNT or AMOUNT FOR THIS PERIOD); arrears is the explicitly displayed '
         . 'past-dues amount with its sign preserved exactly as displayed (a credit may be negative); total_due is the '
@@ -230,6 +239,12 @@ final class MistralOcrClient
         $periodEnd['description'] = 'Billing period END (the later date), normalized chronologically against start. '
             . 'null when unsupported.';
 
+        $serviceNumber = ['type' => ['string', 'null']];
+        $serviceNumber['description'] = 'The electricity consumer SERVICE NUMBER / USC number exactly as printed (labels such as '
+            . 'SERVICE NUMBER, SERVICE NO, USC NO, USC NUMBER, CONSUMER SERVICE NUMBER). Never a bill/invoice/receipt number, '
+            . 'meter number, consumer name, phone/mobile, Aadhaar, DTR/feeder code or amount. null when no explicit service '
+            . 'identifier is visible or the document is not a bill.';
+
         return [
             'type' => 'object',
             'properties' => [
@@ -282,6 +297,7 @@ final class MistralOcrClient
                     'meter_type' => $nullableString,
                     'contracted_load' => $nullableString,
                     'utility_provider' => $nullableString,
+                    'service_number' => $serviceNumber,
                 ]),
             ],
             'required' => ['document_assessment', 'billing_period', 'consumption', 'meter_evidence', 'solar', 'cost', 'context'],

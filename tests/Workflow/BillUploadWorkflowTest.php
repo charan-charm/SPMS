@@ -104,7 +104,7 @@ final class BillUploadWorkflowTest
      */
     private static function pipelineRequest(string $method, string $path, string $rawToken, array $body = [], string $csrf = '', array $files = []): Request
     {
-        $headers = ['Cookie' => 'spms_session=' . $rawToken];
+        $headers = ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken];
         if ($csrf !== '') {
             $headers[AuthMiddleware::CSRF_HEADER] = $csrf;
         }
@@ -209,13 +209,19 @@ final class BillUploadWorkflowTest
                 Assert::same('bills', $fk['REFERENCED_TABLE_NAME'] ?? null);
                 Assert::same('CASCADE', $fk['DELETE_RULE'] ?? null, 'the reference dies with its bill aggregate');
 
-                // B1 tables untouched: bills gained no column.
+                // B1 tables untouched: B2 itself added no column (the
+                // whitelist-derived count only moved with the ratified
+                // D-071 service_number migration, never with B2).
                 $statement = self::pdo()->prepare(
                     "SELECT COUNT(*) FROM information_schema.COLUMNS
                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bills'"
                 );
                 $statement->execute([]);
-                Assert::same(27, (int) $statement->fetchColumn(), 'B2 added nothing to bills (§24: no schema creep)');
+                Assert::same(
+                    6 + count(\App\Domain\Bill\BillField::ALL),
+                    (int) $statement->fetchColumn(),
+                    'bills carries exactly identity + the whitelist (§24: no schema creep)'
+                );
             }),
 
             TestResult::check('anonymous upload is rejected by the real pipeline; CSRF failure is rejected too', function (): void {
@@ -240,7 +246,7 @@ final class BillUploadWorkflowTest
                     AuthMiddleware::process(Request::create(
                         'POST',
                         '/api/v1/bills/upload',
-                        headers: ['Cookie' => 'spms_session=' . $session['token']],
+                        headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $session['token']],
                         ipAddress: AuthTesting::uniqueIpAddress(),
                         files: ['file' => $spec]
                     ));

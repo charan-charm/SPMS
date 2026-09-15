@@ -93,15 +93,27 @@ final class BillService
     }
 
     /**
-     * Persist one completed extraction (§3–§10, §17):
+     * Persist one completed extraction (§3–§10, §17; D-071):
      *
      * - requires a PROCESSING bill (lifecycle-guarded, else 409);
      * - stores the immutable draft + validation results + quality flags
      *   atomically with the bill update;
-     * - for a USABLE assessment (VALID / VALID_WITH_LIMITATIONS) the
-     *   normalized values become the bill's current values with
-     *   AI_EXTRACTION provenance — including honest NULLs for whatever
-     *   the provider could not extract (no zero-filling);
+     * - a USABLE assessment (VALID / VALID_WITH_LIMITATIONS) must still
+     *   carry actual bill EVIDENCE — a document that produced zero
+     *   period/energy/money values is not turned into a bill-shaped
+     *   record no matter what the provider labeled it (logo gating,
+     *   D-071; the draft keeps the provider's own assessment honestly);
+     * - for a usable assessment the normalized values become the bill's
+     *   current values with AI_EXTRACTION provenance — including honest
+     *   NULLs for whatever the provider could not extract (no
+     *   zero-filling), with the service number stored in its canonical
+     *   form;
+     * - ownership is then checked deterministically against the
+     *   household's REGISTERED service number (D-071): a mismatch, a
+     *   missing number on the bill, or a household that never registered
+     *   one all force NEEDS_REVIEW with the matching quality flag — an
+     *   ownership "pass" exists only with actual matching evidence, and
+     *   nothing here ever verifies;
      * - for NOT_A_BILL / UNREADABLE / UNCERTAIN the bill terminates in
      *   that state and its value columns stay NULL: a rejected document
      *   leaves no "data" behind, only the assessment record itself;
@@ -122,7 +134,8 @@ final class BillService
         ?DateTimeImmutable $now = null
     ): Bill {
         $now ??= new DateTimeImmutable('now');
-        $householdId = $this->requireHousehold($account);
+        $household = $this->requireHouseholdContext($account);
+        $householdId = $household->id();
         $bill = $this->loadScoped($billId, $householdId);
 
         if ($draft->billId() !== $bill->id()) {
@@ -142,6 +155,17 @@ final class BillService
         }
 
         $assessment = $draft->assessment();
+
+        if (DocumentAssessment::isUsable($assessment) && !self::hasBillEvidence($draft->values())) {
+            // Logo/unrelated-image gating (D-071): the provider called this
+            // document usable, but not ONE billing period, energy or money
+            // value is backed by the extraction. Normalization must not
+            // manufacture a bill-shaped record from that — the bill
+            // terminates honestly as UNCERTAIN (the draft row still
+            // preserves the provider's own assessment for audit).
+            $assessment = DocumentAssessment::UNCERTAIN;
+            $flags[] = BillQualityFlag::create(QualityCode::NO_BILL_EVIDENCE, null);
+        }
 
         if (!DocumentAssessment::isUsable($assessment)) {
             $terminal = match ($assessment) {
@@ -163,13 +187,28 @@ final class BillService
                 $conflicted = $conflicted || $validation->status() === ValidationStatus::CONFLICT;
             }
 
+            // D-071 — deterministic service-number ownership validation.
+            // The draft keeps the raw extracted string (immutable AI
+            // snapshot); the bill row keeps the canonical form used for
+            // matching. Mismatch/missing outcomes NEVER alter any value —
+            // they only add quality flags, and any flag routes the bill
+            // to NEEDS_REVIEW through the existing rule below.
+            $values = $draft->values();
+            $billServiceNumber = ServiceNumber::canonicalize($values[BillField::SERVICE_NUMBER] ?? null);
+            $values[BillField::SERVICE_NUMBER] = $billServiceNumber;
+
+            $flags = array_merge($flags, self::ownershipFlags(
+                $household->serviceNumber(),
+                $billServiceNumber
+            ));
+
             $needsReview = $assessment === DocumentAssessment::VALID_WITH_LIMITATIONS
                 || $conflicted
                 || $flags !== [];
 
             try {
                 $updated = $bill
-                    ->withValues($draft->values(), $now)
+                    ->withValues($values, $now)
                     // two ratified lifecycle hops, each validated:
                     ->transitionTo(BillStatus::EXTRACTED, $now);
 
@@ -183,7 +222,7 @@ final class BillService
             }
 
             $provenance = [];
-            foreach ($draft->values() as $field => $value) {
+            foreach ($values as $field => $value) {
                 if ($value === null) {
                     continue; // no provenance row for data that does not exist
                 }
@@ -197,6 +236,17 @@ final class BillService
         $this->bills->recordExtraction($updated, $draft, $validations, $flags, $provenance);
 
         return $updated;
+    }
+
+    /**
+     * D-071 — the caller's household's canonical registered service
+     * number (null when not configured). Read-only and self-scoped:
+     * derived from membership like every household fact, never accepted
+     * from a caller.
+     */
+    public function householdServiceNumber(Account $account): ?string
+    {
+        return $this->requireHouseholdContext($account)->serviceNumber();
     }
 
     /**
@@ -295,6 +345,76 @@ final class BillService
     }
 
     // ------------------------------------------------------------------
+
+    /**
+     * D-071 — the minimum proof that a "usable" document really contributed
+     * bill data: at least one billing-period, energy or money value. Purely
+     * contextual text (a provider name read off a logo, a service-number-shaped
+     * string in decorative text) never counts as evidence.
+     *
+     * @param array<string, string|null> $values
+     */
+    private static function hasBillEvidence(array $values): bool
+    {
+        $evidence = array_merge(BillField::DATES, BillField::ENERGY, BillField::MONEY);
+
+        foreach ($evidence as $field) {
+            if (($values[$field] ?? null) !== null) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * D-071 — ownership outcome as controlled quality flags. Each state is
+     * exactly what the evidence supports:
+     *
+     * - household never registered a service number → setup requirement;
+     * - the document carried no confirmable number → review, not validation;
+     * - canonical strings differ → mismatch (values themselves untouched);
+     * - equality after documented conservative canonicalization → NO flag:
+     *   a real match, with the matching evidence stored on both sides.
+     *
+     * There is no "ownership PASS" row by design — absence of an ownership
+     * flag alongside a non-null bill service number IS the pass, and it is
+     * only ever derivable from actual matching values.
+     *
+     * @return list<BillQualityFlag>
+     */
+    private static function ownershipFlags(?string $householdServiceNumber, ?string $billServiceNumber): array
+    {
+        if ($householdServiceNumber === null) {
+            return [BillQualityFlag::create(QualityCode::HOUSEHOLD_SERVICE_NOT_CONFIGURED, null)];
+        }
+
+        if ($billServiceNumber === null) {
+            return [BillQualityFlag::create(QualityCode::SERVICE_NUMBER_MISSING, BillField::SERVICE_NUMBER)];
+        }
+
+        if (!ServiceNumber::matches($householdServiceNumber, $billServiceNumber)) {
+            return [BillQualityFlag::create(QualityCode::SERVICE_NUMBER_MISMATCH, BillField::SERVICE_NUMBER)];
+        }
+
+        return [];
+    }
+
+    /**
+     * The caller's active household ENTITY (D-071): ownership checks need
+     * the registered profile, still resolved exactly like every other
+     * household scope — from membership, never from a caller.
+     */
+    private function requireHouseholdContext(Account $account): \App\Domain\Household\Household
+    {
+        $context = $this->households->activeHouseholdFor($account);
+
+        if ($context === null) {
+            throw new AppException('NOT_FOUND', 'The caller has no active household context.', 404);
+        }
+
+        return $context['household'];
+    }
 
     private function transition(Account $account, string $billId, string $target, DateTimeImmutable $now): Bill
     {

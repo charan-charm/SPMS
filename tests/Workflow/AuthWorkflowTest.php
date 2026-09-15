@@ -33,7 +33,7 @@ final class AuthWorkflowTest
     private static function cookieRequest(string $method, string $path, string $rawSessionToken, array $body = [], array $extraHeaders = []): Request
     {
         return AuthMiddleware::process(Request::create($method, $path, body: $body, headers: array_merge([
-            'Cookie' => 'spms_session=' . $rawSessionToken,
+            'Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawSessionToken,
         ], $extraHeaders), ipAddress: AuthTesting::uniqueIpAddress()));
     }
 
@@ -96,7 +96,7 @@ final class AuthWorkflowTest
                 try {
                     self::controller()->session(Request::create(
                         'GET', '/api/v1/auth/session',
-                        headers: ['Cookie' => 'spms_session=' . $sessionToken],
+                        headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $sessionToken],
                         ipAddress: AuthTesting::uniqueIpAddress()
                     ));
                     Assert::true(false, 'Logged-out session must not authenticate');

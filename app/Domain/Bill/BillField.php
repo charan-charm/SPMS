@@ -64,7 +64,10 @@ final class BillField
 
     public const DATES = [self::BILLING_PERIOD_START, self::BILLING_PERIOD_END];
 
-    public const TEXT = ['utility_provider', 'tariff_category', 'meter_type'];
+    /** D-071 — electricity service/USC identity (bill ownership anchor). */
+    public const SERVICE_NUMBER = 'service_number';
+
+    public const TEXT = ['utility_provider', 'tariff_category', 'meter_type', self::SERVICE_NUMBER];
 
     public const ALL = [
         ...self::DATES,
@@ -78,6 +81,9 @@ final class BillField
         'utility_provider' => 120,
         'tariff_category' => 60,
         'meter_type' => 60,
+        // D-071: the draft snapshot carries the extracted (text-cleaned)
+        // value; bills.household registration stores the canonical form.
+        'service_number' => 32,
     ];
 
     public const KIND_DATE = 'date';

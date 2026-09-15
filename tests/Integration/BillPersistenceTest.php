@@ -64,7 +64,10 @@ final class BillPersistenceTest
     }
 
     /**
-     * Synthetic canonical bill values (docs/10 D-067 test data).
+     * Synthetic canonical bill values (docs/10 D-067 test data; the
+     * service number joins the set in D-071, matching the fixture
+     * household's registered number so persistence tests exercise the
+     * ownership-MATCH path unless a test states otherwise).
      *
      * @return array<string, string|null>
      */
@@ -90,15 +93,19 @@ final class BillPersistenceTest
             'tariff_category' => 'DOMESTIC (A)',
             'meter_type' => 'SMART SOLAR',
             'contracted_load' => '3.00',
+            'service_number' => '456780123',
         ];
     }
+
+    /** D-071: every fixture household registers this canonical number. */
+    private const FIXTURE_SERVICE = '456-780123';
 
     /**
      * @return array{0: Account, 1: string} the fixture account + household id
      */
     private static function fixture(): array
     {
-        $context = AuthTesting::householdFixture('b1-test-' . bin2hex(random_bytes(4)));
+        $context = AuthTesting::householdFixture('b1-test-' . bin2hex(random_bytes(4)), self::FIXTURE_SERVICE);
 
         return [$context['account'], $context['household_id']];
     }
@@ -521,7 +528,11 @@ final class BillPersistenceTest
             TestResult::check('validation upsert is one-row-per-rule and idempotent; quality flags de-duplicate', function (): void {
                 [$service, $account, $bill] = self::processingBill();
 
-                $draft = BillExtractionDraft::create($bill->id(), 'p', null, self::now(), DocumentAssessment::VALID, null, null, []);
+                // A full-evidence, ownership-matching extraction so this
+                // test measures ONLY the upsert/dedup semantics below
+                // (D-071: an empty "VALID" draft would honestly become
+                // NO_BILL_EVIDENCE and confuse the counts).
+                $draft = BillExtractionDraft::create($bill->id(), 'p', null, self::now(), DocumentAssessment::VALID, null, null, self::canonicalValues());
                 $service->recordExtraction($account, $bill->id(), $draft, [], []);
 
                 $repo = self::repo();
@@ -534,7 +545,15 @@ final class BillPersistenceTest
                 Assert::same(1, count($validations), 'ON DUPLICATE KEY keeps exactly one result per rule');
                 Assert::same(ValidationStatus::CONFLICT, $validations[0]->status(), 'the latest statement wins');
 
-                Assert::same(1, count($service->qualityFlagsFor($account, $bill->id())), 'the same (code, field) is never duplicated');
+                // The extraction itself contributed no flags (values are
+                // complete and the service number matches the registered
+                // household), so the only flag here is the manual one.
+                $flagCodes = array_map(
+                    static fn ($f): string => $f->code() . ':' . ($f->fieldName() ?? '-'),
+                    $service->qualityFlagsFor($account, $bill->id())
+                );
+                sort($flagCodes);
+                Assert::same(['MISSING_CONSUMPTION:-'], $flagCodes, 'the same (code, field) is never duplicated');
             }),
 
             TestResult::check('household owns the bills (delete RESTRICT) and deleting a bill takes its whole aggregate with it (CASCADE)', function (): void {

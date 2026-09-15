@@ -43,8 +43,8 @@ final class HouseholdRepository
         $row = $household->toStorageRow();
 
         $statement = $this->connection()->prepare(
-            'INSERT INTO households (id, label, timezone, location_label, status, created_at, updated_at)
-             VALUES (:id, :label, :timezone, :location_label, :status, :created_at, :updated_at)'
+            'INSERT INTO households (id, label, timezone, location_label, service_number, status, created_at, updated_at)
+             VALUES (:id, :label, :timezone, :location_label, :service_number, :status, :created_at, :updated_at)'
         );
 
         $statement->execute($row);
@@ -104,7 +104,8 @@ final class HouseholdRepository
     {
         $statement = $this->connection()->prepare(
             'UPDATE households SET label = :label, timezone = :timezone,
-                    location_label = :location_label, updated_at = :updated_at
+                    location_label = :location_label, service_number = :service_number,
+                    updated_at = :updated_at
              WHERE id = :id'
         );
 
@@ -112,6 +113,7 @@ final class HouseholdRepository
             'label' => $household->label(),
             'timezone' => $household->timezone(),
             'location_label' => $household->locationLabel(),
+            'service_number' => $household->serviceNumber(),
             'updated_at' => $household->updatedAt(),
             'id' => $household->id(),
         ]);

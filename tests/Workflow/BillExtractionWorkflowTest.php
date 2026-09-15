@@ -130,6 +130,14 @@ final class BillExtractionWorkflowTest
     }
 
     /**
+     * D-071: the default fixture service number the household registers;
+     * liveShape() echoes it on the bill, so the clean pipeline exercises
+     * ownership MATCH. Tests that need a different ownership outcome pass
+     * another value to processingBill()/liveShape() explicitly.
+     */
+    private const FIXTURE_SERVICE = '1000-2000-300';
+
+    /**
      * @param array<string, mixed> $overrides
      * @return array<string, mixed>
      */
@@ -151,7 +159,8 @@ final class BillExtractionWorkflowTest
             ],
             'context' => [
                 'utility_provider' => 'DEMO GRID UTILITY LTD', 'tariff_category' => 'DOMESTIC (A)',
-                'meter_type' => 'SMART SOLAR', 'contracted_load' => '3', 'confidence' => 0.95,
+                'meter_type' => 'SMART SOLAR', 'contracted_load' => '3',
+                'service_number' => self::FIXTURE_SERVICE, 'confidence' => 0.95,
             ],
         ];
 
@@ -165,9 +174,9 @@ final class BillExtractionWorkflowTest
     /**
      * @return array{account: \App\Domain\Account\Account, household: string, bill: string, temp: BillTempDocument, storage: LocalPrivateBillStorage}
      */
-    private static function processingBill(string $prefix = 'b3', string $kind = 'png'): array
+    private static function processingBill(string $prefix = 'b3', string $kind = 'png', ?string $serviceNumber = self::FIXTURE_SERVICE): array
     {
-        $fixture = AuthTesting::householdFixture($prefix . '-' . bin2hex(random_bytes(4)));
+        $fixture = AuthTesting::householdFixture($prefix . '-' . bin2hex(random_bytes(4)), $serviceNumber);
         $storage = self::freshStorage();
 
         $src = sys_get_temp_dir() . '/spms-b3-src-' . bin2hex(random_bytes(5)) . ($kind === 'pdf' ? '.pdf' : '.png');
@@ -304,6 +313,7 @@ final class BillExtractionWorkflowTest
                 Assert::same(null, $bill['total_due'], 'absent money field stays NULL in the DB');
                 Assert::same('DOMESTIC (A)', $bill['tariff_category']);
                 Assert::same('3.00', $bill['contracted_load']);
+                Assert::same('10002000300', $bill['service_number'], 'bills store the canonical form (D-071)');
 
                 // Immutable AI draft persisted with provider facts.
                 $draft = self::draftRow($ctx['bill']);
@@ -442,6 +452,118 @@ final class BillExtractionWorkflowTest
                 Assert::same('MISSING_OPERANDS', $validations[ValidationRule::METER_CONSUMPTION]['reason']);
                 Assert::same(ValidationStatus::NOT_CHECKED, $validations[ValidationRule::NET_UNITS]['status']);
                 Assert::same(ValidationStatus::PASS, $validations[ValidationRule::SOLAR_PRODUCTION]['status']);
+            }),
+
+            TestResult::check('D-071 service-number outcomes: match is silent, mismatch/missing/not-configured force honest review', function (): void {
+                // MISMATCH: otherwise-clean bill carrying another service's number.
+                $ctx = self::processingBill();
+                [$result] = self::process($ctx, [['status' => 200, 'body' => self::ocrBody(self::liveShape([
+                    'context' => [
+                        'utility_provider' => 'DEMO GRID UTILITY LTD', 'tariff_category' => 'DOMESTIC (A)',
+                        'meter_type' => 'SMART SOLAR', 'contracted_load' => '3',
+                        'service_number' => '9999 8888-777', 'confidence' => 0.95,
+                    ],
+                ]))]]);
+
+                Assert::same(BillStatus::NEEDS_REVIEW, $result['bill']->status(), 'a foreign service number is never silently household data');
+                $codes = self::flagCodes($ctx['bill']);
+                Assert::same(['SERVICE_NUMBER_MISMATCH'], $codes);
+                Assert::same('99998888777', self::billRow($ctx['bill'])['service_number'], 'the extracted value is preserved (canonical) for review, never replaced');
+                Assert::same('9999 8888-777', self::draftRow($ctx['bill'])['service_number'], 'the draft snapshot keeps the raw provider string');
+
+                // MISSING on the bill (household IS configured): honest review.
+                $ctx2 = self::processingBill();
+                [$result2] = self::process($ctx2, [['status' => 200, 'body' => self::ocrBody(self::liveShape([
+                    'context' => [
+                        'utility_provider' => 'DEMO GRID UTILITY LTD', 'tariff_category' => 'DOMESTIC (A)',
+                        'meter_type' => 'SMART SOLAR', 'contracted_load' => '3',
+                        'service_number' => null, 'confidence' => 0.95,
+                    ],
+                ]))]]);
+
+                Assert::same(BillStatus::NEEDS_REVIEW, $result2['bill']->status(), 'ownership was NOT validated — no fabricated pass');
+                Assert::same(['SERVICE_NUMBER_MISSING'], self::flagCodes($ctx2['bill']));
+
+                // HOUSEHOLD_NOT_CONFIGURED: a perfectly matching number cannot
+                // confirm anything without a registered anchor.
+                $ctx3 = self::processingBill('b3', 'png', null);
+                [$result3] = self::process($ctx3, [['status' => 200, 'body' => self::ocrBody(self::liveShape())]]);
+
+                Assert::same(BillStatus::NEEDS_REVIEW, $result3['bill']->status());
+                Assert::same(['HOUSEHOLD_SERVICE_NOT_CONFIGURED'], self::flagCodes($ctx3['bill']));
+                Assert::same('10002000300', self::billRow($ctx3['bill'])['service_number'], 'values still persist verbatim for review');
+
+                // MATCH: the default fixture pair — zero ownership flags,
+                // bill is EXTRACTED (asserted by every other passing case).
+            }),
+
+            TestResult::check('D-071 no-bill-evidence gate: a provider "VALID" over zero bill data terminates honestly, values stay NULL', function (): void {
+                $ctx = self::processingBill();
+
+                // Logo-shaped annotation: assessment claims VALID (model error)
+                // but NOTHING period/energy/money shaped was extracted.
+                [$result] = self::process($ctx, [['status' => 200, 'body' => self::ocrBody(self::liveShape([
+                    'billing_period' => ['start' => null, 'end' => null, 'confidence' => null],
+                    'consumption' => ['consumption_kwh' => null, 'confidence' => null],
+                    'meter_evidence' => ['previous_meter_reading' => null, 'present_meter_reading' => null, 'confidence' => null],
+                    'solar' => [
+                        'previous_solar_reading' => null, 'present_solar_reading' => null,
+                        'solar_units_kwh' => null, 'net_units_kwh' => null, 'confidence' => null,
+                    ],
+                    'cost' => [
+                        'bill_amount' => null, 'arrears' => null, 'total_due' => null, 'energy_charges' => null,
+                        'fixed_charges' => null, 'customer_service_charges' => null, 'other_charges' => null,
+                        'taxes_adjustments' => null, 'confidence' => null,
+                    ],
+                    'context' => [
+                        'utility_provider' => 'SPMS', 'tariff_category' => null,
+                        'meter_type' => null, 'contracted_load' => null,
+                        'service_number' => null, 'confidence' => 0.9,
+                    ],
+                ]))]]);
+
+                Assert::same(BillStatus::UNCERTAIN, $result['bill']->status(), 'context-only "evidence" never becomes an extracted bill');
+
+                $bill = self::billRow($ctx['bill']);
+                Assert::same('UNCERTAIN', $bill['status']);
+                foreach (BillField::ALL as $field) {
+                    Assert::same(null, $bill[$field] ?? null, 'bills.' . $field . ' must stay NULL behind the gate');
+                }
+                Assert::same([], self::provenanceRows($ctx['bill']), 'nothing adopted, nothing provenanced');
+
+                $codes = self::flagCodes($ctx['bill']);
+                sort($codes);
+                Assert::same(
+                    [
+                        // the ordinary missing-value story is still recorded…
+                        'MISSING_BILLING_PERIOD',
+                        'MISSING_CONSUMPTION',
+                        'MISSING_METER_READINGS',
+                        // …plus the D-071 marker that the "usable" label
+                        // was overridden because nothing bill-shaped was
+                        // ever extracted.
+                        'NO_BILL_EVIDENCE',
+                    ],
+                    $codes
+                );
+
+                $draft = self::draftRow($ctx['bill']);
+                Assert::same('VALID', $draft['document_assessment'], 'the provider statement is preserved for audit, not rewritten');
+
+                // And the model's OWN honest NOT_A_BILL still wins untouched.
+                $ctx2 = self::processingBill();
+                [$result2] = self::process($ctx2, [['status' => 200, 'body' => self::ocrBody(self::liveShape([
+                    'document_assessment' => ['status' => 'NOT_A_BILL', 'reason' => 'brand logo, not a bill', 'confidence' => 0.97],
+                    'billing_period' => ['start' => null, 'end' => null, 'confidence' => null],
+                    'consumption' => ['consumption_kwh' => null, 'confidence' => null],
+                    'meter_evidence' => ['previous_meter_reading' => null, 'present_meter_reading' => null, 'confidence' => null],
+                    'solar' => ['previous_solar_reading' => null, 'present_solar_reading' => null, 'solar_units_kwh' => null, 'net_units_kwh' => null, 'confidence' => null],
+                    'cost' => ['bill_amount' => null, 'arrears' => null, 'total_due' => null, 'energy_charges' => null, 'fixed_charges' => null, 'customer_service_charges' => null, 'other_charges' => null, 'taxes_adjustments' => null, 'confidence' => null],
+                    'context' => ['utility_provider' => 'SPMS', 'tariff_category' => null, 'meter_type' => null, 'contracted_load' => null, 'service_number' => null, 'confidence' => null],
+                ]))]]);
+
+                Assert::same(BillStatus::NOT_A_BILL, $result2['bill']->status());
+                Assert::same([], self::flagCodes($ctx2['bill']), 'the assessment itself is the story — no double-reporting');
             }),
 
             TestResult::check('Mistral failure keeps the system recoverable: no persist, still PROCESSING, temp intact (T, AC)', function (): void {
@@ -618,7 +740,7 @@ final class BillExtractionWorkflowTest
                 $csrf = (string) AuthTesting::csrfFrom($login->body()['data'] ?? []);
 
                 try {
-                    AuthMiddleware::process(Request::create('POST', $path, headers: ['Cookie' => 'spms_session=' . $sessionToken]));
+                    AuthMiddleware::process(Request::create('POST', $path, headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $sessionToken]));
                     Assert::true(false, 'CSRF-less process must be rejected');
                 } catch (AppException $e) {
                     Assert::same('CSRF_REJECTED', $e->errorCode());

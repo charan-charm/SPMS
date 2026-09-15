@@ -17,7 +17,40 @@ use Tests\Support\Assert;
 use Tests\TestResult;
 
 $basePath = dirname(__DIR__);
+
+// D-071 — HARD database isolation: the automated suite runs ONLY against
+// the dedicated spms_test database, resolved through the trusted
+// SPMS_DB_TEST_* configuration group. The developer's REAL database and
+// the DEMO database are physically unreachable from a test process:
+// nothing a suite run creates, mutates or leaves behind can touch them.
+putenv('SPMS_DATA_ENVIRONMENT=test');
+
 Config::initialize($basePath);
+
+$testDatabase = (string) Config::get('DB_DATABASE');
+
+if ($testDatabase !== (string) Config::get('SPMS_DB_TEST_DATABASE') || $testDatabase === '') {
+    fwrite(STDERR, 'Test runner refused to start: expected DB_DATABASE to resolve to the configured test database.' . PHP_EOL);
+    exit(1);
+}
+
+// Provision the test database deterministically: drop + recreate + apply
+// the identical migration set, so every run starts from a clean schema
+// and no suite can depend on residue (or contaminate anything else).
+$migrateCmd = sprintf(
+    '%s %s --environment=test --fresh --confirm=DROP:%s',
+    escapeshellarg(PHP_BINARY),
+    escapeshellarg($basePath . '/database/migrate.php'),
+    escapeshellarg($testDatabase)
+);
+exec($migrateCmd . ' 2>&1', $migrateOutput, $migrateStatus);
+
+if ($migrateStatus !== 0) {
+    fwrite(STDERR, "Test database provisioning failed:\n" . implode("\n", $migrateOutput) . PHP_EOL);
+    exit(1);
+}
+
+echo "Test database `{$testDatabase}` provisioned (" . count($migrateOutput) . " runner lines)" . PHP_EOL;
 
 // W1.1 — HARD test isolation: the automated suite must never be able to
 // produce a real Brevo API request, regardless of the developer's local
@@ -96,6 +129,7 @@ $suites = [
         Tests\Workflow\HouseholdProfileWorkflowTest::class,
         Tests\Workflow\BillUploadWorkflowTest::class,
         Tests\Workflow\BillExtractionWorkflowTest::class,
+        Tests\Workflow\BillReadWorkflowTest::class,
     ],
 ];
 

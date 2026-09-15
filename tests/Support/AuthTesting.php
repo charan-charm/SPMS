@@ -51,6 +51,22 @@ final class AuthTesting
             'MAIL_TRANSPORT' => 'file',
             'MAIL_FILE_DIR' => sys_get_temp_dir() . '/spms-w1-mail-' . bin2hex(random_bytes(4)),
         ]);
+
+        // D-071 fail-closed choke point: any DB-touching fixture path must
+        // prove it is executing inside the dedicated test database before
+        // the first write. If this ever throws, the runner's pin was lost
+        // and the suite MUST stop rather than touch REAL or DEMO.
+        if (Config::get('SPMS_DATA_ENVIRONMENT') !== 'test') {
+            throw new \RuntimeException('Test fixtures require SPMS_DATA_ENVIRONMENT=test.');
+        }
+
+        $current = (string) \App\Support\Database::connection()->query('SELECT DATABASE()')->fetchColumn();
+
+        if ($current !== (string) Config::get('SPMS_DB_TEST_DATABASE')) {
+            throw new \RuntimeException(
+                'Test process is connected to `' . $current . '` instead of the isolated test database.'
+            );
+        }
     }
 
     /**
@@ -111,7 +127,7 @@ final class AuthTesting
             return null;
         }
 
-        if (preg_match('/spms_session=([0-9a-f]{64})/', $cookie, $matches) === 1) {
+        if (preg_match('/' . preg_quote(\App\Support\Security\SessionCookie::name(), '/') . '=([0-9a-f]{64})/', $cookie, $matches) === 1) {
             return $matches[1];
         }
 
@@ -180,19 +196,33 @@ final class AuthTesting
      * (real rows, FK-valid — the synthetic 'f6-hh-*' IDs can no longer
      * be referenced since migration 0007).
      *
+     * D-071: pass a service number to get a household with REGISTERED
+     * ownership (stored canonical, exactly like the API path); omitting
+     * it models the honest not-configured state.
+     *
      * @return array{account: Account, household_id: string, context: \App\Security\AuthContext}
      */
-    public static function householdFixture(?string $label = null): array
+    public static function householdFixture(?string $label = null, ?string $serviceNumber = null): array
     {
         $account = self::activateAccount();
 
-        $householdId = (new \App\Domain\Household\HouseholdService())->createForAccount(
+        $householdService = new \App\Domain\Household\HouseholdService();
+
+        $householdId = $householdService->createForAccount(
             $account,
             $label ?? 'w3-test-' . bin2hex(random_bytes(4)),
             'Asia/Kolkata',
             null,
             new \DateTimeImmutable('now', new \DateTimeZone('UTC'))
         )['household']->id();
+
+        if ($serviceNumber !== null) {
+            $householdService->updateProfile(
+                $account,
+                ['service_number' => $serviceNumber],
+                new \DateTimeImmutable('now', new \DateTimeZone('UTC'))
+            );
+        }
 
         return [
             'account' => $account,

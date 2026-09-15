@@ -137,7 +137,7 @@ final class AuthSecurityTest
                 ));
                 $session = self::controller()->session(AuthMiddleware::process(Request::create(
                     'GET', '/api/v1/auth/session',
-                    headers: ['Cookie' => 'spms_session=' . $rawToken],
+                    headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken],
                     ipAddress: self::ip()
                 )));
 
@@ -177,7 +177,7 @@ final class AuthSecurityTest
                 // authenticated, so its CSRF token is required (D-052).
                 $secondLogin = self::controller()->login(AuthMiddleware::process(Request::create(
                     'POST', '/api/v1/auth/login',
-                    headers: ['Cookie' => 'spms_session=' . $rawToken, 'X-SPMS-CSRF' => (string) $csrf],
+                    headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken, 'X-SPMS-CSRF' => (string) $csrf],
                     body: ['email' => (string) $email, 'password' => 'correct-horse-battery'],
                     ipAddress: self::ip()
                 )));
@@ -202,7 +202,7 @@ final class AuthSecurityTest
                 $pdo->prepare("UPDATE sessions SET expires_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE session_token_hash = ?")
                     ->execute([$hash]);
 
-                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => 'spms_session=' . $rawToken], ipAddress: self::ip());
+                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken], ipAddress: self::ip());
                 $context = AuthMiddleware::process($request)->authContext();
                 Assert::true($context !== null && !$context->isAuthenticated(), 'idle-expired session must not authenticate');
 
@@ -215,22 +215,22 @@ final class AuthSecurityTest
                 $pdo->prepare("UPDATE sessions SET revoked_at = NULL, expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 DAY), absolute_expires_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE session_token_hash = ?")
                     ->execute([$hash]);
 
-                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => 'spms_session=' . $rawToken], ipAddress: self::ip());
+                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken], ipAddress: self::ip());
                 $context = AuthMiddleware::process($request)->authContext();
                 Assert::true($context !== null && !$context->isAuthenticated(), 'absolute-expired session must not authenticate');
 
                 // Explicit revocation.
                 $pdo->prepare('UPDATE sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_token_hash = ?')->execute([$hash]);
-                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => 'spms_session=' . $rawToken], ipAddress: self::ip());
+                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken], ipAddress: self::ip());
                 $context = AuthMiddleware::process($request)->authContext();
                 Assert::true($context !== null && !$context->isAuthenticated(), 'revoked session must not authenticate');
             }),
 
             TestResult::check('Authentication bypass attempts fail closed', function (): void {
                 $attempts = [
-                    'spms_session=' . str_repeat('f', 64),
-                    'spms_session=not-even-hex',
-                    'spms_session=',
+                    (\App\Support\Security\SessionCookie::name() . '=') . str_repeat('f', 64),
+                    \App\Support\Security\SessionCookie::name() . '=not-even-hex',
+                    \App\Support\Security\SessionCookie::name() . '=',
                 ];
 
                 foreach ($attempts as $cookie) {
@@ -249,9 +249,40 @@ final class AuthSecurityTest
                     (new AccountRepository())->updateStatus($disabled);
                 }
 
-                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => 'spms_session=' . $rawToken], ipAddress: self::ip());
+                $request = Request::create('GET', '/api/v1/auth/session', headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken], ipAddress: self::ip());
                 $context = AuthMiddleware::process($request)->authContext();
                 Assert::true($context !== null && !$context->isAuthenticated(), 'disabled accounts must not authenticate');
+            }),
+
+            TestResult::check('A valid session token presented under a foreign data-environment cookie name stays anonymous (D-071)', function (): void {
+                $email = null; $rawToken = null; $csrf = null;
+                self::activeAccountWithLogin($email, $rawToken, $csrf);
+
+                // The server-selected name authenticates…
+                $ok = AuthMiddleware::process(Request::create(
+                    'GET', '/api/v1/auth/session',
+                    headers: ['Cookie' => \App\Support\Security\SessionCookie::name() . '=' . $rawToken],
+                    ipAddress: self::ip()
+                ))->authContext();
+                Assert::true($ok !== null && $ok->isAuthenticated(), 'own-environment cookie must authenticate');
+
+                // …the SAME token under the other environments' names does
+                // not. Port-agnostic cookies plus distinct names keep a real
+                // browser session and a demo browser session from crossing
+                // over even when both servers share one host (docs/10 D-071;
+                // the primary boundary remains the physical database).
+                foreach (['spms_session', 'spms_demo_session', 'spms_test_session'] as $name) {
+                    if ($name === \App\Support\Security\SessionCookie::name()) {
+                        continue;
+                    }
+
+                    $foreign = AuthMiddleware::process(Request::create(
+                        'GET', '/api/v1/auth/session',
+                        headers: ['Cookie' => $name . '=' . $rawToken],
+                        ipAddress: self::ip()
+                    ))->authContext();
+                    Assert::true($foreign !== null && !$foreign->isAuthenticated(), 'token under ' . $name . ' must stay anonymous');
+                }
             }),
 
             TestResult::check('Login throttling: bounded failures, cooldown, no permanent lockout (D-053)', function (): void {

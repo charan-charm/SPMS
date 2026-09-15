@@ -173,7 +173,7 @@ final class OwnershipSecurityTest
                     $request = AuthMiddleware::process(Request::create(
                         'GET',
                         '/api/v1/intelligence/insights',
-                        headers: ['Cookie' => 'spms_session=' . $rawToken]
+                        headers: ['Cookie' => (\App\Support\Security\SessionCookie::name() . '=') . $rawToken]
                     ));
 
                     try {

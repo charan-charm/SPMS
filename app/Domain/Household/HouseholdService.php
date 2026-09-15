@@ -105,7 +105,7 @@ final class HouseholdService
      * honest 404: this operation never creates implicitly, redirects,
      * or manufactures readiness.
      *
-     * @param array{label?: ?string, timezone?: ?string, location_label?: ?string} $changes
+     * @param array{label?: ?string, timezone?: ?string, location_label?: ?string, service_number?: ?string} $changes
      *        supplied keys only; a nullable key set to '' clears it
      *
      * @return array{household: Household, membership: Membership}
@@ -127,6 +127,7 @@ final class HouseholdService
                 array_key_exists('label', $changes) ? $changes['label'] : null,
                 array_key_exists('timezone', $changes) ? $changes['timezone'] : null,
                 array_key_exists('location_label', $changes) ? $changes['location_label'] : null,
+                array_key_exists('service_number', $changes) ? $changes['service_number'] : null,
                 $now
             );
         } catch (InvalidArgumentException $e) {
@@ -135,7 +136,8 @@ final class HouseholdService
 
         $noChange = $updated->label() === $context['household']->label()
             && $updated->timezone() === $context['household']->timezone()
-            && $updated->locationLabel() === $context['household']->locationLabel();
+            && $updated->locationLabel() === $context['household']->locationLabel()
+            && $updated->serviceNumber() === $context['household']->serviceNumber();
 
         if (!$noChange) {
             $this->households->updateProfile($updated);
@@ -153,7 +155,9 @@ final class HouseholdService
         $message = $e->getMessage();
         $field = str_starts_with($message, 'location_label')
             ? 'location_label'
-            : (str_starts_with($message, 'label') ? 'label' : 'timezone');
+            : (str_starts_with($message, 'service_number')
+                ? 'service_number'
+                : (str_starts_with($message, 'label') ? 'label' : 'timezone'));
 
         return new AppException('VALIDATION_ERROR', $message, 422, ['field' => $field]);
     }

@@ -38,7 +38,9 @@ final class HouseholdTest
 
                 Assert::same(null, $public['label']);
                 Assert::same(null, $public['location_label']);
-                Assert::same(['id', 'label', 'timezone', 'location_label', 'status'], array_keys($public));
+                // D-071 adds the registered service number to the own-household view.
+                Assert::same(['id', 'label', 'timezone', 'location_label', 'service_number', 'status'], array_keys($public));
+                Assert::same(null, $public['service_number']);
             }),
 
             TestResult::check('Household model rejects invalid timezone, oversized or blank labels', function (): void {
@@ -102,7 +104,7 @@ final class HouseholdTest
                 $household = Household::create('Home', 'Asia/Kolkata', 'City', self::now());
 
                 // Null arguments keep current values; partial modification works.
-                $edited = $household->withProfile(null, 'Europe/Berlin', null, self::now());
+                $edited = $household->withProfile(null, 'Europe/Berlin', null, null, self::now());
                 Assert::same($household->id(), $edited->id(), 'profile modification never re-keys the household');
                 Assert::same(Household::STATUS_ACTIVE, $edited->status(), 'status is not modifiable here');
                 Assert::same('Home', $edited->label());
@@ -111,31 +113,47 @@ final class HouseholdTest
                 Assert::same($household->createdAt(), $edited->createdAt(), 'created_at is historical truth');
 
                 // Explicit empty strings clear the nullable display fields.
-                $cleared = $edited->withProfile('', null, '', self::now());
+                $cleared = $edited->withProfile('', null, '', null, self::now());
                 Assert::same(null, $cleared->label());
                 Assert::same(null, $cleared->locationLabel());
                 Assert::same('Europe/Berlin', $cleared->timezone());
 
+                // D-071: the service number is stored canonical, cleared
+                // by '' like the other optional fields, and never coerced
+                // from near-misses.
+                $registered = $household->withProfile(null, null, null, '123-456-789', self::now());
+                Assert::same('123456789', $registered->serviceNumber(), 'decorative separators fold, content stays');
+                Assert::same('Home', $registered->label(), 'registering a service number never disturbs other fields');
+                $reregistered = $registered->withProfile(null, null, null, '123456789', self::now());
+                Assert::same('123456789', $reregistered->serviceNumber());
+                Assert::same(null, $registered->withProfile(null, null, null, '', self::now())->serviceNumber(), "'' clears it honestly");
+
                 // Same field semantics as creation — validated, never coerced.
                 Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
-                    $household->withProfile(null, 'Not/AZone/Nope', null, self::now());
+                    $household->withProfile(null, 'Not/AZone/Nope', null, null, self::now());
                 });
                 Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
-                    $household->withProfile(null, '', null, self::now());
+                    $household->withProfile(null, '', null, null, self::now());
                 });
                 Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
-                    $household->withProfile(str_repeat('l', 121), null, null, self::now());
+                    $household->withProfile(str_repeat('l', 121), null, null, null, self::now());
                 });
                 Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
-                    $household->withProfile(null, str_repeat('Z', 65), null, self::now());
+                    $household->withProfile(null, str_repeat('Z', 65), null, null, self::now());
                 });
                 Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
-                    $household->withProfile(null, null, str_repeat('L', 191), self::now());
+                    $household->withProfile(null, null, str_repeat('L', 191), null, self::now());
+                });
+                Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
+                    $household->withProfile(null, null, null, 'ab@#$%', self::now(), );
+                });
+                Assert::throws(\InvalidArgumentException::class, static function () use ($household): void {
+                    $household->withProfile(null, null, null, '12', self::now());
                 });
 
                 // Lifecycle is independent of profile editing.
                 $pending = $household->withStatus(Household::STATUS_DELETION_PENDING, self::now());
-                Assert::same(Household::STATUS_DELETION_PENDING, $pending->withProfile('New', null, null, self::now())->status());
+                Assert::same(Household::STATUS_DELETION_PENDING, $pending->withProfile('New', null, null, null, self::now())->status());
             }),
 
             TestResult::check('W3.1 onboarding readiness derives facts and never invents numbers', function (): void {

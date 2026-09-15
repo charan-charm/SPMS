@@ -15,9 +15,16 @@ final class DatabaseConnectionTest
     public static function run(): array
     {
         return [
-            TestResult::check('PDO connects to configured MariaDB database', function (): void {
+            TestResult::check('PDO connects to the configured MariaDB test database (D-071)', function (): void {
                 $pdo = Database::connection();
                 Assert::true($pdo instanceof PDO, 'connection() did not return PDO');
+
+                $current = (string) $pdo->query('SELECT DATABASE()')->fetchColumn();
+                \Tests\Support\Assert::same(
+                    (string) \App\Support\Config::get('SPMS_DB_TEST_DATABASE'),
+                    $current,
+                    'automated tests must execute inside the dedicated test database, never REAL or DEMO'
+                );
             }),
 
             TestResult::check('Prepared statement SELECT 1 executes', function (): void {
