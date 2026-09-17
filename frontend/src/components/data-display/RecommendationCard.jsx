@@ -1,9 +1,12 @@
+import { useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { Card } from '../ui/card'
 import { DataNatureBadge } from '../data-display/DataNatureBadge'
 import { ConfidenceIndicator } from '../data-display/ConfidenceIndicator'
 import { Button } from '../ui/button'
 import { ChevronDown, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { DURATION, EASE } from '../../lib/motion'
 
 /**
  * RecommendationCard (docs/12 §19) — presents one backend-provided
@@ -44,6 +47,8 @@ export function RecommendationCard({
     onFeedback = null,
     className,
 }) {
+    const [whyOpen, setWhyOpen] = useState(false)
+
     return (
         <Card className={cn('flex flex-col gap-3', className)}>
             {(category || impact) && (
@@ -79,24 +84,49 @@ export function RecommendationCard({
             )}
 
             {why && (
-                <details className="group rounded-md border border-border bg-surface-alt px-3 py-2">
-                    <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium text-heading [&::-webkit-details-marker]:hidden">
-                        Why this recommendation?
+                <div className="rounded-md border border-border bg-surface-alt px-3 py-2">
+                    <button
+                        type="button"
+                        onClick={() => setWhyOpen((prev) => !prev)}
+                        aria-expanded={whyOpen}
+                        aria-controls="why-recommendation-details"
+                        className="flex w-full cursor-pointer items-center justify-between text-left text-sm font-medium text-heading focus:outline-none"
+                    >
+                        <span>Why this recommendation?</span>
                         <ChevronDown
-                            className="size-4 text-muted transition-transform duration-200 group-open:rotate-180"
+                            className={cn(
+                                'size-4 text-muted transition-transform duration-200',
+                                whyOpen && 'rotate-180',
+                            )}
                             aria-hidden="true"
                         />
-                    </summary>
-                    <dl className="mt-3 space-y-2 text-xs">
-                        {why.facts?.map((fact) => (
-                            <div key={fact.label} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
-                                <dt className="font-medium text-muted sm:w-40 sm:shrink-0">{fact.label}</dt>
-                                <dd className="text-body">{fact.value}</dd>
-                            </div>
-                        ))}
-                    </dl>
-                    {why.explanation && <p className="mt-3 text-xs text-body">{why.explanation}</p>}
-                </details>
+                    </button>
+                    <AnimatePresence initial={false}>
+                        {whyOpen && (
+                            <motion.div
+                                id="why-recommendation-details"
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{
+                                    duration: DURATION.expand / 1000,
+                                    ease: EASE.standard,
+                                }}
+                                className="overflow-hidden"
+                            >
+                                <dl className="mt-3 space-y-2 border-t border-border/60 pt-2.5 text-xs">
+                                    {why.facts?.map((fact) => (
+                                        <div key={fact.label} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
+                                            <dt className="font-medium text-muted sm:w-40 sm:shrink-0">{fact.label}</dt>
+                                            <dd className="text-body">{fact.value}</dd>
+                                        </div>
+                                    ))}
+                                </dl>
+                                {why.explanation && <p className="mt-3 text-xs text-body">{why.explanation}</p>}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
             )}
 
             {onFeedback && (

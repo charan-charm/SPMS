@@ -88,29 +88,35 @@ export function LeafBackdrop() {
         >
             {/* —— Top-right bunch: the exact bottom-left bouquet rotated
                 180° to hug the content area's top-right corner (below the
-                top bar). —— */}
-            <svg
-                viewBox="0 0 400 400"
-                focusable="false"
-                className="spms-leaf-sway-a absolute -top-12 -right-12 h-[260px] w-[260px] opacity-[var(--leaf-opacity)] sm:-top-14 sm:-right-14 sm:h-[340px] sm:w-[340px] lg:-top-16 lg:-right-16 lg:h-[440px] lg:w-[440px]"
-            >
-                {TOP_RIGHT_BUNCH.map((leaf, index) => (
-                    <BunchLeaf key={index} {...leaf} />
-                ))}
-            </svg>
+                top bar). The zoom wrapper lets the bunch swell gently while
+                a loading state is active (body.spms-loading-active) without
+                interfering with the sway animation. —— */}
+            <div className="spms-leaf-zoom absolute -top-12 -right-12 h-[260px] w-[260px] sm:-top-14 sm:-right-14 sm:h-[340px] sm:w-[340px] lg:-top-16 lg:-right-16 lg:h-[440px] lg:w-[440px]">
+                <svg
+                    viewBox="0 0 400 400"
+                    focusable="false"
+                    className="spms-leaf-sway-a h-full w-full opacity-[var(--leaf-opacity)]"
+                >
+                    {TOP_RIGHT_BUNCH.map((leaf, index) => (
+                        <BunchLeaf key={index} {...leaf} />
+                    ))}
+                </svg>
+            </div>
 
             {/* —— Bottom-left bunch: bouquet hugging the content area's
                 bottom-left corner, leaves elongating up/right into the
                 page. —— */}
-            <svg
-                viewBox="0 0 400 400"
-                focusable="false"
-                className="spms-leaf-sway-b absolute -bottom-12 -left-12 h-[260px] w-[260px] opacity-[var(--leaf-opacity)] sm:-bottom-14 sm:-left-14 sm:h-[340px] sm:w-[340px] lg:-bottom-16 lg:-left-16 lg:h-[440px] lg:w-[440px]"
-            >
-                {BOTTOM_LEFT_BUNCH.map((leaf, index) => (
-                    <BunchLeaf key={index} {...leaf} />
-                ))}
-            </svg>
+            <div className="spms-leaf-zoom absolute -bottom-12 -left-12 h-[260px] w-[260px] sm:-bottom-14 sm:-left-14 sm:h-[340px] sm:w-[340px] lg:-bottom-16 lg:-left-16 lg:h-[440px] lg:w-[440px]">
+                <svg
+                    viewBox="0 0 400 400"
+                    focusable="false"
+                    className="spms-leaf-sway-b h-full w-full opacity-[var(--leaf-opacity)]"
+                >
+                    {BOTTOM_LEFT_BUNCH.map((leaf, index) => (
+                        <BunchLeaf key={index} {...leaf} />
+                    ))}
+                </svg>
+            </div>
         </div>
     )
 }

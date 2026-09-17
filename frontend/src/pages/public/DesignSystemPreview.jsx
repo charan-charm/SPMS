@@ -22,6 +22,10 @@ import {
     CardTitle,
     CardDescription,
     CardContent,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogTitle,
 } from '../../components/ui'
 import {
     MetricCard,
@@ -34,7 +38,7 @@ import {
     ChartContainer,
     SolarDayArc,
 } from '../../components/data-display'
-import { EmptyState, ErrorState, LoadingSkeleton, LoadingState } from '../../components/feedback'
+import { EmptyState, ErrorState, LoadingSkeleton, LoadingState, SPMSLoadingState } from '../../components/feedback'
 import { ThemeSwitch } from '../../components/navigation/ThemeSwitch'
 import { useTheme } from '../../hooks/useTheme'
 
@@ -53,6 +57,8 @@ function toHHmm(minutes) {
 }
 export function DesignSystemPreview() {
     const { theme, toggleTheme } = useTheme()
+    const [loadingPreviewOpen, setLoadingPreviewOpen] = useState(false)
+    const [loadingPreviewActive, setLoadingPreviewActive] = useState(true)
     const [solarMinutes, setSolarMinutes] = useState(645)
 
     return (
@@ -74,10 +80,20 @@ export function DesignSystemPreview() {
             <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-md border border-info/40 bg-info/10 px-4 py-3">
                 <div className="flex items-center gap-2 text-sm font-semibold text-info">
                     <FlaskConical className="size-4" aria-hidden="true" />
-                    F3 refinements on this page: theme switch (dev-only)
+                    Dev-only controls on this page: theme switch · loading-state preview
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     <ThemeSwitch />
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                            setLoadingPreviewActive(true)
+                            setLoadingPreviewOpen(true)
+                        }}
+                    >
+                        Test Loading State
+                    </Button>
                     <Button variant="secondary" size="sm" asChild>
                         <Link to="/dev/dashboard">Dashboard shell preview</Link>
                     </Button>
@@ -353,6 +369,33 @@ export function DesignSystemPreview() {
                     </div>
                 </div>
             </div>
+
+            {/* Loading-state preview — dev-only test control for the reusable
+                SPMSLoadingState; production builds never include this page.
+                "Finish Loading" drives the real isLoading=false departure. */}
+            <Dialog open={loadingPreviewOpen} onOpenChange={setLoadingPreviewOpen}>
+                <DialogContent className="h-[calc(100vh-2rem)] max-w-none bg-background p-0">
+                    <DialogTitle className="sr-only">Loading state preview</DialogTitle>
+                    <DialogDescription className="sr-only">
+                        Full-screen preview of the reusable SPMS loading state component.
+                    </DialogDescription>
+                    <SPMSLoadingState
+                        className="h-full"
+                        isLoading={loadingPreviewActive}
+                        onExited={() => setLoadingPreviewOpen(false)}
+                    />
+                    <div className="absolute inset-x-0 bottom-5 flex justify-center">
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => setLoadingPreviewActive(false)}
+                            disabled={!loadingPreviewActive}
+                        >
+                            Finish Loading
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </main>
     )
 }

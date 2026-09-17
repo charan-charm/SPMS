@@ -49,6 +49,9 @@
     --spms-chart-estimated: #F59E0B;
     --spms-chart-stale: #9CA3AF;
     --spms-chart-demo: #8B5CF6;
+
+    /* Public landing leaf frame opacity (less transparent / higher opacity in light theme) */
+    --spms-landing-leaf-opacity: 0.72;
 }
 
 /* Elevation (docs/04 §5: levels 0/1/2 — restrained, subtle) */
@@ -85,6 +88,9 @@
 
     --spms-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --spms-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+    /* Public landing leaf frame opacity — dark theme */
+    --spms-landing-leaf-opacity: 0.12;
 }
 
 @theme inline {
@@ -139,11 +145,28 @@
     --font-display: var(--spms-font-main);
 }
 
+html,
+body,
+* {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    background: transparent !important;
+}
+
 body {
     font-family: var(--font-body);
     background-color: var(--spms-background);
     color: var(--spms-body);
     transition: background-color 250ms ease, color 250ms ease;
+    overflow-x: hidden;
 }
 
 /*
@@ -183,6 +206,7 @@ body {
  * scaling, bouncing, pulsing, or spinning.
  */
 @keyframes spms-leaf-sway-a {
+
     0%,
     100% {
         transform: translate(0px, 0px) rotate(0deg);
@@ -194,6 +218,7 @@ body {
 }
 
 @keyframes spms-leaf-sway-b {
+
     0%,
     100% {
         transform: translate(0px, 0px) rotate(0deg);
@@ -216,6 +241,7 @@ body {
 
 /* Reduced motion: freeze all foliage completely, keep it visible. */
 @media (prefers-reduced-motion: reduce) {
+
     .spms-leaf-sway-a,
     .spms-leaf-sway-b {
         animation: none;
@@ -238,6 +264,23 @@ body {
 
     [data-theme='dark'] .spms-leaf-layer {
         --leaf-opacity: 0.003;
+    }
+}
+
+/*
+ * PublicLandingLeaves — exactly 3-leaf silhouettes in the top-right
+ * and bottom-left viewport corners. Fixed-position, persistent while
+ * scrolling all landing sections. Opacity var defined in :root above.
+ */
+
+/* Mobile: slightly reduce leaf opacity */
+@media (max-width: 640px) {
+    :root {
+        --spms-landing-leaf-opacity: 0.4;
+    }
+
+    [data-theme='dark'] {
+        --spms-landing-leaf-opacity: 0.09;
     }
 }
 
@@ -283,6 +326,7 @@ body {
    document-wide reduced-motion guard below already collapses durations;
    this keeps that guarantee independent of rule order. */
 @media (prefers-reduced-motion: reduce) {
+
     .spms-theme-switching,
     .spms-theme-switching *,
     .spms-theme-switching *::before,
@@ -342,13 +386,23 @@ body {
 
 /* Shell transition keyframes (docs/12 §13: drawer 200–300ms) */
 @keyframes spms-fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 @keyframes spms-slide-in-left {
-    from { transform: translateX(-100%); }
-    to { transform: translateX(0); }
+    from {
+        transform: translateX(-100%);
+    }
+
+    to {
+        transform: translateX(0);
+    }
 }
 
 /*
@@ -384,11 +438,135 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
     *,
     *::before,
     *::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
+    }
+}
+
+/*
+ * Travelling-sun loading state (SPMSLoadingState) & Landing Hero Ambience —
+ * one glowing solar orb arrives from the top-right foliage, breathes at the
+ * center, and settles into calm solar illumination.
+ * Travel and scale run through Motion at the app root, whose
+ * MotionConfig reducedMotion="user" already skips transforms under
+ * prefers-reduced-motion; only the orb's glow breathe is CSS here, and it
+ * is frozen for reduced-motion users (static subtle glow remains).
+ */
+.spms-sun-orb-bloom {
+    opacity: 0.85;
+}
+
+[data-theme='dark'] .spms-sun-orb-bloom {
+    opacity: 1;
+}
+
+.spms-sun-orb-glow-breathe {
+    animation: spms-sun-orb-glow 2.6s ease-in-out infinite;
+}
+
+/* Slow, smooth ray rotation — the orb's one continuous motion. */
+.spms-sun-orb-rays {
+    animation: spms-sun-orb-rays-spin 16s linear infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+}
+
+@keyframes spms-sun-orb-rays-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes spms-sun-orb-glow {
+
+    0%,
+    100% {
+        opacity: 0.85;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    .spms-sun-orb-glow-breathe,
+    .spms-sun-orb-rays {
+        animation: none;
+    }
+}
+
+/*
+ * Loading-active leaf treatment (owner-refined) — TWO independent pieces:
+ *
+ * 1. body.spms-loading-active (whole loading lifecycle): raises the
+ *    EXISTING leaf layer above the loading wash (z-index 46 > overlay 45,
+ *    below dialogs 50) so the orb genuinely starts and ends behind the
+ *    foliage. Released only when the overlay unmounts.
+ *
+ * 2. body.spms-leaf-emphasis (arrival + center only): the visual emphasis
+ *    — an extremely restrained 1.02 swell and a gentle opacity lift. It
+ *    is released as the departure BEGINS so the leaves softly recede
+ *    while the sun travels home. The leaf FILL never changes in dark
+ *    theme (no dark→light color interpolation is possible); dark leaves
+ *    are emphasized by opacity only, on their normal approved fill.
+ *    Light theme keeps its approved subtle green deepening. Opacity,
+ *    fill, and scale all transition smoothly (opacity via a dedicated
+ *    transition — custom-property changes alone never animate).
+ */
+.spms-loading-active .spms-leaf-layer {
+    z-index: 46;
+}
+
+.spms-leaf-layer svg {
+    transition: opacity 1200ms ease;
+}
+
+.spms-leaf-fill {
+    transition: fill 1200ms ease;
+}
+
+.spms-leaf-zoom {
+    transition: transform 1400ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+}
+
+.spms-leaf-emphasis .spms-leaf-zoom {
+    transform: scale(1.02);
+}
+
+.spms-leaf-emphasis .spms-leaf-layer {
+    --leaf-opacity: 0.95;
+}
+
+[data-theme='dark'] .spms-leaf-emphasis .spms-leaf-layer {
+    --leaf-opacity: 0.3;
+}
+
+.spms-leaf-emphasis .spms-leaf-fill {
+    fill: color-mix(in srgb, var(--spms-primary) 35%, var(--spms-primary-soft));
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spms-leaf-zoom {
+        transition: none;
+    }
+
+    .spms-leaf-emphasis .spms-leaf-zoom {
+        transform: none;
+    }
+}
+
+/* Landing-page anchor navigation (O1): calm smooth scroll to sections,
+   only where the visitor has not asked for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+    html {
+        scroll-behavior: smooth;
     }
 }

@@ -38,8 +38,8 @@ export function ThemeSwitch({ className }) {
             title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
             onClick={() => setTheme(isDark ? 'light' : 'dark')}
             className={cn(
-                'relative inline-flex shrink-0 cursor-pointer rounded-full border border-border bg-muted/15',
-                'transition-colors duration-150 hover:bg-muted/25',
+                'relative inline-flex shrink-0 cursor-pointer rounded-full border border-border',
+                'transition-colors duration-150 hover:border-border/80',
                 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus',
                 className,
             )}

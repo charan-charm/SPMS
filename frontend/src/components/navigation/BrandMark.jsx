@@ -1,14 +1,16 @@
 import { useTheme } from '../../hooks/useTheme'
 import { cn } from '../../lib/utils'
+import logoCompact from '../../../public/images/branding/logos/logo-compact.png'
+import logoDark from '../../../public/images/branding/logos/logo-dark.png'
+import logoLight from '../../../public/images/branding/logos/logo-light.png'
 
 /**
  * SPMS brand components (docs/04 §2 — logo identity unchanged in name
  * only; imagery is the owner-approved artwork, F3 final branding).
  *
- * All logo rendering uses the owner-approved image assets copied into
- * the frontend public asset strategy — no inline SVG, no CSS filters,
- * no recoloring, no cropping. Image paths stay web-relative
- * (`/images/...`); no filesystem paths in browser-facing code.
+ * All logo rendering uses the owner-approved image assets imported
+ * directly into the module bundle so singlefile static builds include
+ * them without protocol or path resolution issues.
  *
  * Theme awareness (single theme foundation — useTheme):
  * - variant="full" → logo-light.png in the light theme,
@@ -24,12 +26,10 @@ import { cn } from '../../lib/utils'
  * height/size props) so existing consumers continue to work unchanged.
  */
 
-const ASSET_BASE = '/images/branding/logos'
-
 export function SpmsMark({ className, size = 28 }) {
     return (
         <img
-            src={`${ASSET_BASE}/logo-compact.png`}
+            src={logoCompact}
             alt="SPMS — Solar Power Management System"
             height={size}
             width={size}
@@ -43,10 +43,7 @@ export function BrandMark({ variant = 'mark', className, height = 32 }) {
     const { resolvedTheme } = useTheme()
 
     if (variant === 'full') {
-        const src =
-            resolvedTheme === 'dark'
-                ? `${ASSET_BASE}/logo-dark.png`
-                : `${ASSET_BASE}/logo-light.png`
+        const src = resolvedTheme === 'dark' ? logoDark : logoLight
 
         return (
             <img

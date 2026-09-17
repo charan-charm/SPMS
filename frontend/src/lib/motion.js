@@ -16,6 +16,13 @@ export const DURATION = {
     chart: 500,
 }
 
+/**
+ * The standard easing as a Motion-accepted numeric cubic-bezier.
+ * (Motion v13 validates `ease` strings strictly and rejects the CSS
+ * form 'cubic-bezier(...)' at animation init; the array carries the
+ * identical curve. CSS consumers must not interpolate this value —
+ * it exists for JS transitions only.)
+ */
 export const EASE = {
-    standard: 'cubic-bezier(0.2, 0, 0, 1)',
+    standard: [0.2, 0, 0, 1],
 }

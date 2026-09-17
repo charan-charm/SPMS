@@ -10,7 +10,9 @@ import { PublicLayout } from '../layouts/PublicLayout'
 import { AuthLayout } from '../layouts/AuthLayout'
 import { AppLayout } from '../layouts/AppLayout'
 import { DesignSystemPreview } from '../pages/public/DesignSystemPreview'
+import { LandingPage } from '../pages/public/LandingPage'
 import { DashboardShellPreview } from '../pages/public/DashboardShellPreview'
+import { LoadingStateDemo } from '../pages/public/LoadingStateDemo'
 import { BillsWorkspacePreview } from '../pages/public/BillsWorkspacePreview'
 
 /**
@@ -34,7 +36,17 @@ function baseRoutes() {
     return [
         {
             element: <PublicLayout />,
-            children: publicRoutes.map((route) => placeholderRoute(route.path, route.name)),
+            children: [
+                ...publicRoutes.map((route) =>
+                    route.path === '/'
+                        ? { path: route.path, element: <LandingPage /> }
+                        : placeholderRoute(route.path, route.name),
+                ),
+                {
+                    path: '*',
+                    element: <FoundationPlaceholder routeName="Not found" path="*" notFound />,
+                },
+            ],
         },
         {
             element: <AuthLayout />,
@@ -47,19 +59,11 @@ function baseRoutes() {
                     ? { path: route.path, element: <EnergyBalancePage /> }
                     : route.path === '/energy/cost'
                         ? { path: route.path, element: <EnergyCostPage /> }
-                        : route.path === '/insights'
-                            ? { path: route.path, element: <InsightsPage /> }
-                            : route.path === '/bills'
-                                ? { path: route.path, element: <BillsPage /> }
-                                : placeholderRoute(route.path, route.name),
-            ),
-        },
-        {
-            path: '*',
-            element: (
-                <PublicLayout>
-                    <FoundationPlaceholder routeName="Not found" path="*" notFound />
-                </PublicLayout>
+                    : route.path === '/insights'
+                        ? { path: route.path, element: <InsightsPage /> }
+                        : route.path === '/bills'
+                            ? { path: route.path, element: <BillsPage /> }
+                            : placeholderRoute(route.path, route.name),
             ),
         },
     ]
@@ -72,23 +76,25 @@ export const router = createBrowserRouter([
     },
 ])
 
-// Dev-only preview router (F2/F3). The root renders the design-system
-// verification page; /dev/dashboard renders the dashboard shell preview
-// inside the real AppLayout. This branch is dead code in production builds.
+// Dev-only preview router (F2/F3). Public and application routes —
+// including the O1 landing page at / — render through baseRoutes;
+// design verification pages live under /dev/*. This branch is dead
+// code in production builds.
 const devRouter = import.meta.env.DEV
     ? createBrowserRouter([
           {
               errorElement: <RouteErrorBoundary />,
               children: [
-                  { path: '/', element: <DesignSystemPreview /> },
                   {
                       element: <AppLayout />,
                       children: [
-                            { path: '/dev/dashboard', element: <DashboardShellPreview /> },
-                            { path: '/dev/bills', element: <BillsWorkspacePreview /> },
-                        ],
+                          { path: '/dev/dashboard', element: <DashboardShellPreview /> },
+                          { path: '/dev/loading', element: <LoadingStateDemo /> },
+                          { path: '/dev/bills', element: <BillsWorkspacePreview /> },
+                      ],
                   },
                   ...baseRoutes(),
+                  { path: '/dev/design-system', element: <DesignSystemPreview /> },
               ],
           },
       ])
