@@ -80,18 +80,28 @@ const TOP_RIGHT_BUNCH = BOTTOM_LEFT_BUNCH.map(({ at, rotate, scale, minor }) => 
     minor,
 }))
 
-export function LeafBackdrop() {
+export function LeafBackdrop({ variant = 'default' }) {
+    const isOnboarding = variant === 'onboarding'
+
     return (
         <div
             aria-hidden="true"
-            className="spms-leaf-layer pointer-events-none fixed top-16 right-0 bottom-0 left-0 lg:left-64 -z-10 overflow-hidden"
+            className={
+                isOnboarding
+                    ? 'spms-leaf-layer spms-leaf-layer-onboarding pointer-events-none absolute inset-0 z-0 overflow-hidden'
+                    : 'spms-leaf-layer pointer-events-none fixed top-16 right-0 bottom-0 left-0 lg:left-64 -z-10 overflow-hidden'
+            }
         >
-            {/* —— Top-right bunch: the exact bottom-left bouquet rotated
-                180° to hug the content area's top-right corner (below the
-                top bar). The zoom wrapper lets the bunch swell gently while
-                a loading state is active (body.spms-loading-active) without
-                interfering with the sway animation. —— */}
-            <div className="spms-leaf-zoom absolute -top-12 -right-12 h-[260px] w-[260px] sm:-top-14 sm:-right-14 sm:h-[340px] sm:w-[340px] lg:-top-16 lg:-right-16 lg:h-[440px] lg:w-[440px]">
+            {/* —— Top-right bunch: bouquet hugging the top-right corner.
+                On onboarding, pushed deeper into the outer corner and sized
+                ambiently to frame the viewport without competing with the card. —— */}
+            <div
+                className={
+                    isOnboarding
+                        ? 'spms-leaf-zoom absolute -top-16 -right-16 sm:-top-20 sm:-right-20 lg:-top-24 lg:-right-24 h-[160px] w-[160px] sm:h-[240px] sm:w-[240px] lg:h-[300px] lg:w-[300px]'
+                        : 'spms-leaf-zoom absolute -top-12 -right-12 h-[260px] w-[260px] sm:-top-14 sm:-right-14 sm:h-[340px] sm:w-[340px] lg:-top-16 lg:-right-16 lg:h-[440px] lg:w-[440px]'
+                }
+            >
                 <svg
                     viewBox="0 0 400 400"
                     focusable="false"
@@ -103,10 +113,16 @@ export function LeafBackdrop() {
                 </svg>
             </div>
 
-            {/* —— Bottom-left bunch: bouquet hugging the content area's
-                bottom-left corner, leaves elongating up/right into the
-                page. —— */}
-            <div className="spms-leaf-zoom absolute -bottom-12 -left-12 h-[260px] w-[260px] sm:-bottom-14 sm:-left-14 sm:h-[340px] sm:w-[340px] lg:-bottom-16 lg:-left-16 lg:h-[440px] lg:w-[440px]">
+            {/* —— Bottom-left bunch: bouquet hugging the bottom-left corner.
+                On onboarding, anchored to the true left viewport edge (no sidebar)
+                with restrained dimensions to keep the central column unobstructed. —— */}
+            <div
+                className={
+                    isOnboarding
+                        ? 'spms-leaf-zoom absolute -bottom-16 -left-16 sm:-bottom-20 sm:-left-20 lg:-bottom-24 lg:-left-24 h-[160px] w-[160px] sm:h-[240px] sm:w-[240px] lg:h-[300px] lg:w-[300px]'
+                        : 'spms-leaf-zoom absolute -bottom-12 -left-12 h-[260px] w-[260px] sm:-bottom-14 sm:-left-14 sm:h-[340px] sm:w-[340px] lg:-bottom-16 lg:-left-16 lg:h-[440px] lg:w-[440px]'
+                }
+            >
                 <svg
                     viewBox="0 0 400 400"
                     focusable="false"

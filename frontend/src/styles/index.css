@@ -52,6 +52,11 @@
 
     /* Public landing leaf frame opacity (less transparent / higher opacity in light theme) */
     --spms-landing-leaf-opacity: 0.72;
+
+    /* Auth layout interactive grid glow (O2) - expanded aura with intense core */
+    --auth-grid-glow-core: color-mix(in srgb, var(--spms-primary) 58%, var(--spms-heading) 42%);
+    --auth-grid-glow: color-mix(in srgb, var(--spms-primary) 36%, var(--spms-border) 64%);
+    --auth-grid-aura: color-mix(in srgb, var(--spms-primary) 4.5%, transparent);
 }
 
 /* Elevation (docs/04 §5: levels 0/1/2 — restrained, subtle) */
@@ -91,6 +96,11 @@
 
     /* Public landing leaf frame opacity — dark theme */
     --spms-landing-leaf-opacity: 0.12;
+
+    /* Auth layout interactive grid glow — dark theme (O2) - expanded aura with intense core */
+    --auth-grid-glow-core: color-mix(in srgb, var(--spms-primary) 82%, #ffffff 18%);
+    --auth-grid-glow: color-mix(in srgb, var(--spms-primary) 52%, var(--spms-border) 48%);
+    --auth-grid-aura: color-mix(in srgb, var(--spms-primary) 7%, transparent);
 }
 
 @theme inline {
@@ -183,6 +193,25 @@ body {
 
 [data-theme='dark'] .spms-leaf-layer {
     --leaf-opacity: 0.09;
+}
+
+/* Onboarding ambient botanical framing: calm peripheral watermark */
+.spms-leaf-layer-onboarding {
+    --leaf-opacity: 0.35;
+}
+
+[data-theme='dark'] .spms-leaf-layer-onboarding {
+    --leaf-opacity: 0.05;
+}
+
+@media (max-width: 640px) {
+    .spms-leaf-layer-onboarding {
+        --leaf-opacity: 0.22;
+    }
+
+    [data-theme='dark'] .spms-leaf-layer-onboarding {
+        --leaf-opacity: 0.035;
+    }
 }
 
 /*
@@ -570,3 +599,51 @@ body {
         scroll-behavior: smooth;
     }
 }
+
+/*
+ * Browser autofill styling (docs/12 §17, Part C)
+ * Standardizes autofill appearance across Chrome/Edge/Safari to match
+ * SPMS surface and typography tokens, in both light and dark themes.
+ * Prevents the browser from applying high-contrast jarring yellow/blue
+ * backgrounds while keeping autofill fully functional.
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 1000px var(--spms-surface) inset !important;
+    box-shadow: 0 0 0 1000px var(--spms-surface) inset !important;
+    -webkit-text-fill-color: var(--spms-body) !important;
+    caret-color: var(--spms-body) !important;
+    transition: background-color 5000000s ease-in-out 0s;
+}
+
+[data-theme='dark'] input:-webkit-autofill,
+[data-theme='dark'] input:-webkit-autofill:hover,
+[data-theme='dark'] input:-webkit-autofill:focus,
+[data-theme='dark'] input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 1000px var(--spms-surface) inset !important;
+    box-shadow: 0 0 0 1000px var(--spms-surface) inset !important;
+    -webkit-text-fill-color: var(--spms-body) !important;
+    caret-color: var(--spms-body) !important;
+}
+
+/* Auth layout dynamic flowing energy field animation (docs/04, docs/12 §17) */
+@keyframes auth-grid-energy-flow {
+    0% {
+        filter: brightness(0.92);
+        opacity: 0.82;
+    }
+    50% {
+        filter: brightness(1.04);
+        opacity: 1;
+    }
+    100% {
+        filter: brightness(0.94);
+        opacity: 0.86;
+    }
+}
+
+.auth-grid-flow-field {
+    animation: auth-grid-energy-flow 6s ease-in-out infinite alternate;
+}
