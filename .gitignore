@@ -36,3 +36,8 @@ references/goodwe-sems-prototype/sems-output/
 # B2: private temporary bill uploads (docs/10 D-068). Source documents
 # are never version-controlled, never web-served, and expire on their own.
 storage/private/
+storage/mail/
+storage/logs/
+
+# Local scratch / probe files
+scratch/

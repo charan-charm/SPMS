@@ -29,6 +29,12 @@ final class Config
             $values = Env::parse((string) file_get_contents($envFile));
         }
 
+        $demoLocalFile = $basePath . DIRECTORY_SEPARATOR . '.env.demo.local';
+        if (is_readable($demoLocalFile)) {
+            $demoValues = Env::parse((string) file_get_contents($demoLocalFile));
+            $values = array_merge($values, $demoValues);
+        }
+
         // D-071: resolve the trusted REAL/DEMO/TEST data environment and
         // overlay its DB_* connection values BEFORE the singleton exists,
         // so the choice is immutable per process and never request-driven.
@@ -58,5 +64,10 @@ final class Config
         }
 
         return $instance->values[$key] ?? $default;
+    }
+
+    public static function all(): array
+    {
+        return self::$instance?->values ?? [];
     }
 }

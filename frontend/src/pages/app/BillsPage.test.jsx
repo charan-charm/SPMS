@@ -150,7 +150,7 @@ describe('BillsPage container', () => {
         await waitFor(() =>
             expect(screen.getByRole('heading', { name: /bill information extracted/i })).toBeInTheDocument(),
         )
-        expect(screen.getByText('145 kWh')).toBeInTheDocument()
+        expect(screen.getAllByText('145 kWh').length).toBeGreaterThanOrEqual(1)
         expect(screen.queryByText('Verified')).not.toBeInTheDocument()
         // 3 reads: initial, post-upload, post-process.
         expect(getBill.mock.calls.map((call) => call[0])).toEqual(['bill-1', 'bill-1', 'bill-1'])

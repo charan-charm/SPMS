@@ -16,32 +16,34 @@ namespace App\Domain\Household;
  *
  * Honesty rules honored here:
  * - UNAVAILABLE means the source does not exist in this system yet —
- *   it is NOT a queried-and-empty result and NOT a zero. Solar keeps
- *   the "not connected" vs "service unavailable" boundary inside one
- *   honest state because no integration exists to distinguish them
- *   (docs/04 §15 "Empty solar distinguishes not connected from
- *   unavailable"; docs/10 D-042 verified-bill honesty).
+ *   it is NOT a queried-and-empty result and NOT a zero. Solar distinguishes
+ *   "not connected", "connected", and "unavailable" truthfully.
  * - No numbers, percentages, scores or predictions are invented
  *   (docs/04 §15/§20 no-fake-values rules).
  */
 final class OnboardingReadiness
 {
-    /** Capability states for sources with no authoritative persistence yet. */
+    /** Capability states for sources. */
     public const SOURCE_UNAVAILABLE = 'UNAVAILABLE';
     public const ANALYSIS_LIMITED = 'LIMITED';
+    public const SOLAR_CONNECTED = 'CONNECTED';
+    public const SOLAR_NOT_CONFIGURED = 'NOT_CONFIGURED';
 
     /**
      * @return array<string, bool|string>
      */
-    public static function derive(bool $emailVerified, ?Household $activeHousehold): array
-    {
+    public static function derive(
+        bool $emailVerified,
+        ?Household $activeHousehold,
+        string $solarStatus = self::SOURCE_UNAVAILABLE
+    ): array {
         return [
             'email_verified' => $emailVerified,
             'timezone_set' => $activeHousehold !== null && trim($activeHousehold->timezone()) !== '',
             'location_provided' => $activeHousehold !== null
                 && $activeHousehold->locationLabel() !== null
                 && trim($activeHousehold->locationLabel()) !== '',
-            'solar' => self::SOURCE_UNAVAILABLE,
+            'solar' => $solarStatus,
             'verified_bills' => self::SOURCE_UNAVAILABLE,
             'analysis' => self::ANALYSIS_LIMITED,
         ];

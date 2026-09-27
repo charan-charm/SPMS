@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Domain\Bill\BillService;
 use App\Domain\Household\HouseholdService;
 use App\Domain\Household\OnboardingReadiness;
+use App\Repositories\SolarConnectionRepository;
 use App\Security\Authorization;
 use App\Support\AppException;
 use App\Support\Request;
@@ -40,7 +42,9 @@ use DateTimeImmutable;
 final class HouseholdController
 {
     public function __construct(
-        private readonly HouseholdService $households = new HouseholdService()
+        private readonly HouseholdService $households = new HouseholdService(),
+        private readonly SolarConnectionRepository $solarConnections = new SolarConnectionRepository(),
+        private readonly BillService $billService = new BillService()
     ) {
     }
 
@@ -51,7 +55,25 @@ final class HouseholdController
     {
         $account = Authorization::requireAccount($request);
         $context = $this->households->activeHouseholdFor($account);
+
+        // O3: In DEMO environment (spms_demo), automatically guarantee the
+        // prepared demonstration household exists so mentor/evaluator has zero friction.
+        if ($context === null && \App\Support\Database::currentProfile() === \App\Support\DataEnvironments::DEMO) {
+            $context = $this->households->ensureDemoHouseholdForAccount(
+                $account,
+                new DateTimeImmutable('now', new \DateTimeZone('UTC'))
+            );
+        }
+
         $public = $account->toPublicArray();
+
+        $solarStatus = OnboardingReadiness::SOURCE_UNAVAILABLE;
+        if ($context !== null) {
+            $conn = $this->solarConnections->findByHouseholdId($context['household']->id());
+            if ($conn !== null && $conn['connection_status'] === 'CONNECTED') {
+                $solarStatus = OnboardingReadiness::SOLAR_CONNECTED;
+            }
+        }
 
         return Response::success([
             'authenticated' => true,
@@ -60,7 +82,8 @@ final class HouseholdController
             'membership' => $context === null ? null : ['role' => $context['membership']->role()],
             'readiness' => OnboardingReadiness::derive(
                 (bool) $public['email_verified'],
-                $context === null ? null : $context['household']
+                $context === null ? null : $context['household'],
+                $solarStatus
             ),
         ]);
     }
@@ -76,19 +99,49 @@ final class HouseholdController
 
         $label = $this->optionalString($request->bodyParam('label'), 'label');
         $locationLabel = $this->optionalString($request->bodyParam('location_label'), 'location_label');
+        $serviceNumber = $this->optionalString($request->bodyParam('service_number'), 'service_number');
 
         $result = $this->households->createForAccount(
             $account,
             $label,
             $timezone,
             $locationLabel,
-            new DateTimeImmutable('now', new \DateTimeZone('UTC'))
+            new DateTimeImmutable('now', new \DateTimeZone('UTC')),
+            $serviceNumber
         );
 
         return Response::success([
             'household' => $result['household']->toPublicArray(),
             'membership' => ['role' => $result['membership']->role()],
         ], 201);
+    }
+
+    /**
+     * POST /api/v1/household/demo/ensure (O3).
+     *
+     * Backend-authoritative endpoint to guarantee that a prepared demonstration
+     * household exists for the caller in spms_demo. Fails closed with 403 in REAL.
+     */
+    public function ensureDemo(Request $request): Response
+    {
+        $account = Authorization::requireAccount($request);
+        $context = $this->households->ensureDemoHouseholdForAccount(
+            $account,
+            new DateTimeImmutable('now', new \DateTimeZone('UTC'))
+        );
+
+        $public = $account->toPublicArray();
+
+        return Response::success([
+            'authenticated' => true,
+            'account' => $public,
+            'household' => $context['household']->toPublicArray(),
+            'membership' => ['role' => $context['membership']->role()],
+            'readiness' => OnboardingReadiness::derive(
+                (bool) $public['email_verified'],
+                $context['household']
+            ),
+        ]);
     }
 
     /**
@@ -140,11 +193,16 @@ final class HouseholdController
             $changes['service_number'] = $this->nullablePatchValue($body['service_number'], 'service_number');
         }
 
+        $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
         $result = $this->households->updateProfile(
             $account,
             $changes,
-            new DateTimeImmutable('now', new \DateTimeZone('UTC'))
+            $now
         );
+
+        if (array_key_exists('service_number', $changes)) {
+            $this->billService->reconcileHouseholdBillsOwnership($result['household'], $now);
+        }
 
         return Response::success([
             'household' => $result['household']->toPublicArray(),

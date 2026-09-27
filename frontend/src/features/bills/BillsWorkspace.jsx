@@ -1,32 +1,28 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { motion } from 'motion/react'
 import { Plus } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { EmptyState } from '../../components/feedback/EmptyState'
 import { ErrorState } from '../../components/feedback/ErrorState'
 import { LoadingState } from '../../components/feedback/LoadingState'
-import { BillDocumentSummary } from './BillDocumentSummary'
 import { BillHistory } from './BillHistory'
 import { BillOutcomeCard } from './BillOutcomeCard'
 import { BillProcessingCard } from './BillProcessingCard'
 import { BillReviewPanel } from './BillReviewPanel'
 import { BillUploadPanel } from './BillUploadPanel'
+import { ApspdclImportSummary } from './ApspdclImportSummary'
+import { StatementNavigator } from './StatementNavigator'
+import { sortBillsChronologically } from './presentation'
 import { DURATION } from '../../lib/motion'
 
 /**
- * BillsWorkspace — the unified Bills page workspace (B4 §5).
+ * BillsWorkspace — unified, desktop-optimized bills workspace.
  *
- * One page, one journey: upload → processing → review → (verification,
- * later in B5) → history. Never split into sidebar items; the single
- * "Bills" navigation entry lands here (docs/04 §10, docs/11 §9).
- *
- * The component is a pure renderer: every fact — lifecycle status, values,
- * validation outcomes, quality flags, provenance — arrives from the
- * backend and is displayed as-is (missing is "Not available", never 0,
- * never "Estimated"). It cannot verify, cannot correct, and never
- * pretends a state it was not given. State ownership lives in the
- * pages/app BillsPage container; the DEV-only visual preview mounts
- * this same component with sample payloads.
+ * Implements:
+ * - Clean responsive desktop layout (~70/30 selected bill review + full-width history table below)
+ * - Source-aware bill navigation with StatementNavigator (month + year)
+ * - Shared review UI between single PDF/image bills and multi-statement XLS imports
+ * - Explicit distinction between total household history and statements from current file
  */
 export function BillsWorkspace({
     sessionPhase = 'ready',
@@ -35,12 +31,15 @@ export function BillsWorkspace({
     detailPhase = 'ready',
     pipelineStage = null,
     processFailure = null,
+    importSummary = null,
     accountMode = 'REAL',
     onUpload = async () => ({}),
     onSelectBill = () => {},
     onRetryProcess = () => {},
     onRetryDetail = null,
     onRetrySession = () => {},
+    onVerify = null,
+    verifying = false,
     uploadOpen: uploadOpenProp,
     onUploadOpenChange,
     children,
@@ -54,6 +53,8 @@ export function BillsWorkspace({
         }
         onUploadOpenChange?.(value)
     }
+
+    const sortedBills = useMemo(() => sortBillsChronologically(bills), [bills])
 
     if (sessionPhase === 'checking') {
         return <LoadingState label="Loading your bills" />
@@ -91,11 +92,12 @@ export function BillsWorkspace({
         )
     }
 
-    const showUploadPanel = uploadOpen || (bills.length === 0 && !processFailure)
+    const showUploadPanel = uploadOpen || (sortedBills.length === 0 && !processFailure)
     const activeDetail = detail
 
     return (
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
+            {/* Header */}
             <div className="flex flex-wrap items-end justify-between gap-4">
                 <PageHeading demo={accountMode === 'DEMO_TEST'} />
                 <Button
@@ -110,112 +112,141 @@ export function BillsWorkspace({
                 </Button>
             </div>
 
-            <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-                {/* Main column: the journey itself. */}
-                <div className="flex min-w-0 flex-col gap-6">
-                    {/* §5: the processing area is its own block — it sits
-                        above the workspace, never replaces the upload
-                        panel mid-flow (an upload failure must stay
-                        visible where it happened). */}
-                    {pipelineStage !== null && (
-                        <motion.div
-                            key="pipeline"
-                            id="bill-workspace-region"
-                            aria-live="polite"
-                            initial={{ opacity: 0, y: 6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
-                        >
-                            <BillProcessingCard stage={pipelineStage} />
-                        </motion.div>
-                    )}
+            {/* Pipeline Stage Processing */}
+            {pipelineStage !== null && (
+                <motion.div
+                    key="pipeline"
+                    id="bill-workspace-region"
+                    aria-live="polite"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
+                >
+                    <BillProcessingCard stage={pipelineStage} />
+                </motion.div>
+            )}
 
-                    {showUploadPanel ? (
-                        <motion.div
-                            key="upload"
-                            id="bill-upload-panel"
-                            ref={uploadPanelRef}
-                            initial={{ opacity: 0, y: 6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
-                        >
-                            <BillUploadPanel
-                                busy={pipelineStage !== null}
-                                onUpload={async (file) => {
-                                    const outcome = await onUpload(file)
-                                    if (outcome?.uploaded) {
-                                        setUploadOpen(false)
-                                    }
-                                    return outcome
-                                }}
-                            />
-                        </motion.div>
-                    ) : (
-                            <motion.div
-                                key="workspace"
-                                initial={{ opacity: 0, y: 6 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
-                                className="flex flex-col gap-6"
-                            >
-                                {processFailure && (
-                                    <BillOutcomeCard
-                                        status="PROCESSING_FAILED"
-                                        retry={processFailure.retryable === true}
-                                        onRetry={onRetryProcess}
-                                        onUploadAnother={() => setUploadOpen(true)}
-                                    />
-                                )}
-
-                                {detailPhase === 'loading' && (
-                                    <LoadingState label="Loading this bill" className="py-6" />
-                                )}
-
-                                {detailPhase === 'error' && (
-                                    <ErrorState
-                                        title="Bill unavailable"
-                                        message="This bill could not be loaded. Other parts of the application are unaffected."
-                                        retryLabel="Try again"
-                                        onRetry={onRetryDetail ?? undefined}
-                                    />
-                                )}
-
-                                {detailPhase === 'ready' && activeDetail && (
-                                    <BillWorkspaceDetail
-                                        detail={activeDetail}
-                                        processFailure={processFailure}
-                                        onContinue={onRetryProcess}
-                                        onUploadAnother={() => setUploadOpen(true)}
-                                    />
-                                )}
-
-                                {detailPhase === 'ready' && !activeDetail && bills.length > 0 && (
-                                    <EmptyState
-                                        variant="noSelection"
-                                        title="Select a bill"
-                                        explanation="Choose one of your bills on the right to see its extracted information."
-                                    />
-                                )}
-                            </motion.div>
-                        )}
-                </div>
-
-                {/* Side column: context that never competes with the journey. */}
-                <aside className="flex min-w-0 flex-col gap-6">
-                    {activeDetail && <BillDocumentSummary detail={activeDetail} />}
-                    <BillHistory
-                        bills={bills}
-                        selectedId={activeDetail?.bill_id ?? null}
-                        onSelect={(id) => {
+            {/* Multi-statement APSPDCL Import Summary */}
+            {importSummary !== null && pipelineStage === null && (
+                <motion.div
+                    key="import-summary"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
+                >
+                    <ApspdclImportSummary
+                        summary={importSummary}
+                        totalHouseholdBills={sortedBills.length}
+                        onSelectBill={(id) => {
                             setUploadOpen(false)
                             onSelectBill(id)
                         }}
-                        onUpload={() => setUploadOpen(true)}
                     />
-                </aside>
+                </motion.div>
+            )}
 
-                {children}
+            {/* Upload Panel */}
+            {showUploadPanel ? (
+                <motion.div
+                    key="upload"
+                    id="bill-upload-panel"
+                    ref={uploadPanelRef}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
+                >
+                    <BillUploadPanel
+                        busy={pipelineStage !== null}
+                        onUpload={async (file) => {
+                            const outcome = await onUpload(file)
+                            if (outcome?.uploaded) {
+                                setUploadOpen(false)
+                            }
+                            return outcome
+                        }}
+                    />
+                </motion.div>
+            ) : (
+                <motion.div
+                    key="workspace"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
+                    className="flex flex-col gap-6"
+                >
+                    {processFailure && !activeDetail && (
+                        <BillOutcomeCard
+                            status="PROCESSING_FAILED"
+                            retry={processFailure.retryable === true}
+                            reason={processFailure.reason}
+                            onRetry={onRetryProcess}
+                            onUploadAnother={() => setUploadOpen(true)}
+                        />
+                    )}
+
+                    {detailPhase === 'loading' && (
+                        <LoadingState label="Loading this bill" className="py-8" />
+                    )}
+
+                    {detailPhase === 'error' && (
+                        <ErrorState
+                            title="Bill unavailable"
+                            message="This bill could not be loaded. Other parts of the application are unaffected."
+                            retryLabel="Try again"
+                            onRetry={onRetryDetail ?? undefined}
+                        />
+                    )}
+
+                    {detailPhase === 'ready' && activeDetail && (
+                        <div className="flex flex-col gap-5">
+                            {/* Statement Navigator (month + year) when multiple bills exist */}
+                            {sortedBills.length > 1 && (
+                                <StatementNavigator
+                                    bills={sortedBills}
+                                    selectedId={activeDetail.bill_id}
+                                    onSelect={(id) => {
+                                        setUploadOpen(false)
+                                        onSelectBill(id)
+                                    }}
+                                />
+                            )}
+
+                            {/* Unified Selected Bill Review Component */}
+                            <BillWorkspaceDetail
+                                detail={activeDetail}
+                                processFailure={processFailure}
+                                onContinue={onRetryProcess}
+                                onUploadAnother={() => setUploadOpen(true)}
+                                onVerify={onVerify}
+                                verifying={verifying}
+                            />
+                        </div>
+                    )}
+
+                    {detailPhase === 'ready' && !activeDetail && sortedBills.length > 0 && (
+                        <EmptyState
+                            variant="noSelection"
+                            title="Select a bill"
+                            explanation="Choose one of your bills in the billing history below to view its details."
+                        />
+                    )}
+                </motion.div>
+            )}
+
+            {/* Full-width Responsive Billing History Table */}
+            <div className="flex flex-col gap-4">
+                <BillHistory
+                    bills={sortedBills}
+                    selectedId={activeDetail?.bill_id ?? null}
+                    onSelect={(id) => {
+                        setUploadOpen(false)
+                        onSelectBill(id)
+                    }}
+                    onUpload={() => setUploadOpen(true)}
+                />
             </div>
+
+            {children}
         </div>
     )
 }
@@ -226,9 +257,6 @@ function PageHeading({ demo = false }) {
             <h1 className="flex flex-wrap items-center gap-2 font-display text-2xl font-semibold text-heading">
                 Your electricity bills
                 {demo && (
-                    // D-071 §S: demo-environment records live in a
-                    // physically separate database; the account mode makes
-                    // that boundary VISIBLE wherever demo data is shown.
                     <span className="rounded-full border border-chart-demo/50 bg-chart-demo/10 px-2.5 py-0.5 font-body text-xs font-semibold text-chart-demo">
                         DEMO data
                     </span>
@@ -242,8 +270,21 @@ function PageHeading({ demo = false }) {
     )
 }
 
-/** Detail column content for a non-pipeline moment. */
-function BillWorkspaceDetail({ detail, processFailure, onContinue, onUploadAnother }) {
+/** Detail content router for a non-pipeline moment. */
+function BillWorkspaceDetail({ detail, processFailure, onContinue, onUploadAnother, onVerify, verifying }) {
+    // Definitive terminal failure: if bill is PROCESSING_FAILED or processing failed, show ONLY failure card
+    if (detail.status === 'PROCESSING_FAILED' || (processFailure && (detail.status === 'PROCESSING' || detail.status === 'UPLOADED'))) {
+        return (
+            <BillOutcomeCard
+                status="PROCESSING_FAILED"
+                retry={processFailure?.retryable ?? true}
+                reason={processFailure?.reason}
+                onRetry={onContinue}
+                onUploadAnother={onUploadAnother}
+            />
+        )
+    }
+
     if (detail.status === 'PROCESSING') {
         return (
             <div className="flex flex-col gap-4">
@@ -263,23 +304,25 @@ function BillWorkspaceDetail({ detail, processFailure, onContinue, onUploadAnoth
         )
     }
 
-    if (['NOT_A_BILL', 'UNREADABLE', 'UNCERTAIN', 'PROCESSING_FAILED'].includes(detail.status)) {
+    if (['NOT_A_BILL', 'UNREADABLE', 'UNCERTAIN'].includes(detail.status)) {
         return (
             <BillOutcomeCard
                 status={detail.status}
-                retry={detail.status === 'PROCESSING_FAILED' && processFailure?.retryable === true}
+                retry={false}
                 onRetry={onContinue}
                 onUploadAnother={onUploadAnother}
             />
         )
     }
 
-    if (['EXTRACTED', 'NEEDS_REVIEW'].includes(detail.status)) {
-        return <BillReviewPanel detail={detail} />
-    }
-
-    if (detail.status === 'VERIFIED') {
-        return <BillReviewPanel detail={detail} />
+    if (['EXTRACTED', 'NEEDS_REVIEW', 'VERIFIED'].includes(detail.status)) {
+        return (
+            <BillReviewPanel
+                detail={detail}
+                onVerify={onVerify}
+                verifying={verifying}
+            />
+        )
     }
 
     return null

@@ -1,4 +1,4 @@
-import { LayoutDashboard, Sun, Zap, TrendingUp, Lightbulb, BarChart3, FileText, ClipboardList, Bell, Settings } from 'lucide-react'
+import { LayoutDashboard, Sun, Zap, TrendingUp, Lightbulb, Sparkles, BarChart3, FileText, ClipboardList, Bell, Settings } from 'lucide-react'
 
 /**
  * Centralized application navigation configuration (docs/03 §5, docs/04 §10).
@@ -29,7 +29,8 @@ export const NAV_GROUPS = [
     {
         label: 'Intelligence',
         items: [
-            { path: '/insights', name: 'Insights & Recommendations', icon: Lightbulb },
+            { path: '/recommendations', name: 'Recommendations', icon: Sparkles },
+            { path: '/insights', name: 'Insights', icon: Lightbulb },
             { path: '/analytics', name: 'Analytics', icon: BarChart3 },
         ],
     },

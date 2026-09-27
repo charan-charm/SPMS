@@ -50,11 +50,11 @@ final class DataEnvironments
     {
         $fromProcess = getenv('SPMS_DATA_ENVIRONMENT');
 
-        if (!is_string($fromProcess) || trim($fromProcess) === '') {
-            $fromProcess = $values['SPMS_DATA_ENVIRONMENT'] ?? '';
+        if (is_string($fromProcess) && trim($fromProcess) !== '') {
+            $profile = strtolower(trim($fromProcess));
+        } else {
+            $profile = strtolower(trim((string) ($values['SPMS_DATA_ENVIRONMENT'] ?? '')));
         }
-
-        $profile = strtolower(trim($fromProcess));
 
         if ($profile === '') {
             return self::REAL;
@@ -157,7 +157,20 @@ final class DataEnvironments
         $values = [];
 
         foreach (self::KEYS as $key) {
-            $values[$key] = Config::get($prefix . $key, $profile === self::REAL ? Config::get('DB_' . $key, '') : '') ?? '';
+            $values[$key] = Config::get($prefix . $key, Config::get('DB_' . $key, '')) ?? '';
+        }
+
+        // Allow test overrides on DB_PORT, DB_USERNAME, DB_PASSWORD to take effect
+        if ($profile === self::TEST || Config::get('SPMS_DATA_ENVIRONMENT') === $profile) {
+            if (Config::get('DB_PORT') !== null && Config::get('DB_PORT') !== '') {
+                $values['PORT'] = Config::get('DB_PORT');
+            }
+            if (Config::get('DB_USERNAME') !== null && Config::get('DB_USERNAME') !== '') {
+                $values['USERNAME'] = Config::get('DB_USERNAME');
+            }
+            if (Config::get('DB_PASSWORD') !== null && Config::get('DB_PASSWORD') !== '') {
+                $values['PASSWORD'] = Config::get('DB_PASSWORD');
+            }
         }
 
         if ($values['DATABASE'] === '' || $values['USERNAME'] === ''

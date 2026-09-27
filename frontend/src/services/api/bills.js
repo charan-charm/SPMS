@@ -63,3 +63,28 @@ export function processBill(billId, signal = undefined) {
         timeoutMs: PROCESS_TIMEOUT_MS,
     })
 }
+
+/**
+ * Verify an extracted / reviewed bill and make it authoritative history.
+ *
+ * @param {string} billId
+ * @param {{ acceptGap?: boolean }} [options]
+ * @param {AbortSignal} [signal]
+ */
+export function verifyBill(billId, options = {}, signal = undefined) {
+    return apiClient.post(`/bills/${encodeURIComponent(billId)}/verify`, {
+        accept_gap: Boolean(options.acceptGap),
+    }, { signal })
+}
+
+/**
+ * Apply user corrections to an unverified bill.
+ *
+ * @param {string} billId
+ * @param {Record<string, string|null>} values
+ * @param {AbortSignal} [signal]
+ */
+export function correctBill(billId, values, signal = undefined) {
+    return apiClient.patch(`/bills/${encodeURIComponent(billId)}`, values, { signal })
+}
+

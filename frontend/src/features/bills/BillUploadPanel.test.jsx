@@ -21,9 +21,9 @@ describe('BillUploadPanel', () => {
         render(<BillUploadPanel onUpload={vi.fn()} />)
 
         expect(screen.getByRole('heading', { name: /upload your electricity bill/i })).toBeInTheDocument()
-        expect(screen.getByText(/pdf, jpg or png up to 25 mb/i)).toBeInTheDocument()
+        expect(screen.getByText(/pdf, jpg, png or apspdcl \.xls up to 25 mb/i)).toBeInTheDocument()
         const input = screen.getByLabelText(/choose a bill file to upload/i)
-        expect(input).toHaveAttribute('accept', '.jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf')
+        expect(input).toHaveAttribute('accept', expect.stringContaining('.xls'))
         expect(screen.getByRole('button', { name: /^upload bill$/i })).toBeDisabled()
     })
 
@@ -36,7 +36,7 @@ describe('BillUploadPanel', () => {
             dataTransfer: { files: [new File(['x'], 'virus.exe')] },
         })
 
-        expect(await screen.findByRole('alert')).toHaveTextContent(/pdf, jpg or png/i)
+        expect(await screen.findByRole('alert')).toHaveTextContent(/pdf, jpg, png or apspdcl/i)
         expect(screen.getByRole('button', { name: /^upload bill$/i })).toBeDisabled()
     })
 

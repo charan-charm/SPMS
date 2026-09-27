@@ -16,6 +16,13 @@ export function BillDocumentSummary({ detail }) {
         return null
     }
 
+    const isStructured =
+        detail.source === 'APSPDCL_EXPORT' ||
+        Object.values(detail.provenance ?? {}).some((p) => p?.source === 'STRUCTURED_IMPORT')
+    const primarySource = isStructured ? 'STRUCTURED_IMPORT' : 'AI_EXTRACTION'
+    const sourceLabel = isStructured
+        ? 'Values from APSPDCL structured statement'
+        : 'Values come from the AI extraction'
     const status = BILL_STATUS[detail.status] ?? { label: detail.status, tone: 'muted' }
     const assessment = detail.extraction ? (ASSESSMENT_LABEL[detail.extraction.assessment] ?? null) : null
 
@@ -46,8 +53,8 @@ export function BillDocumentSummary({ detail }) {
                 )}
                 {detail.extraction && (
                     <div className="flex flex-wrap items-center gap-2">
-                        <ProvenanceBadge source="AI_EXTRACTION" />
-                        <span className="text-xs text-muted">Values come from the AI extraction</span>
+                        <ProvenanceBadge source={primarySource} />
+                        <span className="text-xs text-muted">{sourceLabel}</span>
                     </div>
                 )}
                 {detail.status === 'VERIFIED' && (

@@ -21,35 +21,27 @@ import { cn } from '../../lib/utils'
  * - triggers: backend-provided reasons the range was required
  */
 export function CostRange({
-    low,
-    high,
+    range = null,
+    low: lowProp,
+    high: highProp,
     currency = 'INR',
     halfWidthPercent = null,
     triggers = null,
     className,
 }) {
+    const low = lowProp !== undefined ? lowProp : (range?.low ?? range?.min_inr);
+    const high = highProp !== undefined ? highProp : (range?.high ?? range?.max_inr);
+    const effectiveHalfWidth = halfWidthPercent !== null ? halfWidthPercent : (range?.half_width_percent ?? range?.half_width_pct ?? range?.halfWidthPercent);
+    const effectiveTriggers = triggers !== null ? triggers : (range?.triggers ?? null);
+
     if (low === null || low === undefined || high === null || high === undefined) {
         return null
     }
 
+    // Zero-width suppression (Locked Rule 8): for genuine zero-cost surplus/balanced cases,
+    // suppress zero-width cost ranges in the UI. Do not display meaningless ranges.
     if (Number(low) === 0 && Number(high) === 0) {
-        return (
-            <div
-                className={cn('rounded-md border border-border bg-surface-alt px-4 py-3', className)}
-                role="note"
-            >
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                    Estimated range
-                </p>
-                <p className="mt-1 font-display text-xl font-semibold text-heading">
-                    No variable energy cost identified
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                    No material grid-dependent energy was identified, so the estimated variable cost is
-                    zero. This is an estimate — never a confirmed future electricity bill.
-                </p>
-            </div>
-        )
+        return null
     }
 
     return (
@@ -63,14 +55,14 @@ export function CostRange({
             <p className="mt-1 font-display text-xl font-semibold text-heading">
                 {formatMoney(low, currency)} – {formatMoney(high, currency)}
             </p>
-            {halfWidthPercent !== null && (
+            {effectiveHalfWidth !== null && (
                 <p className="mt-1 text-xs text-muted">
-                    Disclosed uncertainty band: ±{halfWidthPercent}% around the point estimate.
+                    Disclosed uncertainty band: ±{effectiveHalfWidth}% around the point estimate.
                 </p>
             )}
-            {Array.isArray(triggers) && triggers.length > 0 && (
+            {Array.isArray(effectiveTriggers) && effectiveTriggers.length > 0 && (
                 <ul className="mt-2 space-y-1">
-                    {triggers.map((trigger) => (
+                    {effectiveTriggers.map((trigger) => (
                         <li key={trigger} className="flex items-start gap-1.5 text-xs text-body">
                             <span aria-hidden="true" className="mt-[7px] size-1 shrink-0 rounded-full bg-warning" />
                             {trigger}

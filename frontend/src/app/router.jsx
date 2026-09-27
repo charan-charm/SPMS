@@ -1,34 +1,58 @@
 import { createBrowserRouter } from 'react-router'
 import { FoundationPlaceholder } from '../pages/public/FoundationPlaceholder'
+import { DashboardPage } from '../pages/app/DashboardPage'
 import { EnergyBalancePage } from '../pages/app/EnergyBalancePage'
 import { EnergyCostPage } from '../pages/app/EnergyCostPage'
 import { InsightsPage } from '../pages/app/InsightsPage'
+import { RecommendationsPage } from '../pages/app/RecommendationsPage'
 import { BillsPage } from '../pages/app/BillsPage'
+import { SolarPage } from '../pages/app/SolarPage'
+import { ForecastsPage } from '../pages/app/ForecastsPage'
+import { SettingsPage } from '../pages/app/SettingsPage'
+import { ReportsPage } from '../pages/app/ReportsPage'
+import { NotificationsPage } from '../pages/app/NotificationsPage'
+import { AnalyticsPage } from '../pages/app/AnalyticsPage'
 import { RouteErrorBoundary } from './RouteErrorBoundary'
 import { publicRoutes, protectedRoutes, authRoutes } from './routes'
 import { PublicLayout } from '../layouts/PublicLayout'
 import { AuthLayout } from '../layouts/AuthLayout'
 import { AppLayout } from '../layouts/AppLayout'
+import { RootLayout } from '../layouts/RootLayout'
 import { DesignSystemPreview } from '../pages/public/DesignSystemPreview'
 import { LandingPage } from '../pages/public/LandingPage'
 import { DashboardShellPreview } from '../pages/public/DashboardShellPreview'
 import { LoadingStateDemo } from '../pages/public/LoadingStateDemo'
 import { BillsWorkspacePreview } from '../pages/public/BillsWorkspacePreview'
+import { ProtectedRoute } from '../features/auth/ProtectedRoute'
+import { PublicAuthRoute } from '../features/auth/PublicAuthRoute'
+import { LoginPage } from '../pages/auth/LoginPage'
+import { RegisterPage } from '../pages/auth/RegisterPage'
+import { VerifyPage } from '../pages/auth/VerifyPage'
+import { RecoverPage } from '../pages/auth/RecoverPage'
 
-/**
- * Routing foundation integrated with the F3 application shell (docs/03 §4,
- * docs/11 §9). Public routes render in PublicLayout, authentication
- * routes in AuthLayout, protected application routes in AppLayout.
- *
- * Route guards are NOT implemented here — guards are navigation UX and
- * backend authorization remains authoritative (F4/authentication
- * milestones will add session-aware navigation).
- */
+
+import { OnboardingLayout } from '../layouts/OnboardingLayout'
+import { OnboardingPage } from '../pages/onboarding/OnboardingPage'
 
 function placeholderRoute(path, name) {
     return {
         path,
         element: <FoundationPlaceholder routeName={name} path={path} />,
+    }
+}
+
+function authElementFor(path, name) {
+    switch (path) {
+        case '/login':
+            return <LoginPage />
+        case '/register':
+            return <RegisterPage />
+        case '/verify':
+            return <VerifyPage />
+        case '/recover':
+            return <RecoverPage />
+        default:
+            return placeholderRoute(path, name)
     }
 }
 
@@ -49,21 +73,61 @@ function baseRoutes() {
             ],
         },
         {
-            element: <AuthLayout />,
-            children: authRoutes.map((route) => placeholderRoute(route.path, route.name)),
+            element: (
+                <PublicAuthRoute>
+                    <AuthLayout />
+                </PublicAuthRoute>
+            ),
+            children: authRoutes.map((route) => ({
+                path: route.path,
+                element: authElementFor(route.path, route.name),
+            })),
         },
         {
-            element: <AppLayout />,
+            element: (
+                <ProtectedRoute>
+                    <OnboardingLayout />
+                </ProtectedRoute>
+            ),
+            children: [
+                {
+                    path: '/onboarding',
+                    element: <OnboardingPage />,
+                },
+            ],
+        },
+        {
+            element: (
+                <ProtectedRoute requireHousehold>
+                    <AppLayout />
+                </ProtectedRoute>
+            ),
             children: protectedRoutes.map((route) =>
-                route.path === '/energy'
-                    ? { path: route.path, element: <EnergyBalancePage /> }
+                route.path === '/dashboard'
+                    ? { path: route.path, element: <DashboardPage /> }
+                    : route.path === '/energy'
+                        ? { path: route.path, element: <EnergyBalancePage /> }
                     : route.path === '/energy/cost'
                         ? { path: route.path, element: <EnergyCostPage /> }
                     : route.path === '/insights'
                         ? { path: route.path, element: <InsightsPage /> }
+                    : route.path === '/recommendations'
+                        ? { path: route.path, element: <RecommendationsPage /> }
                         : route.path === '/bills'
                             ? { path: route.path, element: <BillsPage /> }
-                            : placeholderRoute(route.path, route.name),
+                            : route.path === '/solar'
+                                ? { path: route.path, element: <SolarPage /> }
+                                : route.path === '/forecasts'
+                                    ? { path: route.path, element: <ForecastsPage /> }
+                                    : route.path === '/settings'
+                                        ? { path: route.path, element: <SettingsPage /> }
+                                        : route.path === '/reports'
+                                            ? { path: route.path, element: <ReportsPage /> }
+                                            : route.path === '/notifications'
+                                                ? { path: route.path, element: <NotificationsPage /> }
+                                                : route.path === '/analytics'
+                                                    ? { path: route.path, element: <AnalyticsPage /> }
+                                                    : placeholderRoute(route.path, route.name),
             ),
         },
     ]
@@ -71,6 +135,7 @@ function baseRoutes() {
 
 export const router = createBrowserRouter([
     {
+        element: <RootLayout />,
         errorElement: <RouteErrorBoundary />,
         children: baseRoutes(),
     },
@@ -83,6 +148,7 @@ export const router = createBrowserRouter([
 const devRouter = import.meta.env.DEV
     ? createBrowserRouter([
           {
+              element: <RootLayout />,
               errorElement: <RouteErrorBoundary />,
               children: [
                   {

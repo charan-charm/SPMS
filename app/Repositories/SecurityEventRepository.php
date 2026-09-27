@@ -96,6 +96,28 @@ final class SecurityEventRepository
         return (int) $statement->fetchColumn();
     }
 
+    /**
+     * Count recent events for a specific account — used for per-account
+     * verification attempt limiting (max attempts before rate-lock).
+     */
+    public function countRecentForAccount(string $eventType, string $accountId, int $windowSeconds): int
+    {
+        $windowMinutes = max(1, (int) ceil($windowSeconds / 60));
+
+        $statement = $this->connection()->prepare(
+            'SELECT COUNT(*) FROM security_events
+             WHERE event_type = :event_type AND account_id = :account_id
+               AND created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL :window MINUTE)'
+        );
+        $statement->execute([
+            'event_type' => $eventType,
+            'account_id' => $accountId,
+            'window' => $windowMinutes,
+        ]);
+
+        return (int) $statement->fetchColumn();
+    }
+
     private function connection(): PDO
     {
         return $this->pdo ?? Database::connection();

@@ -223,7 +223,7 @@ function EstimateResult({ data }) {
                         <Info className="mt-0.5 size-4 shrink-0 text-info" aria-hidden="true" />
                         This is an estimate based on predicted energy and the stated pricing basis. It is not a
                         confirmed future electricity bill, not a verified historical amount, and not a guaranteed
-                        saving.
+                        saving. Fixed charges apply separately and potential solar surplus does not imply grid export compensation.
                     </p>
                 </div>
 

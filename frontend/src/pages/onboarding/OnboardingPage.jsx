@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router'
 import { useAuth } from '../../features/auth/useAuth'
 import { useHousehold } from '../../features/household/useHousehold'
-import { RealOnboardingForm } from '../../components/onboarding/RealOnboardingForm'
+import { GuidedOnboarding } from '../../features/onboarding/GuidedOnboarding'
 import { DemoOnboardingNotice } from '../../components/onboarding/DemoOnboardingNotice'
 import { LoadingState } from '../../components/feedback/LoadingState'
 
@@ -28,5 +28,5 @@ export function OnboardingPage() {
         return <DemoOnboardingNotice onComplete={handleComplete} />
     }
 
-    return <RealOnboardingForm onComplete={handleComplete} />
+    return <GuidedOnboarding onComplete={handleComplete} />
 }

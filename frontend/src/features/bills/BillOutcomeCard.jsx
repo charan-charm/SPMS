@@ -11,7 +11,7 @@ import { cn } from '../../lib/utils'
  * text — the copy is fixed per state, and the primary action always
  * returns the user to the upload path.
  */
-export function BillOutcomeCard({ status, onUploadAnother, retry = false, onRetry = null }) {
+export function BillOutcomeCard({ status, onUploadAnother, retry = false, onRetry = null, reason = null }) {
     const outcome = TERMINAL_OUTCOME[status]
 
     if (!outcome) {
@@ -32,17 +32,24 @@ export function BillOutcomeCard({ status, onUploadAnother, retry = false, onRetr
                 </CardTitle>
                 <CardDescription>{outcome.body}</CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3">
-                {retry && onRetry && (
-                    <Button type="button" variant="secondary" onClick={onRetry}>
-                        <RotateCcw className="size-4" aria-hidden="true" />
-                        Try again
-                    </Button>
+            <CardContent className="flex flex-col gap-3">
+                {reason === 'EXTRACTION_RATE_LIMITED' && (
+                    <div className="w-full rounded-md border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+                        The AI document extraction service is temporarily rate-limited. Your uploaded file is safely preserved. Please wait a few moments and click &ldquo;Try again&rdquo;.
+                    </div>
                 )}
-                <Button type="button" onClick={onUploadAnother}>
-                    <UploadCloud className="size-4" aria-hidden="true" />
-                    Upload another bill
-                </Button>
+                <div className="flex flex-wrap items-center gap-3">
+                    {retry && onRetry && (
+                        <Button type="button" variant="secondary" onClick={onRetry}>
+                            <RotateCcw className="size-4" aria-hidden="true" />
+                            Try again
+                        </Button>
+                    )}
+                    <Button type="button" onClick={onUploadAnother}>
+                        <UploadCloud className="size-4" aria-hidden="true" />
+                        Upload another bill
+                    </Button>
+                </div>
             </CardContent>
         </Card>
     )

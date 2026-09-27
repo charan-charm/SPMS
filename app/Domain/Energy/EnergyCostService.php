@@ -417,8 +417,8 @@ final class EnergyCostService
         }
 
         $halfWidthPercent = max($factors);
-        $low = round($estimatedCost * (1 - $halfWidthPercent / 100), 2);
-        $high = round($estimatedCost * (1 + $halfWidthPercent / 100), 2);
+        $low = max(0.0, round($estimatedCost * (1 - $halfWidthPercent / 100), 2));
+        $high = max(0.0, round($estimatedCost * (1 + $halfWidthPercent / 100), 2));
 
         return [
             'low' => $low,

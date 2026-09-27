@@ -120,6 +120,9 @@ final class BillAnnotationNormalizer
         }
 
         $values = array_fill_keys(BillField::ALL, null);
+        if (is_array($annotation)) {
+            $values[BillField::SOURCE] = \App\Domain\Bill\BillSource::ELECTRICITY_BILL;
+        }
         $confidences = [];
 
         foreach (self::SECTION_FIELDS as $section => $fields) {

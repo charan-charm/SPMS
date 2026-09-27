@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Domain\Bill\Bill;
+use App\Domain\Bill\BillExtractionDraft;
 use App\Domain\Bill\BillField;
 use App\Domain\Bill\BillProcessingService;
 use App\Domain\Bill\BillQualityFlag;
 use App\Domain\Bill\BillService;
+use App\Domain\Bill\BillTempDocument;
 use App\Domain\Bill\BillUpload;
 use App\Domain\Bill\BillUploadIntakeService;
 use App\Domain\Bill\BillValidation;
 use App\Domain\Bill\Ownership;
+use App\Domain\Household\HouseholdService;
+use App\Repositories\BillTempDocumentRepository;
 use App\Security\Authorization;
 use App\Support\AppException;
 use App\Support\Request;
@@ -65,6 +69,8 @@ final class BillController
         private readonly BillUploadIntakeService $intake = new BillUploadIntakeService(),
         private readonly BillProcessingService $processing = new BillProcessingService(),
         private readonly BillService $billService = new BillService(),
+        private readonly BillTempDocumentRepository $tempDocs = new BillTempDocumentRepository(),
+        private readonly HouseholdService $households = new HouseholdService(),
         ?callable $uploadVerifier = null
     ) {
         $this->uploadVerifier = $uploadVerifier !== null ? \Closure::fromCallable($uploadVerifier) : null;
@@ -154,7 +160,7 @@ final class BillController
         ));
         sort($flags);
 
-        return Response::success([
+        $responseData = [
             'bill_id' => $result['bill']->id(),
             'status' => $result['bill']->status(),
             'extraction' => [
@@ -163,7 +169,15 @@ final class BillController
                 'validation' => $validation,
                 'quality_flags' => $flags,
             ],
-        ]);
+        ];
+
+        // Include import summary for APSPDCL XLS multi-month imports only.
+        if ($result['import_summary'] !== null) {
+            $responseData['import_summary'] = $result['import_summary'];
+        }
+
+        return Response::success($responseData);
+
     }
 
     /**
@@ -179,22 +193,45 @@ final class BillController
     public function index(Request $request): Response
     {
         $account = Authorization::requireAccount($request);
+        $householdId = $this->households->activeHouseholdId($account);
 
         $bills = array_map(
-            static fn (Bill $bill): array => [
-                'bill_id' => $bill->id(),
-                'status' => $bill->status(),
-                'service_number' => $bill->value(BillField::SERVICE_NUMBER),
-                'billing_period_start' => $bill->value(BillField::BILLING_PERIOD_START),
-                'billing_period_end' => $bill->value(BillField::BILLING_PERIOD_END),
-                'consumption_kwh' => $bill->value('consumption_kwh'),
-                'solar_units_kwh' => $bill->value('solar_units_kwh'),
-                'net_units_kwh' => $bill->value('net_units_kwh'),
-                'bill_amount' => $bill->value('bill_amount'),
-                'total_due' => $bill->value('total_due'),
-                'verified_at' => $bill->verifiedAt(),
-                'updated_at' => $bill->updatedAt(),
-            ],
+            function (Bill $bill) use ($householdId): array {
+                $meta = [];
+                $rawMetaJson = $bill->value(BillField::SOURCE_METADATA_JSON);
+                if ($rawMetaJson !== null && $rawMetaJson !== '') {
+                    $meta = json_decode($rawMetaJson, true) ?? [];
+                }
+
+                $source = $bill->value(BillField::SOURCE);
+                $isXls = ($source === 'APSPDCL_EXPORT' || ($meta['source_type'] ?? '') === 'APSPDCL_EXPORT' || isset($meta['source_statement_serial']));
+                $temp = null;
+                if (!$isXls && $householdId !== null) {
+                    $temp = $this->tempDocs->findForBill($bill->id(), $householdId);
+                }
+                $docType = $this->resolveDocumentType($bill, $meta, null, $temp);
+
+                return [
+                    'bill_id' => $bill->id(),
+                    'status' => $bill->status(),
+                    'source' => $bill->value(BillField::SOURCE) ?? \App\Domain\Bill\BillSource::ELECTRICITY_BILL,
+                    'document_type' => $docType,
+                    'service_number' => $bill->value(BillField::SERVICE_NUMBER),
+                    'source_statement_serial' => $meta['source_statement_serial'] ?? $meta['s_no'] ?? null,
+                    'solar_applicability' => $meta['solar_applicability'] ?? null,
+                    'billing_period_start' => $bill->value(BillField::BILLING_PERIOD_START),
+                    'billing_period_end' => $bill->value(BillField::BILLING_PERIOD_END),
+                    'bill_date' => $bill->value(BillField::BILL_DATE),
+                    'due_date' => $bill->value(BillField::DUE_DATE),
+                    'consumption_kwh' => $bill->value('consumption_kwh'),
+                    'solar_units_kwh' => $bill->value('solar_units_kwh'),
+                    'net_units_kwh' => $bill->value('net_units_kwh'),
+                    'bill_amount' => $bill->value('bill_amount'),
+                    'total_due' => $bill->value('total_due'),
+                    'verified_at' => $bill->verifiedAt(),
+                    'updated_at' => $bill->updatedAt(),
+                ];
+            },
             $this->billService->listForAccount($account)
         );
 
@@ -209,14 +246,14 @@ final class BillController
      * confidence, or null where none was stated), the extraction record's
      * document-level facts, deterministic validation outcomes (expected
      * vs extracted, verbatim — a CONFLICT is displayed as persisted,
-     * never corrected here) and the controlled quality flags. Foreign or
-     * unknown ids are the established indistinguishable 404.
+     * never corrected here), controlled quality flags, and sequence
+     * validation against verified history.
      */
     public function show(Request $request): Response
     {
         $account = Authorization::requireAccount($request);
 
-        $billId = $this->extractBillId($request->path(), requireAction: false);
+        $billId = $this->extractBillId($request->path());
 
         $bill = $billId === null ? null : $this->billService->get($account, $billId);
 
@@ -247,11 +284,6 @@ final class BillController
             $flagObjects
         );
 
-        // D-071: ownership is its own answer, derived from the stored
-        // service number + the persisted ownership quality flags. The
-        // household's registered number leaves this view MASKED only —
-        // enough for the owner to compare, never a full identifier
-        // broadcast (docs/10 D-071 §N).
         $ownership = Ownership::derive(
             $bill->status(),
             $bill->values(),
@@ -259,10 +291,31 @@ final class BillController
             $this->billService->householdServiceNumber($account)
         );
 
+        $sequence = $this->billService->sequenceValidationFor($account, $bill->id());
+
+        $rawMetaJson = $bill->value(BillField::SOURCE_METADATA_JSON);
+        $sourceMeta = [];
+        if ($rawMetaJson !== null && $rawMetaJson !== '') {
+            $sourceMeta = json_decode($rawMetaJson, true) ?? [];
+        }
+
+        $temp = null;
+        $householdId = $this->households->activeHouseholdId($account);
+        if ($householdId !== null) {
+            $temp = $this->tempDocs->findForBill($bill->id(), $householdId);
+        }
+
+        $documentType = $this->resolveDocumentType($bill, $sourceMeta, $draft, $temp);
+        $isStructuredXls = ($documentType === 'STRUCTURED_XLS');
+
         return Response::success([
             'bill' => [
                 'bill_id' => $bill->id(),
                 'status' => $bill->status(),
+                'source' => $bill->value(BillField::SOURCE) ?? \App\Domain\Bill\BillSource::ELECTRICITY_BILL,
+                'document_type' => $documentType,
+                'source_statement_serial' => $sourceMeta['source_statement_serial'] ?? $sourceMeta['s_no'] ?? null,
+                'solar_applicability' => $sourceMeta['solar_applicability'] ?? null,
                 'verified_at' => $bill->verifiedAt(),
                 'created_at' => $bill->createdAt(),
                 'updated_at' => $bill->updatedAt(),
@@ -271,28 +324,173 @@ final class BillController
                 'extraction' => $draft === null ? null : [
                     'assessment' => $draft->assessment(),
                     'assessment_reason' => $draft->assessmentReason(),
-                    'document_confidence' => $draft->documentConfidence(),
+                    'document_confidence' => $isStructuredXls ? null : $draft->documentConfidence(),
                     'extracted_at' => $draft->extractedAt(),
                 ],
                 'validations' => $validations,
                 'quality_flags' => $flags,
                 'ownership' => $ownership,
+                'sequence_validation' => $sequence->toArray(),
             ],
         ]);
     }
 
-    /**
-     * Route-parameter extraction follows the ratified F6 pattern
-     * (controller reads the id from the path; the router contract stays
-     * [class, action]). Only an exact 36-char UUID segment matches.
-     */
-    private function extractBillId(string $path, bool $requireAction = true): ?string
+    private function resolveDocumentType(Bill $bill, array $meta, ?BillExtractionDraft $draft = null, ?BillTempDocument $temp = null): string
     {
-        $pattern = $requireAction
-            ? '#^/api/v1/bills/([0-9a-fA-F][0-9a-fA-F-]{34}[0-9a-fA-F])/process$#'
-            : '#^/api/v1/bills/([0-9a-fA-F][0-9a-fA-F-]{34}[0-9a-fA-F])$#';
+        $source = $bill->value(BillField::SOURCE);
+        if ($source === 'APSPDCL_EXPORT'
+            || ($meta['source_type'] ?? '') === 'APSPDCL_EXPORT'
+            || isset($meta['source_statement_serial'])
+            || ($draft !== null && $draft->provider() === 'apspdcl_export')
+            || ($temp !== null && ($temp->mimeType() === BillUpload::TYPE_XLS || str_ends_with(strtolower($temp->storageKey()), '.xls')))
+        ) {
+            return 'STRUCTURED_XLS';
+        }
 
-        if (preg_match($pattern, $path, $matches) === 1) {
+        if ($temp !== null) {
+            if ($temp->mimeType() === BillUpload::TYPE_PDF || str_ends_with(strtolower($temp->storageKey()), '.pdf')) {
+                return 'PDF';
+            }
+            if ($temp->mimeType() === BillUpload::TYPE_JPEG || $temp->mimeType() === BillUpload::TYPE_PNG
+                || preg_match('/\.(jpe?g|png)$/i', $temp->storageKey()) === 1
+                || str_starts_with($temp->mimeType(), 'image/')
+            ) {
+                return 'IMAGE';
+            }
+        }
+
+        if (isset($meta['document_type'])) {
+            return (string) $meta['document_type'];
+        }
+
+        return 'PDF';
+    }
+
+    /**
+     * POST /api/v1/bills/{bill_id}/verify — Explicit bill verification.
+     *
+     * Validates chronological sequence, checks ownership mismatch,
+     * supports gap acknowledgment ($acceptGap = true), and promotes
+     * bill to VERIFIED.
+     */
+    public function verify(Request $request): Response
+    {
+        $account = Authorization::requireAccount($request);
+
+        $billId = $this->extractBillId($request->path(), 'verify');
+
+        if ($billId === null) {
+            throw new AppException('NOT_FOUND', 'The requested bill was not found.', 404);
+        }
+
+        $body = $request->body();
+        $acceptGap = isset($body['accept_gap']) && (bool) $body['accept_gap'];
+
+        $verified = $this->billService->verify(
+            $account,
+            $billId,
+            new DateTimeImmutable('now', new DateTimeZone('UTC')),
+            $acceptGap
+        );
+
+        $householdId = $this->households->activeHouseholdId($account);
+        if ($householdId !== null) {
+            try {
+                $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+                $intel = new \App\Domain\Intelligence\IntelligenceService(new \App\Repositories\InsightRepository());
+                $intel->refreshFromEnergyPipeline($householdId, $now);
+                $recs = new \App\Domain\Recommendation\RecommendationService();
+                $recs->generate($householdId, $now, true);
+            } catch (\Throwable) {
+                // Non-blocking pipeline update
+            }
+        }
+
+        return Response::success([
+            'bill_id' => $verified->id(),
+            'status' => $verified->status(),
+            'verified_at' => $verified->verifiedAt(),
+            'message' => 'Bill verified successfully and added to authoritative household history.',
+        ]);
+    }
+
+    /**
+     * PATCH /api/v1/bills/{bill_id} — User corrections on unverified bill.
+     */
+    public function update(Request $request): Response
+    {
+        $account = Authorization::requireAccount($request);
+
+        $billId = $this->extractBillId($request->path());
+
+        if ($billId === null) {
+            throw new AppException('NOT_FOUND', 'The requested bill was not found.', 404);
+        }
+
+        $body = $request->body();
+        if ($body === []) {
+            throw new AppException('VALIDATION_ERROR', 'At least one field to update is required.', 422);
+        }
+
+        $updated = $this->billService->applyCorrections(
+            $account,
+            $billId,
+            $body,
+            new DateTimeImmutable('now', new DateTimeZone('UTC'))
+        );
+
+        return Response::success([
+            'bill_id' => $updated->id(),
+            'status' => $updated->status(),
+            'values' => $updated->values(),
+            'updated_at' => $updated->updatedAt(),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/bills/{bill_id}/reconcile — Explicit ownership reconciliation.
+     *
+     * Re-evaluates ownership flags for the bill against the current registered
+     * household service number without modifying bill values, draft, or advancing status.
+     */
+    public function reconcile(Request $request): Response
+    {
+        $account = Authorization::requireAccount($request);
+
+        $billId = $this->extractBillId($request->path());
+
+        if ($billId === null) {
+            throw new AppException('NOT_FOUND', 'The requested bill was not found.', 404);
+        }
+
+        $bill = $this->billService->reconcileOwnership(
+            $account,
+            $billId,
+            new DateTimeImmutable('now', new DateTimeZone('UTC'))
+        );
+
+        $flagObjects = $this->billService->qualityFlagsFor($account, $bill->id());
+        $ownership = Ownership::derive(
+            $bill->status(),
+            $bill->values(),
+            $flagObjects,
+            $this->billService->householdServiceNumber($account)
+        );
+
+        return Response::success([
+            'bill_id' => $bill->id(),
+            'status' => $bill->status(),
+            'ownership' => $ownership,
+            'message' => 'Bill ownership re-evaluated against registered household service number.',
+        ]);
+    }
+
+    /**
+     * Route-parameter extraction follows the ratified F6 pattern.
+     */
+    private function extractBillId(string $path): ?string
+    {
+        if (preg_match('#^/api/v1/bills/([0-9a-fA-F][0-9a-fA-F-]{34}[0-9a-fA-F])(?:/(?:process|verify|reconcile))?$#', $path, $matches) === 1) {
             return strtolower($matches[1]);
         }
 

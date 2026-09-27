@@ -4,7 +4,16 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Domain\Bill\Bill;
+use App\Domain\Bill\BillStatus;
 use App\Domain\Energy\EnergyBalanceService;
+use App\Domain\Forecast\ForecastHorizon;
+use App\Domain\Forecast\ForecastService;
+use App\Domain\Household\HouseholdService;
+use App\Repositories\BillRepository;
+use App\Repositories\SolarConnectionRepository;
+use App\Repositories\SolarReadingRepository;
+use App\Security\Authorization;
 use App\Support\AppException;
 use App\Support\Request;
 use App\Support\Response;
@@ -13,7 +22,7 @@ use App\Support\Response;
  * F4 — Energy Balance API (docs/02 §2, docs/04 §60, docs/06 §13).
  *
  * POST /api/v1/energy/balance — classify a balance from provided inputs.
- * GET  /api/v1/energy/balance — honest UNAVAILABLE until data sources exist.
+ * GET  /api/v1/energy/balance — evaluates active energy balance from verified evidence.
  *
  * The backend is the sole authority for classification; the frontend
  * presents results and never derives them.
@@ -26,9 +35,25 @@ final class EnergyBalanceController
     private const CONFIDENCE_LEVELS = ['HIGH', 'MODERATE', 'LOW', 'VERY_LOW'];
     private const ANALYSIS_TYPES = ['TIME_PERIOD', 'AGGREGATE'];
 
+    private ?HouseholdService $households = null;
+    private ?ForecastService $forecastService = null;
+    private ?SolarConnectionRepository $solarConnections = null;
+    private ?SolarReadingRepository $solarReadings = null;
+    private ?BillRepository $bills = null;
+
     public function __construct(
-        private readonly EnergyBalanceService $service = new EnergyBalanceService()
+        private readonly EnergyBalanceService $service = new EnergyBalanceService(),
+        ?HouseholdService $households = null,
+        ?ForecastService $forecastService = null,
+        ?SolarConnectionRepository $solarConnections = null,
+        ?SolarReadingRepository $solarReadings = null,
+        ?BillRepository $bills = null
     ) {
+        $this->households = $households;
+        $this->forecastService = $forecastService;
+        $this->solarConnections = $solarConnections;
+        $this->solarReadings = $solarReadings;
+        $this->bills = $bills;
     }
 
     public function classify(Request $request): Response
@@ -63,9 +88,145 @@ final class EnergyBalanceController
 
     public function current(Request $request): Response
     {
-        $householdId = $this->validatedHouseholdId($request->queryParam('household_id'));
+        $account = Authorization::currentAccount($request);
+        $householdId = null;
 
-        return Response::success($this->service->unavailableResult($householdId));
+        if ($account !== null) {
+            $activeHh = $this->households()->activeHouseholdId($account);
+            $queryHh = $this->validatedHouseholdId($request->queryParam('household_id'));
+            if ($queryHh !== null && $queryHh !== $activeHh) {
+                throw new AppException('ACCESS_DENIED', 'You do not have access to this household.', 403);
+            }
+            $householdId = $activeHh;
+        } else {
+            $queryHh = $this->validatedHouseholdId($request->queryParam('household_id'));
+            if ($queryHh !== null) {
+                return Response::success($this->service->unavailableResult(null));
+            }
+        }
+
+        if ($householdId === null) {
+            return Response::success($this->service->unavailableResult(null));
+        }
+
+        // Query connected evidence for the household
+        $solarConn = $this->solarConnections()->findByHouseholdId($householdId);
+        $solarReadingsCount = $this->solarReadings()->countByHouseholdId($householdId);
+        $hasSolar = ($solarConn !== null && in_array($solarConn['connection_status'] ?? '', ['CONNECTED', 'OFFLINE', 'DEGRADED', 'STALE'], true))
+            || $solarReadingsCount > 0;
+
+        $allBills = $this->bills()->listForHousehold($householdId);
+        $verifiedBills = array_filter(
+            $allBills,
+            static fn ($b): bool => ($b instanceof Bill ? $b->status() === BillStatus::VERIFIED : ($b['status'] ?? '') === 'VERIFIED')
+        );
+        $hasConsumption = count($verifiedBills) > 0;
+
+        if (!$hasSolar && !$hasConsumption) {
+            return Response::success($this->service->unavailableResult(
+                $householdId,
+                'No solar generation or household consumption data sources are connected yet, so no energy balance can be calculated.',
+                limitation: 'A balance can be calculated here once solar generation and household consumption data sources are connected.'
+            ));
+        }
+
+        if ($hasSolar && !$hasConsumption) {
+            return Response::success($this->service->unavailableResult(
+                $householdId,
+                'Household consumption history has no verified electricity bills yet. Once bills are verified, an energy balance will be calculated.',
+                notes: [
+                    'Energy balance requires solar generation and household consumption data. Solar inverter is connected, but verified consumption data is needed.',
+                    'A balance result is a potential energy situation, never confirmed grid import/export.',
+                ],
+                limitation: 'Upload and verify your recent electricity bills to calculate your energy balance.'
+            ));
+        }
+
+        if (!$hasSolar && $hasConsumption) {
+            return Response::success($this->service->unavailableResult(
+                $householdId,
+                'Solar inverter is not connected yet. Once connected and transmitting generation telemetry, an energy balance will be calculated.',
+                notes: [
+                    'Energy balance requires solar generation and household consumption data. Verified electricity bills exist, but solar generation data is needed.',
+                    'A balance result is a potential energy situation, never confirmed grid import/export.',
+                ],
+                limitation: 'Connect your solar inverter on the Solar page to calculate your energy balance.'
+            ));
+        }
+
+        // Both solar and verified consumption exist: evaluate active Day-Ahead balance
+        $forecast = $this->forecastService()->getForecast($householdId, ForecastHorizon::DAY_AHEAD);
+
+        $solarSnapshot = $forecast['solar_forecast'] ?? null;
+        $consumptionSnapshot = $forecast['consumption_forecast'] ?? null;
+
+        if (
+            $solarSnapshot === null ||
+            $consumptionSnapshot === null ||
+            !isset($solarSnapshot['predicted_value']) ||
+            !isset($consumptionSnapshot['predicted_value']) ||
+            ($consumptionSnapshot['confidence'] ?? '') === 'INSUFFICIENT'
+        ) {
+            return Response::success($this->service->unavailableResult(
+                $householdId,
+                $forecast['energy_balance_projection']['explanation']
+                    ?? 'Energy balance cannot be calculated due to insufficient forecast evidence.'
+            ));
+        }
+
+        $solarValue = (float) $solarSnapshot['predicted_value'];
+        $consumptionValue = (float) $consumptionSnapshot['predicted_value'];
+
+        $inputs = [
+            'solar' => [
+                'value_kwh' => $solarValue,
+                'nature' => $solarSnapshot['data_nature'] ?? 'PREDICTED',
+                'status' => 'FRESH',
+                'quality' => $solarSnapshot['data_quality'] ?? 'VERIFIED',
+                'confidence_level' => $solarSnapshot['confidence'] ?? 'LOW',
+            ],
+            'consumption' => [
+                'value_kwh' => $consumptionValue,
+                'nature' => $consumptionSnapshot['data_nature'] ?? 'PREDICTED',
+                'status' => 'FRESH',
+                'quality' => $consumptionSnapshot['data_quality'] ?? 'VERIFIED',
+                'confidence_level' => $consumptionSnapshot['confidence'] ?? 'MODERATE',
+            ],
+        ];
+
+        $classified = $this->service->classify(
+            $inputs,
+            EnergyBalanceService::ANALYSIS_TIME_PERIOD,
+            $solarSnapshot['period'] ?? null,
+            $householdId
+        );
+
+        return Response::success($classified);
+    }
+
+    private function households(): HouseholdService
+    {
+        return $this->households ??= new HouseholdService();
+    }
+
+    private function forecastService(): ForecastService
+    {
+        return $this->forecastService ??= new ForecastService();
+    }
+
+    private function solarConnections(): SolarConnectionRepository
+    {
+        return $this->solarConnections ??= new SolarConnectionRepository();
+    }
+
+    private function solarReadings(): SolarReadingRepository
+    {
+        return $this->solarReadings ??= new SolarReadingRepository();
+    }
+
+    private function bills(): BillRepository
+    {
+        return $this->bills ??= new BillRepository();
     }
 
     private function validatedInput(mixed $raw, string $field): array

@@ -37,11 +37,19 @@ final class Household
     ) {
     }
 
-    public static function create(?string $label, string $timezone, ?string $locationLabel, DateTimeImmutable $now): self
-    {
+    public static function create(
+        ?string $label,
+        string $timezone,
+        ?string $locationLabel,
+        DateTimeImmutable $now,
+        ?string $serviceNumber = null
+    ): self {
         $timezone = self::validateTimezone($timezone);
         $label = self::validateLabel($label);
         $locationLabel = self::validateLocationLabel($locationLabel);
+        $service = ($serviceNumber === null || $serviceNumber === '')
+            ? null
+            : \App\Domain\Bill\ServiceNumber::assertCanonical($serviceNumber);
 
         $stamp = $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
 
@@ -50,7 +58,7 @@ final class Household
             label: $label,
             timezone: $timezone,
             locationLabel: $locationLabel,
-            serviceNumber: null,
+            serviceNumber: $service,
             status: self::STATUS_ACTIVE,
             createdAt: $stamp,
             updatedAt: $stamp

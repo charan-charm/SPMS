@@ -41,6 +41,11 @@ final class Response
         return $this->status;
     }
 
+    public function data(): ?array
+    {
+        return $this->data;
+    }
+
     public function body(): array
     {
         return [
@@ -77,6 +82,20 @@ final class Response
         if ($requestId !== null) {
             $meta['request_id'] = $meta['request_id'] ?? $requestId;
             $this->headers['X-Request-Id'] = $this->headers['X-Request-Id'] ?? $requestId;
+        }
+
+        if (ob_get_level() > 0 && ob_get_length() > 0) {
+            $discarded = ob_get_contents();
+            if ($discarded !== false && $discarded !== '') {
+                try {
+                    Logger::default()->warning('response.output_buffer_cleared', [
+                        'discarded_output' => $discarded,
+                    ]);
+                } catch (\Throwable) {
+                    // Fail-safe: do not block response if logging fails
+                }
+            }
+            ob_clean();
         }
 
         if (PHP_SAPI !== 'cli') {

@@ -100,7 +100,7 @@ final class ConsumptionChangeDetector implements InsightDetector
                 evidenceSummary: 'Two most recent household consumption period records.',
                 explanation: sprintf(
                     'The two most recent consumption periods differ by %s. The values above keep their reported data nature and are an observed movement, not a verified explanation of behaviour.',
-                    EvidenceFormat::kwh($delta)
+                    EvidenceFormat::kwh(abs($delta))
                 ),
                 explanationSource: self::EXPLANATION_SOURCE,
                 evidenceDomains: ['consumption'],

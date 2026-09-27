@@ -455,9 +455,14 @@ final class BillPersistenceTest
                 $service->markProcessing($account, $bill->id(), self::now());
                 $service->markProcessingFailed($account, $bill->id(), self::now());
 
+                // PROCESSING_FAILED can transition back to PROCESSING for retry
+                $retried = $service->markProcessing($account, $bill->id(), self::now());
+                Assert::same(BillStatus::PROCESSING, $retried->status());
+
+                // But cannot skip directly to VERIFIED
                 try {
-                    $service->markProcessing($account, $bill->id(), self::now());
-                    Assert::true(false, 'PROCESSING_FAILED is terminal');
+                    $service->verify($account, $bill->id(), self::now());
+                    Assert::true(false, 'PROCESSING must not skip directly to VERIFIED');
                 } catch (AppException $e) {
                     Assert::same('INVALID_BILL_STATE', $e->errorCode());
                 }
@@ -608,19 +613,143 @@ final class BillPersistenceTest
                 $pdo->prepare('DELETE FROM household_memberships WHERE household_id = :id')->execute(['id' => $householdId]);
                 $pdo->prepare('DELETE FROM households WHERE id = :id')->execute(['id' => $householdId]);
                 self::$createdBills = array_values(array_filter(self::$createdBills, static fn (string $id): bool => $id !== $bill->id()));
+
+                // Clean up all remaining created bills from this class so spms_test is clean for downstream suites
+                $cleanStmt = $pdo->prepare('DELETE FROM bills WHERE id = :id');
+                foreach (self::$createdBills as $cleanId) {
+                    $cleanStmt->execute(['id' => $cleanId]);
+                }
+                self::$createdBills = [];
+            }),
+
+            TestResult::check('duplicate same-period import is idempotent and yields one canonical statement (CASE 1)', function (): void {
+                [$account, $householdId] = self::fixture();
+                $service = self::service();
+                $repo = self::repo();
+
+                $bill1 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
+                $bill1 = $service->markProcessing($account, $bill1->id(), self::now());
+                $bill1 = $service->recordExtraction(
+                    $account, $bill1->id(),
+                    BillExtractionDraft::create($bill1->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', self::canonicalValues()),
+                    [], [], self::now()
+                );
+
+                $bill2 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
+                $bill2 = $service->markProcessing($account, $bill2->id(), self::now());
+                $bill2 = $service->recordExtraction(
+                    $account, $bill2->id(),
+                    BillExtractionDraft::create($bill2->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', self::canonicalValues()),
+                    [], [], self::now()
+                );
+
+                $list = $repo->listForHousehold($householdId);
+                Assert::same(1, count($list), 'two unverified compatible bills for same period deduplicate to one canonical statement');
+                Assert::same('2026-08-01', $list[0]->value('billing_period_start'));
+                Assert::same('2026-09-01', $list[0]->value('billing_period_end'));
+            }),
+
+            TestResult::check('verified same-period record remains authoritative over unverified (CASE 2)', function (): void {
+                [$account, $householdId] = self::fixture();
+                $service = self::service();
+                $repo = self::repo();
+
+                // Bill 1 is verified
+                $bill1 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
+                $bill1 = $service->markProcessing($account, $bill1->id(), self::now());
+                $bill1 = $service->recordExtraction(
+                    $account, $bill1->id(),
+                    BillExtractionDraft::create($bill1->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', self::canonicalValues()),
+                    [], [], self::now()
+                );
+                $bill1 = $service->verify($account, $bill1->id(), self::now());
+
+                // Bill 2 is newly extracted for the same period
+                $bill2 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
+                $bill2 = $service->markProcessing($account, $bill2->id(), self::now());
+                $bill2 = $service->recordExtraction(
+                    $account, $bill2->id(),
+                    BillExtractionDraft::create($bill2->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', self::canonicalValues()),
+                    [], [], self::now()
+                );
+
+                $list = $repo->listForHousehold($householdId);
+                Assert::same(1, count($list), 'verified record takes precedence as the single canonical statement');
+                Assert::same($bill1->id(), $list[0]->id());
+                Assert::same(BillStatus::VERIFIED, $list[0]->status());
+            }),
+
+            TestResult::check('overlapping but different periods are not incorrectly deduplicated (CASE 3)', function (): void {
+                [$account, $householdId] = self::fixture();
+                $service = self::service();
+                $repo = self::repo();
+
+                $bill1 = self::track($service->create($account, '2026-07-01', '2026-08-01', self::now()));
+                $bill2 = self::track($service->create($account, '2026-07-15', '2026-08-15', self::now()));
+
+                $list = $repo->listForHousehold($householdId);
+                Assert::same(2, count($list), 'different billing periods must stay distinct');
+            }),
+
+            TestResult::check('conflicting same-period records preserve conflict rather than silently overwriting (CASE 4)', function (): void {
+                [$account, $householdId] = self::fixture();
+                $service = self::service();
+                $repo = self::repo();
+
+                $vals1 = self::canonicalValues();
+                $vals1['consumption_kwh'] = '145.000';
+                $bill1 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
+                $bill1 = $service->markProcessing($account, $bill1->id(), self::now());
+                $bill1 = $service->recordExtraction(
+                    $account, $bill1->id(),
+                    BillExtractionDraft::create($bill1->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', $vals1),
+                    [], [], self::now()
+                );
+
+                $vals2 = self::canonicalValues();
+                $vals2['consumption_kwh'] = '200.000'; // conflicting
+                $bill2 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
+                $bill2 = $service->markProcessing($account, $bill2->id(), self::now());
+                $bill2 = $service->recordExtraction(
+                    $account, $bill2->id(),
+                    BillExtractionDraft::create($bill2->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', $vals2),
+                    [], [], self::now()
+                );
+
+                $list = $repo->listForHousehold($householdId);
+                Assert::same(2, count($list), 'conflicting unverified statements are not silently merged');
+            }),
+
+            TestResult::check('reapStaleProcessing reaps stuck PROCESSING bills to PROCESSING_FAILED after bounded timeout', function (): void {
+                [$account, $householdId] = self::fixture();
+                $service = self::service();
+                $repo = self::repo();
+                $pdo = self::pdo();
+
+                $bill = self::track($service->create($account, null, null, self::now()));
+                $bill = $service->markProcessing($account, $bill->id(), self::now());
+
+                // Artificially age the processing bill in the DB
+                $stmt = $pdo->prepare('UPDATE bills SET created_at = :old1, updated_at = :old2 WHERE id = :id');
+                $oldTime = date('Y-m-d H:i:s', time() - 300); // 300 seconds ago (> 180s)
+                $stmt->execute(['old1' => $oldTime, 'old2' => $oldTime, 'id' => $bill->id()]);
+
+                $reaped = $repo->reapStaleProcessing($householdId, 180);
+                Assert::same(1, $reaped, 'stale processing bill must be reaped');
+
+                $found = $repo->find($bill->id(), $householdId);
+                Assert::same(BillStatus::PROCESSING_FAILED, $found?->status(), 'reaped bill must be in PROCESSING_FAILED');
+            }),
+
+            TestResult::check('cleanup removes deduplication and reap test bills', function (): void {
+                $pdo = self::pdo();
+                $cleanStmt = $pdo->prepare('DELETE FROM bills WHERE id = :id');
+                foreach (self::$createdBills as $cleanId) {
+                    $cleanStmt->execute(['id' => $cleanId]);
+                }
+                self::$createdBills = [];
             }),
         ];
-
-        // Cleanup pass (bill rows only; children cascade).
-        try {
-            $pdo = self::pdo();
-            $statement = $pdo->prepare('DELETE FROM bills WHERE id = :id');
-            foreach (self::$createdBills as $billId) {
-                $statement->execute(['id' => $billId]);
-            }
-        } catch (\Throwable) {
-            // cleanup is best-effort, never a test signal
-        }
 
         return $tests;
     }

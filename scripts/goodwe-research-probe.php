@@ -237,7 +237,7 @@ function curlJson(string $url, array $headers, ?array $json, bool $isPost): arra
     curl_setopt_array($ch, $opts);
     $body = (string) curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
+    unset($ch);
     return [$status, $body];
 }
 

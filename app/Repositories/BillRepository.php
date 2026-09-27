@@ -8,8 +8,10 @@ use App\Domain\Bill\Bill;
 use App\Domain\Bill\BillExtractionDraft;
 use App\Domain\Bill\BillField;
 use App\Domain\Bill\BillQualityFlag;
+use App\Domain\Bill\BillStatus;
 use App\Domain\Bill\BillValidation;
 use App\Domain\Bill\ProvenanceSource;
+use App\Domain\Bill\QualityCode;
 use App\Support\Database;
 use InvalidArgumentException;
 use PDO;
@@ -82,19 +84,118 @@ final class BillRepository
     }
 
     /**
+     * Reaps stale bills stuck in PROCESSING status beyond the bounded timeout.
+     * Transitions them to PROCESSING_FAILED so active processing is finite.
+     */
+    public function reapStaleProcessing(string $householdId, int $timeoutSeconds = 180): int
+    {
+        try {
+            $statement = $this->connection()->prepare(
+                sprintf(
+                    'UPDATE bills 
+                     SET status = :failed_status, updated_at = UTC_TIMESTAMP()
+                     WHERE household_id = :household_id 
+                       AND status = :proc_status
+                       AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d SECOND)',
+                    $timeoutSeconds
+                )
+            );
+            $statement->execute([
+                'failed_status' => BillStatus::PROCESSING_FAILED,
+                'household_id' => $householdId,
+                'proc_status' => BillStatus::PROCESSING,
+            ]);
+
+            return $statement->rowCount();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /**
      * @return list<Bill>
      */
     public function listForHousehold(string $householdId): array
     {
-        $statement = $this->connection()->prepare(
-            'SELECT * FROM bills WHERE household_id = :household_id ORDER BY created_at DESC, id DESC'
-        );
-        $statement->execute(['household_id' => $householdId]);
+        $this->reapStaleProcessing($householdId);
 
-        return array_map(
-            static fn (array $row): Bill => Bill::fromStorageRow($row),
-            $statement->fetchAll(PDO::FETCH_ASSOC)
+        $statement = $this->connection()->prepare(
+            'SELECT * FROM bills 
+             WHERE household_id = :household_id 
+               AND status NOT IN (:failed_status, :not_a_bill, :unreadable, :uncertain)
+             ORDER BY 
+                 CASE WHEN billing_period_start IS NOT NULL THEN 0 ELSE 1 END,
+                 billing_period_start DESC,
+                 billing_period_end DESC,
+                 created_at DESC,
+                 id DESC'
         );
+        $statement->execute([
+            'household_id' => $householdId,
+            'failed_status' => BillStatus::PROCESSING_FAILED,
+            'not_a_bill' => BillStatus::NOT_A_BILL,
+            'unreadable' => BillStatus::UNREADABLE,
+            'uncertain' => BillStatus::UNCERTAIN,
+        ]);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        // Deduplicate bills by canonical billing period for the household
+        // (household_id + billing_period_start + billing_period_end).
+        // 1. Authoritative VERIFIED records take precedence over unverified records.
+        // 2. Drafts/processing rows without periods are kept distinct only for in-flight states.
+        // 3. Genuine conflicting values between unverified records are preserved.
+        $deduped = [];
+        $periodIndex = [];
+
+        foreach ($rows as $row) {
+            $start = $row['billing_period_start'];
+            $end = $row['billing_period_end'];
+
+            if ($start === null || $end === null) {
+                if (in_array($row['status'], [BillStatus::UPLOADED, BillStatus::PROCESSING], true)) {
+                    $deduped[] = Bill::fromStorageRow($row);
+                }
+                continue;
+            }
+
+            $key = "{$start}_{$end}";
+
+            if (!isset($periodIndex[$key])) {
+                $periodIndex[$key] = count($deduped);
+                $deduped[] = Bill::fromStorageRow($row);
+                continue;
+            }
+
+            $existingIdx = $periodIndex[$key];
+            $existingBill = $deduped[$existingIdx];
+            $newBill = Bill::fromStorageRow($row);
+
+            // Case 2: One is already VERIFIED -> verified record remains authoritative
+            if ($existingBill->status() === BillStatus::VERIFIED) {
+                continue;
+            }
+
+            if ($newBill->status() === BillStatus::VERIFIED) {
+                $deduped[$existingIdx] = $newBill;
+                continue;
+            }
+
+            // Case 4: Same period but conflicting values -> preserve conflict rather than silently merging
+            $existingConsumption = $existingBill->value('consumption_kwh');
+            $newConsumption = $newBill->value('consumption_kwh');
+            $isConflicting = false;
+            if ($existingConsumption !== null && $newConsumption !== null) {
+                if (abs((float) $existingConsumption - (float) $newConsumption) > 0.001) {
+                    $isConflicting = true;
+                }
+            }
+
+            if ($isConflicting) {
+                $deduped[] = $newBill;
+            }
+        }
+
+        return $deduped;
     }
 
     /**
@@ -314,6 +415,52 @@ final class BillRepository
         );
     }
 
+    /**
+     * Remove any existing ownership quality flags for a bill.
+     * Scoped by household_id to prevent cross-household mutation.
+     */
+    public function clearOwnershipQualityFlags(string $billId, string $householdId): void
+    {
+        $statement = $this->connection()->prepare(
+            'DELETE q FROM bill_quality_flags q
+             JOIN bills b ON b.id = q.bill_id
+             WHERE q.bill_id = :bill_id
+               AND b.household_id = :household_id
+               AND q.code IN (:mismatch, :not_configured, :missing)'
+        );
+        $statement->execute([
+            'bill_id' => $billId,
+            'household_id' => $householdId,
+            'mismatch' => QualityCode::SERVICE_NUMBER_MISMATCH,
+            'not_configured' => QualityCode::HOUSEHOLD_SERVICE_NOT_CONFIGURED,
+            'missing' => QualityCode::SERVICE_NUMBER_MISSING,
+        ]);
+    }
+
+    /**
+     * Atomically replace ownership quality flags for a bill.
+     * Scoped by household_id.
+     *
+     * @param list<BillQualityFlag> $newOwnershipFlags
+     */
+    public function syncOwnershipQualityFlags(string $billId, string $householdId, array $newOwnershipFlags, string $now): void
+    {
+        $pdo = $this->connection();
+        $pdo->beginTransaction();
+        try {
+            $this->clearOwnershipQualityFlags($billId, $householdId);
+            foreach ($newOwnershipFlags as $flag) {
+                $this->recordQualityFlag($billId, $flag, $now);
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
     // ------------------------------------------------------------------
     // Atomic composition (the transaction lives here, not in callers)
     // ------------------------------------------------------------------
@@ -415,7 +562,7 @@ final class BillRepository
 
     private function connection(): PDO
     {
-        return $this->pdo ??= Database::connection();
+        return $this->pdo ?? Database::connection();
     }
 
     private static function uuid(): string

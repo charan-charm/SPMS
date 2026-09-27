@@ -95,6 +95,36 @@ final class HouseholdApiTest
                 Assert::same($data['household']['id'], $current->body()['data']['household']['id']);
             }),
 
+            TestResult::check('POST /api/v1/household accepts optional service_number on creation', function (): void {
+                $account = AuthTesting::activateAccount();
+                $response = self::controller()->create(self::request('POST', [
+                    'label' => 'Primary Home',
+                    'timezone' => 'Asia/Kolkata',
+                    'location_label' => 'Hyderabad',
+                    'service_number' => '1000-2000-300',
+                ], as: $account));
+
+                Assert::same(201, $response->status());
+                $data = $response->body()['data'];
+                Assert::same('10002000300', $data['household']['service_number']);
+                Assert::same('Primary Home', $data['household']['label']);
+                Assert::same('Hyderabad', $data['household']['location_label']);
+
+                $current = self::controller()->current(self::request('GET', as: $account));
+                Assert::same('10002000300', $current->body()['data']['household']['service_number']);
+            }),
+
+            TestResult::check('POST /api/v1/household/demo/ensure fails closed in non-demo environment', function (): void {
+                $account = AuthTesting::activateAccount();
+                try {
+                    self::controller()->ensureDemo(self::request('POST', as: $account));
+                    Assert::true(false, 'Expected ensureDemo to fail outside demo environment');
+                } catch (AppException $e) {
+                    Assert::same('INVALID_ENVIRONMENT', $e->errorCode());
+                    Assert::same(403, $e->httpStatus());
+                }
+            }),
+
             TestResult::check('V1 single-household rule: a second creation is rejected, never replaced', function (): void {
                 $fixture = AuthTesting::householdFixture();
 

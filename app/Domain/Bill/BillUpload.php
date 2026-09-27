@@ -45,6 +45,7 @@ final class BillUpload
     public const TYPE_JPEG = 'image/jpeg';
     public const TYPE_PNG = 'image/png';
     public const TYPE_PDF = 'application/pdf';
+    public const TYPE_XLS = 'application/vnd.ms-excel';
 
     /** Controlled extension → canonical type mapping (§19). */
     private const EXTENSION_MAP = [
@@ -52,6 +53,7 @@ final class BillUpload
         'jpeg' => self::TYPE_JPEG,
         'png' => self::TYPE_PNG,
         'pdf' => self::TYPE_PDF,
+        'xls' => self::TYPE_XLS,
     ];
 
     /** Canonical type → the one safe extension storage ever uses. */
@@ -59,6 +61,7 @@ final class BillUpload
         self::TYPE_JPEG => 'jpg',
         self::TYPE_PNG => 'png',
         self::TYPE_PDF => 'pdf',
+        self::TYPE_XLS => 'xls',
     ];
 
     private const SIGNATURES = [
@@ -123,7 +126,7 @@ final class BillUpload
         if ($mimeType === null) {
             throw self::rejected(
                 'UNSUPPORTED_FILE_TYPE',
-                'Unsupported file type. Allowed: jpg, jpeg, png, pdf.'
+                'Unsupported file type. Allowed: jpg, jpeg, png, pdf, xls.'
             );
         }
 
@@ -160,10 +163,21 @@ final class BillUpload
             throw self::rejected('UPLOAD_FAILED', 'The uploaded file could not be read on the server.', 500);
         }
 
-        $head = (string) fread($handle, 8);
+        $head = (string) fread($handle, 512);
         fclose($handle);
 
-        if (!str_starts_with($head, self::SIGNATURES[$mimeType])) {
+        $validSig = false;
+        if ($mimeType === self::TYPE_XLS) {
+            $trimmedHead = ltrim($head, " \t\n\r\0\x0B\xEF\xBB\xBF");
+            $validSig = str_starts_with($head, "\xD0\xCF\x11\xE0")
+                || str_starts_with($trimmedHead, '<')
+                || str_contains(strtolower($head), '<table')
+                || str_contains(strtolower($head), '<html');
+        } elseif (isset(self::SIGNATURES[$mimeType])) {
+            $validSig = str_starts_with($head, self::SIGNATURES[$mimeType]);
+        }
+
+        if (!$validSig) {
             throw self::rejected(
                 'INVALID_FILE_SIGNATURE',
                 'The uploaded file content does not match its claimed type.'
@@ -179,7 +193,11 @@ final class BillUpload
                 $detected = false;
             }
 
-            if ($detected !== $mimeType) {
+            $acceptable = $mimeType === self::TYPE_XLS
+                ? in_array($detected, ['application/vnd.ms-excel', 'text/html', 'text/plain', 'application/octet-stream', 'application/xml'], true)
+                : $detected === $mimeType;
+
+            if (!$acceptable) {
                 throw self::rejected(
                     'INVALID_FILE_SIGNATURE',
                     'The uploaded file content does not match its claimed type.'

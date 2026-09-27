@@ -734,6 +734,8 @@ final class MistralOcrClient
     {
         return static function (string $method, string $url, array $options): array {
             $options['http_errors'] = false;
+            $options['connect_timeout'] = $options['connect_timeout'] ?? 10.0;
+            $options['timeout'] = $options['timeout'] ?? 45.0;
             $client = new GuzzleClient();
             $response = $client->request($method, $url, $options);
 

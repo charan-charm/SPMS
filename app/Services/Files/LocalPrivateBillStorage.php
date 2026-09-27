@@ -34,7 +34,7 @@ use App\Support\Config;
  */
 final class LocalPrivateBillStorage implements BillTemporaryStorageInterface
 {
-    private const KEY_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|pdf)$/';
+    private const KEY_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|pdf|xls)$/';
 
     private readonly string $root;
 

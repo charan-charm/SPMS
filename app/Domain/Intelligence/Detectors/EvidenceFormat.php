@@ -41,7 +41,7 @@ final class EvidenceFormat
         $end = $period['end'] ?? null;
 
         if ($start !== null && $end !== null) {
-            return $start . ' to ' . $end;
+            return $start === $end ? $start : $start . ' to ' . $end;
         }
 
         return $start ?? $end ?? 'unspecified period';

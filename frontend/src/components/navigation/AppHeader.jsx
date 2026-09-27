@@ -1,5 +1,5 @@
-import { NavLink, useLocation, Link } from 'react-router'
-import { Bell, CircleDashed, Menu } from 'lucide-react'
+import { useLocation, Link, useNavigate } from 'react-router'
+import { CircleDashed, Menu, LogOut, Moon, AlertTriangle, Clock, WifiOff } from 'lucide-react'
 import { BrandMark } from './BrandMark'
 import { ThemeSwitch } from './ThemeSwitch'
 import { findNavItem } from '../../app/navigation'
@@ -11,6 +11,9 @@ import {
     DropdownMenuItem,
     DropdownMenuSeparator,
 } from '../ui/dropdown-menu'
+import { useAuth } from '../../features/auth/AuthContext'
+import { useSolar } from '../../features/solar/useSolar'
+import { NotificationBellPopover } from '../../features/notifications'
 
 /**
  * AppHeader (docs/04 §11) — answers "where am I, what is happening?"
@@ -22,14 +25,124 @@ import {
  * wordmark is part of the logo image; the header height, divider and
  * page title placement are unchanged.
  *
- * The connection-status slot is intentionally neutral (no invented
- * GoodWe/system status until backend integration), and the
- * notification/account entries render structure with explicit
- * "not available yet" semantics — no fabricated counts or names.
+ * The connection-status slot derives from backend-authoritative solar
+ * connection state, displaying distinct semantic states without fabrication.
+ * The account dropdown connects to the authenticated session with
+ * real user email and sign-out functionality.
  */
 export function AppHeader({ onOpenNavigation }) {
     const location = useLocation()
+    const navigate = useNavigate()
     const current = findNavItem(location.pathname)
+
+    const { account, logout } = useAuth()
+    const { connectionStatus } = useSolar()
+
+    const handleLogout = async () => {
+        if (logout) {
+            await logout()
+        }
+        navigate('/login')
+    }
+
+    const isDemo = account?.mode === 'DEMO_TEST' || account?.environment === 'DEMO'
+
+    const renderSolarStatusBadge = () => {
+        switch (connectionStatus) {
+            case 'CONNECTED':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300 md:inline-flex"
+                        title="Solar inverter connected and active"
+                    >
+                        <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
+                        Solar: Connected
+                    </span>
+                )
+            case 'OFFLINE':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 md:inline-flex"
+                        title="Solar inverter offline (night standby)"
+                    >
+                        <Moon className="size-3 text-amber-500" aria-hidden="true" />
+                        Solar: Offline
+                    </span>
+                )
+            case 'DEGRADED':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 md:inline-flex"
+                        title="Solar telemetry degraded"
+                    >
+                        <AlertTriangle className="size-3 text-amber-500" aria-hidden="true" />
+                        Solar: Degraded
+                    </span>
+                )
+            case 'AUTHENTICATION_ERROR':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-700 dark:text-rose-300 md:inline-flex"
+                        title="Solar provider authentication error. Re-authentication required."
+                    >
+                        <AlertTriangle className="size-3 text-rose-500" aria-hidden="true" />
+                        Solar: Auth Error
+                    </span>
+                )
+            case 'API_ERROR':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-700 dark:text-rose-300 md:inline-flex"
+                        title="Solar provider API reported an error"
+                    >
+                        <AlertTriangle className="size-3 text-rose-500" aria-hidden="true" />
+                        Solar: API Error
+                    </span>
+                )
+            case 'TIMEOUT':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-700 dark:text-rose-300 md:inline-flex"
+                        title="Solar provider request timed out"
+                    >
+                        <Clock className="size-3 text-rose-500" aria-hidden="true" />
+                        Solar: Timeout
+                    </span>
+                )
+            case 'NETWORK_ERROR':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-700 dark:text-rose-300 md:inline-flex"
+                        title="Network connection to solar provider unreachable"
+                    >
+                        <WifiOff className="size-3 text-rose-500" aria-hidden="true" />
+                        Solar: Network Error
+                    </span>
+                )
+            case 'UNKNOWN':
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted md:inline-flex"
+                        title="Solar connection status unknown"
+                    >
+                        <CircleDashed className="size-3.5" aria-hidden="true" />
+                        Solar: Unknown
+                    </span>
+                )
+            case 'NOT_CONFIGURED':
+            default:
+                return (
+                    <span
+                        className="hidden items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted md:inline-flex"
+                        title="No solar inverter connected yet"
+                    >
+                        <CircleDashed className="size-3.5" aria-hidden="true" />
+                        Solar: Not connected
+                    </span>
+                )
+        }
+    }
+
 
     return (
         <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur-sm">
@@ -60,56 +173,54 @@ export function AppHeader({ onOpenNavigation }) {
                 />
 
                 {/* Page / context information (route-derived, no fake data) */}
-                <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2.5">
                     <p className="truncate font-display text-base font-semibold text-heading">
                         {current ? current.name : 'SPMS'}
                     </p>
+                    {isDemo && (
+                        <span className="rounded-full border border-chart-demo/50 bg-chart-demo/10 px-2.5 py-0.5 font-body text-xs font-semibold text-chart-demo">
+                            DEMO — Simulated Demonstration Data
+                        </span>
+                    )}
                 </div>
 
                 <div className="ml-auto flex items-center gap-2">
-                    {/* Connection / service status slot — neutral placeholder
-                        until real backend status exists (never fabricated). */}
-                    <span
-                        className="hidden items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted md:inline-flex"
-                        title="Connection status will appear here once backend integration is available"
-                    >
-                        <CircleDashed className="size-3.5" aria-hidden="true" />
-                        Status: not connected yet
-                    </span>
+                    {/* Solar connection status badge derived from backend authority */}
+                    {renderSolarStatusBadge()}
 
-                    {/* Notification entry — structural only, no unread counts. */}
-                    <NavLink
-                        to="/notifications"
-                        aria-label="Notifications (no unread indicator until backend integration)"
-                        className="inline-flex size-10 items-center justify-center rounded-md border border-border bg-surface text-body transition-colors duration-150 hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-                    >
-                        <Bell className="size-4" aria-hidden="true" />
-                    </NavLink>
+                    {/* Notification popover entry with unread count badge & interactive popover */}
+                    <NotificationBellPopover />
 
                     <ThemeSwitch />
 
-                    {/* Account entry — structural only, no fabricated identity. */}
+                    {/* Account entry — authenticated identity + sign out */}
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <button
                                 type="button"
-                                aria-label="Account menu (account features not available yet)"
+                                aria-label={account?.email ? `Account menu for ${account.email}` : 'Account menu'}
                                 className="inline-flex size-10 cursor-pointer items-center justify-center rounded-md border border-border bg-surface text-body transition-colors duration-150 hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
                             >
                                 <span
                                     aria-hidden="true"
                                     className="grid size-7 place-items-center rounded-full bg-primary-soft text-xs font-bold text-primary-active"
                                 >
-                                    ?
+                                    {account?.email ? account.email.charAt(0).toUpperCase() : 'U'}
                                 </span>
                             </button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                            <DropdownMenuItem disabled>Account details (not available yet)</DropdownMenuItem>
-                            <DropdownMenuItem disabled>Sign out (not available yet)</DropdownMenuItem>
+                        <DropdownMenuContent align="end" className="w-56">
+                            <div className="px-3 py-2 text-xs">
+                                <p className="truncate font-semibold text-heading">{account?.email || 'Signed in user'}</p>
+                                <p className="capitalize text-muted">{account?.role ? `${account.role.toLowerCase()} account` : 'Authenticated'}</p>
+                            </div>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem disabled className="text-muted">
-                                Authentication arrives in a later milestone
+                            <DropdownMenuItem
+                                onClick={handleLogout}
+                                className="cursor-pointer text-danger focus:bg-danger/10 focus:text-danger"
+                            >
+                                <LogOut className="mr-2 size-4" aria-hidden="true" />
+                                Sign out
                             </DropdownMenuItem>
                         </DropdownMenuContent>
                     </DropdownMenu>

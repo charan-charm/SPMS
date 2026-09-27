@@ -74,7 +74,8 @@ final class HouseholdService
         ?string $label,
         string $timezone,
         ?string $locationLabel,
-        DateTimeImmutable $now
+        DateTimeImmutable $now,
+        ?string $serviceNumber = null
     ): array {
         if ($this->memberships->countForAccount($account->id()) > 0) {
             throw new AppException(
@@ -85,7 +86,7 @@ final class HouseholdService
         }
 
         try {
-            $household = Household::create($label, $timezone, $locationLabel, $now);
+            $household = Household::create($label, $timezone, $locationLabel, $now, $serviceNumber);
             $membership = Membership::create($household->id(), $account->id(), Membership::ROLE_OWNER, $now);
         } catch (InvalidArgumentException $e) {
             throw self::validationError($e);
@@ -94,6 +95,42 @@ final class HouseholdService
         $this->households->insertWithOwnerMembership($household, $membership);
 
         return ['household' => $household, 'membership' => $membership];
+    }
+
+    /**
+     * O3 — Backend-authoritative DEMO household provisioning.
+     *
+     * In the DEMO environment (spms_demo), guarantees idempotently that the
+     * caller account owns the prepared demonstration household. If already
+     * present, returns it; if absent, provisions it server-side.
+     * Fails closed with 403 if called outside the demo environment.
+     *
+     * @return array{household: Household, membership: Membership}
+     */
+    public function ensureDemoHouseholdForAccount(Account $account, DateTimeImmutable $now): array
+    {
+        $existing = $this->activeHouseholdFor($account);
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        $profile = \App\Support\Database::currentProfile();
+        if ($profile !== \App\Support\DataEnvironments::DEMO) {
+            throw new AppException(
+                'INVALID_ENVIRONMENT',
+                'Demo household provisioning is only permitted in the demonstration environment.',
+                403
+            );
+        }
+
+        return $this->createForAccount(
+            $account,
+            'SPMS Demonstration Residence',
+            'Asia/Kolkata',
+            'Demonstration Residence',
+            $now,
+            'DEMO-1000-2000-300'
+        );
     }
 
     /**

@@ -1,89 +1,59 @@
 # 08 — Security Rules
 
-**Status:** Phase 6 consolidated  
-**Scope:** SPMS application, data, integration, and operational security
-
----
+**Status:** Phase 6 consolidated — React frontend boundary updated  
+**Scope:** SPMS application, data, integration, frontend, API, and operational security
 
 ## 1. Security Principle
 
 Security is enforced primarily at the backend.
 
-The core rule is:
-
 ```text
 Authentication
-    ↓
+↓
 Authorization
-    ↓
+↓
 Validation
-    ↓
+↓
 Controlled Operation
-    ↓
+↓
 Auditable Result
 ```
 
 Frontend controls are not security boundaries.
 
----
+## 2. React Is an Untrusted Client
 
-## 2. Public Web Root
+All React-provided values are untrusted, including form values, route parameters, query parameters, IDs, filters, local storage, client state, UI permission flags, client-calculated values, and uploaded file metadata.
 
-Only the public application entry area is directly web-accessible.
+PHP must validate and authorize them.
 
-Protected:
+## 3. Public Web Root
 
-- application code
-- configuration
-- secrets
-- logs
-- bill files
-- private storage
+Only the intended public web entry area is directly web-accessible.
 
-must remain outside the public web root.
+Protected application code, configuration, secrets, logs, private files, and storage remain outside the public web root.
 
----
+## 4. API Security
 
-## 3. Password Security
+Every protected API validates authentication, account state, role/capability, household/resource ownership, lifecycle state, and operation scope as appropriate.
 
-Passwords use strong one-way PHP password hashing APIs.
+## 5. Password Security
 
-Backend password policy is authoritative.
+Passwords use strong one-way PHP password hashing APIs. Backend policy is authoritative. Passwords are never logged, returned, or stored in plaintext.
 
-Passwords are never logged, returned through APIs, or stored in plaintext.
+## 6. Email Verification
 
----
+Verification tokens are short-lived, unpredictable, single-use, and replay-resistant.
 
-## 4. Email Verification
+## 7. Account Recovery
 
-New accounts require controlled email verification before full protected access.
+Recovery uses secure, time-limited, single-use tokens. Avoid unnecessary account-enumeration leakage.
 
-Verification tokens are:
-
-- short-lived
-- unpredictable
-- single-use
-- replay-resistant
-
-Already consumed tokens cannot be reused.
-
----
-
-## 5. Account Recovery
-
-Recovery uses secure, time-limited, single-use tokens.
-
-Recovery token storage is protected.
-
-The system should avoid unnecessary account-enumeration leakage.
-
----
-
-## 6. Session Security
+## 8. Session Security
 
 Sessions are server-managed.
 
-Cookies use appropriate:
+Cookies use:
 
 ```text
 Secure
@@ -91,31 +61,15 @@ HttpOnly
 SameSite
 ```
 
-controls.
+Session IDs are regenerated after authentication. Logout invalidates the session. React does not store the authoritative session token in ordinary local storage.
 
-Session IDs are regenerated after authentication.
+## 9. CSRF
 
-Logout invalidates the session.
+Authenticated state-changing browser requests require CSRF protection. GET remains read-oriented.
 
-Session expiration is controlled and configurable.
+## 10. Authorization
 
-Account/lifecycle state changes can invalidate active sessions.
-
----
-
-## 7. Authorization
-
-Authorization is enforced for every protected operation.
-
-Checks may include:
-
-- authenticated identity
-- role
-- capability
-- household ownership
-- resource ownership
-- lifecycle state
-- operation scope
+Authorization is enforced on every protected operation.
 
 Roles:
 
@@ -124,257 +78,146 @@ USER
 ADMIN
 ```
 
-Demo/Real is an account mode/state, not an authorization role.
+Demo/Test is an account mode, not an authorization role.
 
----
+## 11. Admin Security
 
-## 8. Admin Security
+Admin accounts are individual authenticated identities. Admin actions are auditable and capability-scoped.
 
-Admin accounts are individual authenticated identities.
+## 12. Rate Limiting
 
-Admin actions are auditable.
+Sensitive/high-risk operations use rate limiting where appropriate. Authentication/recovery-sensitive operations have bounded brute-force protection.
 
-Sensitive admin capabilities require explicit authorization.
+## 13. Secrets
 
-Admin access does not bypass all business/security controls automatically.
+Secrets remain outside source control and server-side.
 
----
+Never place server secrets in React source, browser-exposed build variables, API responses, or logs.
 
-## 9. CSRF
+## 14. GoodWe Credential Security
 
-Authenticated state-changing browser requests require CSRF protection.
-
-CSRF tokens must be unpredictable and server-associated.
-
-GET requests remain safe/read-oriented.
-
----
-
-## 10. Sensitive Operations
-
-Sensitive operations may require:
-
-- explicit confirmation
-- re-authentication
-- authorization
-- lifecycle checks
-
-Examples include account deletion and other high-impact operations.
-
-Re-authentication does not automatically complete an operation.
-
----
-
-## 11. Rate Limiting and Abuse Protection
-
-Sensitive/high-risk operations use rate limiting where appropriate.
-
-Bounded brute-force protection applies to authentication/recovery-sensitive operations.
-
-External integrations use bounded retry behavior.
-
-Repeated provider failures must not create uncontrolled retry loops.
-
----
-
-## 12. Secrets
-
-Secrets remain outside source control and are environment-specific.
-
-Examples:
-
-- database credentials
-- application secrets
-- GoodWe credentials
-- AWS credentials/configuration
-- email provider credentials
-
-Secrets must never be hardcoded in JavaScript or committed to Git.
-
----
-
-## 13. GoodWe Credential Security
-
-GoodWe credentials are handled only in the backend integration boundary.
-
-They are never exposed to browser JavaScript.
-
-They are never placed in ordinary analytical API responses.
-
-They are excluded from logs.
+GoodWe credentials are backend-only and never exposed to React, returned through ordinary APIs, stored in browser storage, or logged.
 
 GoodWe credentials are a separate credential domain from SPMS account passwords: SPMS never stores the GoodWe secret as a one-way password hash, and the provider's wire encoding is not a storage mechanism. If the integration requires the original secret, it is encrypted at rest with keys held outside the database and repository (docs/10 D-059; mechanism decided in G0). GoodWe credentials/tokens never appear in AI/Bedrock prompts.
 
----
+## 15. File Upload Security
 
-## 14. File Upload Security
+Uploaded bills are untrusted.
 
-Uploaded bills must pass backend security/content validation.
+Backend validation includes content/MIME checks, allowed file type, file size, and filename/security checks as appropriate.
 
-Validation includes, as appropriate:
+Files are stored outside the public web root.
 
-- MIME/content checks
-- allowed type
-- file size
-- filename/security checks
-
-Browser-provided MIME information is not trusted by itself.
-
----
-
-## 15. Protected File Storage
-
-Bill files are stored outside the public web root.
-
-Stored filenames are server-generated controlled identifiers.
-
-Raw user filenames are not used as storage identifiers.
-
-Authorized retrieval is through backend-controlled access.
-
-There are no public static bill URLs.
-
----
-
-## 16. File Processing
-
-Processing follows:
+## 16. File Processing Security
 
 ```text
-Upload
- ↓
-Validate
- ↓
-Secure Storage
- ↓
-Process
- ↓
-Verify
+React
+↓
+PHP API
+↓
+Validation
+↓
+Private Storage
+↓
+Controlled Extraction
+↓
+AI Interpretation
+↓
+Verification
 ```
 
-If processing fails:
+AI extraction remains draft until verification.
 
-- original remains protected
-- failure is recorded
-- manual recovery/entry remains available
+## 17. AI Security
 
-A failed extraction must never become a verified bill automatically.
+AI receives minimum necessary validated context. External/user-provided content is treated as untrusted for prompt-injection purposes. AI output is constrained and validated before presentation.
 
----
+AI is never:
 
-## 17. Input Validation
+- numerical authority
+- authorization authority
+- lifecycle authority
+- data-quality authority
 
-Backend validation is authoritative for:
+## 18. Client-Side Security Limitations
 
-- API requests
-- form data
-- query parameters
-- file uploads
-- identifiers
-- date ranges
-- pagination
-- sorting
-- sensitive operations
+The following are UX mechanisms only:
 
-Prepared statements are used for database access.
+- hidden buttons
+- disabled buttons
+- React route guards
+- client permission checks
+- local storage flags
+- client role labels
+- optimistic UI
 
----
+They never replace backend authorization.
 
-## 18. Error Exposure
+## 19. URL Security
 
-Production users receive safe meaningful messages.
+URLs may carry safe navigation context. URLs never grant access, ownership, verification, completion, confidence, quality, or analytical truth.
 
-Do not expose:
+## 20. Browser Storage
 
-- stack traces
-- SQL errors
-- filesystem paths
-- credentials
-- internal architecture details that create unnecessary risk
+Use browser storage only for safe presentation/context where appropriate. Never use it as authoritative authentication, authorization, lifecycle, GoodWe, operation, or analytical state.
 
-Technical diagnostics remain in protected logs.
+## 21. XSS / Output Safety
 
----
+Preserve React escaping. Avoid unsafe HTML injection. User-generated and AI-generated content remains untrusted until appropriately constrained/sanitized.
 
-## 19. Logging Security
+## 22. API Error Safety
 
-Logs are structured, minimized, and redacted.
+Production responses must not expose stack traces, SQL, filesystem paths, secrets, provider credentials, or internal class names.
 
-Never log:
+## 23. Logging
 
-- passwords
-- recovery tokens
-- GoodWe credentials
-- AWS/API secrets
-- unnecessary bill contents
-- unnecessary personal information
+Logs are structured, redacted, correlation-aware, and outside the public web root.
 
-Security-relevant events should still be recorded.
+Do not log passwords, session secrets, GoodWe credentials, AWS secrets, recovery tokens, unnecessary bill contents, or unnecessary sensitive personal data.
 
----
+## 24. Data Authority
 
-## 20. Account Deletion Security
+Backend remains authoritative for analytical calculations, energy balance, cost, prediction, recommendation policy, notification decisions, data quality, provenance, and operation completion.
 
-Deletion follows:
+## 25. Security and Failure
+
+UI success is never backend success.
+
+For example:
+
+```text
+API timeout ≠ operation completed
+UI success animation ≠ backend success
+```
+
+Where operation state is unknown, retrieve authoritative backend state.
+
+## 26. Account Deletion
 
 ```text
 Authorize
- ↓
+↓
 Confirm
- ↓
-Revoke Access
- ↓
-Invalidate Sessions/Credentials
- ↓
-Stop Active Processing
- ↓
-Revoke External Integrations
- ↓
-Controlled Data Disposition
- ↓
-Audit/Reconcile
+↓
+Revoke access
+↓
+Invalidate sessions/credentials
+↓
+Stop active processing
+↓
+Revoke external integrations
+↓
+Category-specific data disposition
+↓
+Audit
+↓
+Reconcile
 ```
 
-Partial failure must not be represented as successful deletion.
+Partial failure must not be reported as complete success.
 
----
+## 27. Governing Rule
 
-## 21. Data Lifecycle
+> **The browser is an interface, not a trust boundary.**
 
-Data deletion/retention is category-specific.
-
-Historical records that must retain analytical meaning are protected from inappropriate deletion.
-
-Only minimum legitimately required technical/security/audit information may remain after deletion.
-
----
-
-## 22. AI Security
-
-AI receives only minimum necessary validated semantic context.
-
-Sensitive raw data should not be sent unnecessarily.
-
-AI output is validated before presentation.
-
-AI cannot override backend numerical truth.
-
----
-
-## 23. Operational Security
-
-External integrations have:
-
-- explicit timeouts
-- bounded retries
-- idempotency where necessary
-- health monitoring
-- controlled failure states
-
-Operational failures are isolated so they do not silently corrupt unrelated capabilities.
-
----
-
-## 24. Core Principle
-
-> Authentication establishes who the user is. Authorization determines what that identity may do. Backend validation and lifecycle controls determine whether an operation is allowed. Security mechanisms must remain enforced even when frontend behavior is manipulated.
+**END OF SECURITY RULES**

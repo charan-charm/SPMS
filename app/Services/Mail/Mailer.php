@@ -37,8 +37,16 @@ final class Mailer
         };
     }
 
-    public function send(string $toEmail, string $subject, string $textBody): void
-    {
-        $this->transport->send($toEmail, $subject, $textBody);
+    /**
+     * Send an email. When htmlBody is provided, HTML-capable clients render
+     * it; textBody serves as the plain-text fallback for all other clients.
+     */
+    public function send(
+        string $toEmail,
+        string $subject,
+        string $textBody,
+        ?string $htmlBody = null
+    ): void {
+        $this->transport->send($toEmail, $subject, $textBody, [], $htmlBody);
     }
 }

@@ -1,18 +1,18 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "bai": {
+    "xkiro": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "B.AI",
+      "name": "xKiro",
       "options": {
-        "baseURL": "https://api.b.ai/v1"
+        "baseURL": "https://api.xkiro.com/v1"
       },
       "models": {
-        "glm-5.3-flash": {
-          "name": "glm-5.3-flash"
+        "deepseek/deepseek-v4-pro": {
+          "name": "DeepSeek V4 Pro"
         }
       }
     }
   },
-  "model": "bai/glm-5.3-flash"
+  "model": "xkiro/deepseek/deepseek-v4-pro"
 }

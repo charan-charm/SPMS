@@ -22,8 +22,9 @@ final class ProvenanceSource
 {
     public const AI_EXTRACTION = 'AI_EXTRACTION';
     public const USER_CORRECTION = 'USER_CORRECTION';
+    public const STRUCTURED_IMPORT = 'STRUCTURED_IMPORT';
 
-    public const ALL = [self::AI_EXTRACTION, self::USER_CORRECTION];
+    public const ALL = [self::AI_EXTRACTION, self::USER_CORRECTION, self::STRUCTURED_IMPORT];
 
     public static function isValid(string $source): bool
     {

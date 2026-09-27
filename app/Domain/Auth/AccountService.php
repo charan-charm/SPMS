@@ -9,12 +9,17 @@ use App\Repositories\AccountRepository;
 use App\Repositories\AccountTokenRepository;
 use App\Repositories\SecurityEventRepository;
 use App\Services\Mail\Mailer;
+use App\Services\Mail\RecoveryEmailTemplate;
+use App\Services\Mail\VerificationEmailTemplate;
 use App\Support\AppException;
+use App\Support\Config;
+use App\Support\DataEnvironments;
+use App\Support\Logger;
 use App\Support\Security\TokenHasher;
 use DateTimeImmutable;
 
 /**
- * W1 — Authentication use-cases (docs/10 D-049–D-054).
+ * W1 — Authentication use-cases (docs/02 §W1, docs/06 §22, docs/10 D-049–D-054).
  *
  * Registration, email verification, login, logout, recovery and reset.
  * Uniform failure semantics: an unknown email, a wrong password and a
@@ -23,11 +28,27 @@ use DateTimeImmutable;
  * or the specific failure reason crosses the API boundary. Recovery
  * requests always return the same accepted response whether or not the
  * account exists (docs/08 §7).
+ *
+ * Email verification uses a 6-digit numeric code (CSPRNG via
+ * TokenHasher::generateSixDigit()). The code itself is delivered only
+ * inside the email — it is NEVER stored in plaintext, NEVER logged,
+ * NEVER returned in any response, and NEVER appears in any URL. Only its
+ * SHA-256 hash is persisted. Resend revokes all prior codes before
+ * issuing a new one. Excessive wrong-code attempts trigger a rate lock
+ * (max VERIFICATION_MAX_ATTEMPTS within VERIFICATION_WINDOW_SECONDS).
  */
 final class AccountService
 {
     public const VERIFICATION_TTL_HOURS = 24;
     public const RECOVERY_TTL_MINUTES = 60;
+
+    /** Maximum wrong-code attempts before the account's verification is rate-locked. */
+    public const VERIFICATION_MAX_ATTEMPTS = 5;
+
+    /** Window in seconds for counting VERIFICATION_FAILED events. */
+    public const VERIFICATION_WINDOW_SECONDS = 86400; // 24 hours (matches TTL)
+
+    private readonly ?Logger $logger;
 
     public function __construct(
         private readonly AccountRepository $accounts = new AccountRepository(),
@@ -35,8 +56,10 @@ final class AccountService
         private readonly SessionService $sessionsService = new SessionService(),
         private readonly SecurityEventRepository $events = new SecurityEventRepository(),
         private readonly RateLimiter $limiter = new RateLimiter(),
-        private readonly Mailer $mailer = new Mailer()
+        private readonly Mailer $mailer = new Mailer(),
+        ?Logger $logger = null
     ) {
+        $this->logger = $logger ?? Logger::default();
     }
 
     /**
@@ -64,20 +87,18 @@ final class AccountService
             throw new AppException('VALIDATION_ERROR', 'email is already registered.', 422, ['field' => 'email']);
         }
 
-        $account = Account::register($email, PasswordPolicy::hash($password), new DateTimeImmutable('now', new \DateTimeZone('UTC')));
+        $isDemo = \App\Support\Database::currentProfile() === DataEnvironments::DEMO;
+        $mode = $isDemo ? Account::MODE_DEMO_TEST : Account::MODE_REAL;
+
+        $account = Account::register(
+            $email,
+            PasswordPolicy::hash($password),
+            new DateTimeImmutable('now', new \DateTimeZone('UTC')),
+            $mode
+        );
         $this->accounts->insert($account);
 
-        $sent = $this->issueTokenAndSendMail(
-            $account,
-            AccountTokenRepository::TYPE_EMAIL_VERIFICATION,
-            self::VERIFICATION_TTL_HOURS . ' hours',
-            'SPMS — Verify your email address',
-            'Welcome to SPMS.' . "\r\n\r\n"
-            . 'Use the verification code below to activate your account:' . "\r\n\r\n"
-            . '{TOKEN}' . "\r\n\r\n"
-            . 'The code expires in ' . self::VERIFICATION_TTL_HOURS . ' hours.' . "\r\n\r\n"
-            . 'If you did not create this account, no action is required.'
-        );
+        $sent = $this->issueVerificationCodeAndSendMail($account);
 
         $this->events->record(
             SecurityEventRepository::REGISTRATION_SUCCEEDED,
@@ -93,33 +114,80 @@ final class AccountService
     }
 
     /**
-     * Consume an EMAIL_VERIFICATION token and activate the account.
+     * Consume an EMAIL_VERIFICATION 6-digit code and activate the account.
+     *
+     * The $rawCode must be exactly 6 decimal digits (validated here and by
+     * the controller). We look up its SHA-256 hash; the plaintext code is
+     * never stored, never logged, never echoed in error messages.
      */
-    public function verifyEmail(string $rawToken): Account
+    public function verifyEmail(string $rawCode, ?string $rawEmail = null): Account
     {
-        if (!is_string($rawToken) || $rawToken === '') {
-            throw $this->verificationFailed('verification token is required.', null);
+        // Basic format guard — exactly 6 decimal digits
+        if (!is_string($rawCode) || !preg_match('/^\d{6}$/', $rawCode)) {
+            throw $this->verificationFailed('verification code must be exactly 6 digits.', null);
         }
 
         $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        $token = $this->tokens->findValidByHash(
+        $nowStr = $now->format('Y-m-d H:i:s');
+        $hash = TokenHasher::hash($rawCode);
+
+        // Look up token by hash to determine state (valid, used, or expired)
+        $anyToken = $this->tokens->findByHash(
             AccountTokenRepository::TYPE_EMAIL_VERIFICATION,
-            TokenHasher::hash($rawToken),
-            $now->format('Y-m-d H:i:s')
+            $hash
         );
 
-        if ($token === null || !$this->tokens->markUsed((string) $token['id'], $now->format('Y-m-d H:i:s'))) {
-            throw $this->verificationFailed('verification token is invalid or expired.', $token['account_id'] ?? null);
+        if ($anyToken === null) {
+            // Record failed attempt. Account ID unknown at this point (code didn't match).
+            throw $this->verificationFailed('verification code is invalid or expired.', null);
         }
 
-        $account = $this->accounts->findById((string) $token['account_id']);
+        $accountId = (string) $anyToken['account_id'];
+
+        // If email hint was provided, ensure the token belongs to the matching account
+        if ($rawEmail !== null && trim($rawEmail) !== '') {
+            $expectedAccount = $this->accounts->findByEmail(Account::normalizeEmail($rawEmail));
+            if ($expectedAccount === null || $expectedAccount->id() !== $accountId) {
+                throw $this->verificationFailed('verification code is invalid or expired.', null);
+            }
+        }
+
+        // Per-account attempt limit: prevent brute-forcing the 6-digit space
+        $recentFailures = $this->events->countRecentForAccount(
+            SecurityEventRepository::VERIFICATION_FAILED,
+            $accountId,
+            self::VERIFICATION_WINDOW_SECONDS
+        );
+
+        if ($recentFailures >= self::VERIFICATION_MAX_ATTEMPTS) {
+            throw new AppException(
+                'RATE_LIMITED',
+                'Too many failed verification attempts. Please request a new code.',
+                429,
+                ['field' => 'code']
+            );
+        }
+
+        if ($anyToken['used_at'] !== null) {
+            throw $this->verificationFailed('verification code has already been used.', $accountId);
+        }
+
+        if ($anyToken['expires_at'] <= $nowStr) {
+            throw $this->verificationFailed('verification code has expired.', $accountId);
+        }
+
+        if (!$this->tokens->markUsed((string) $anyToken['id'], $nowStr)) {
+            throw $this->verificationFailed('verification code has already been used.', $accountId);
+        }
+
+        $account = $this->accounts->findById($accountId);
         if ($account === null) {
-            throw $this->verificationFailed('account no longer exists.', $token['account_id'] ?? null);
+            throw $this->verificationFailed('account no longer exists.', $accountId);
         }
 
         $activated = $account->withStatus(
             Account::STATUS_ACTIVE,
-            $now->format('Y-m-d H:i:s'),
+            $nowStr,
             $now
         );
         $this->accounts->updateStatus($activated);
@@ -137,7 +205,8 @@ final class AccountService
 
     /**
      * Uniform resend: always 200-accepted; only real pending accounts
-     * actually receive mail.
+     * actually receive mail. Resend revokes all prior unused codes before
+     * issuing a new one — at any moment, at most one valid code exists.
      *
      * @return array{accepted: true, sent: bool}
      */
@@ -165,16 +234,7 @@ final class AccountService
                 $ipAddress
             );
 
-            $sent = $this->issueTokenAndSendMail(
-                $account,
-                AccountTokenRepository::TYPE_EMAIL_VERIFICATION,
-                self::VERIFICATION_TTL_HOURS . ' hours',
-                'SPMS — Verify your email address',
-                'Use the verification code below to activate your account:' . "\r\n\r\n"
-                . '{TOKEN}' . "\r\n\r\n"
-                . 'The code expires in ' . self::VERIFICATION_TTL_HOURS . ' hours.' . "\r\n\r\n"
-                . 'If you did not request this, no action is required.'
-            );
+            $sent = $this->issueVerificationCodeAndSendMail($account);
         } else {
             $this->events->record(
                 SecurityEventRepository::VERIFICATION_RESEND_SUPPRESSED,
@@ -298,22 +358,99 @@ final class AccountService
         );
         $this->recordIpBucketEvent(SecurityEventRepository::RECOVERY_REQUESTED, $ipBucket, $account->id(), $ipAddress);
 
-        $this->issueTokenAndSendMail(
-            $account,
-            AccountTokenRepository::TYPE_PASSWORD_RECOVERY,
-            self::RECOVERY_TTL_MINUTES . ' minutes',
-            'SPMS — Reset your password',
-            'Use the recovery code below to reset your password:' . "\r\n\r\n"
-            . '{TOKEN}' . "\r\n\r\n"
-            . 'The code expires in ' . self::RECOVERY_TTL_MINUTES . ' minutes.' . "\r\n\r\n"
-            . 'If you did not request a password reset, no action is required.'
-        );
+        // 6-digit cryptographic recovery code with unified light SPMS email
+        $this->issueRecoveryCodeAndSendMail($account);
 
         return ['accepted' => true];
     }
 
     /**
-     * Consume a PASSWORD_RECOVERY token, set the new password and revoke
+     * Verify a 6-digit recovery code without consuming it (Step 2 of recovery).
+     *
+     * Validates that the code is exactly 6 digits, matches an unconsumed,
+     * unexpired PASSWORD_RECOVERY token for the specified account, and
+     * enforces per-account attempt bounding.
+     *
+     * @return array{verified: true, account_id: string}
+     */
+    public function verifyRecoveryCode(string $rawCode, ?string $rawEmail, ?string $ipAddress): array
+    {
+        $code = trim($rawCode);
+        if (!preg_match('/^[0-9]{6}$/', $code)) {
+            throw $this->resetFailed('recovery code must be exactly 6 digits.', $ipAddress);
+        }
+
+        $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $nowStr = $now->format('Y-m-d H:i:s');
+        $hash = TokenHasher::hash($code);
+
+        $accountForEmail = null;
+        if ($rawEmail !== null && trim($rawEmail) !== '') {
+            $accountForEmail = $this->accounts->findByEmail(Account::normalizeEmail($rawEmail));
+        }
+
+        // Check recent failures on the specified email account if known
+        if ($accountForEmail !== null) {
+            $recentFailures = $this->events->countRecentForAccount(
+                SecurityEventRepository::PASSWORD_RESET_FAILED,
+                $accountForEmail->id(),
+                self::VERIFICATION_WINDOW_SECONDS
+            );
+
+            if ($recentFailures >= self::VERIFICATION_MAX_ATTEMPTS) {
+                throw new AppException(
+                    'RATE_LIMITED',
+                    'Too many failed recovery attempts. Please request a new code.',
+                    429,
+                    ['field' => 'code']
+                );
+            }
+        }
+
+        $anyToken = $this->tokens->findByHash(
+            AccountTokenRepository::TYPE_PASSWORD_RECOVERY,
+            $hash
+        );
+
+        if ($anyToken === null) {
+            throw $this->resetFailed('recovery code is invalid or expired.', $ipAddress, $accountForEmail?->id());
+        }
+
+        $accountId = (string) $anyToken['account_id'];
+
+        if ($accountForEmail !== null && $accountForEmail->id() !== $accountId) {
+            throw $this->resetFailed('recovery code is invalid or expired.', $ipAddress, $accountForEmail->id());
+        }
+
+        // Per-account attempt limit: max attempts before rate-lock
+        $recentFailures = $this->events->countRecentForAccount(
+            SecurityEventRepository::PASSWORD_RESET_FAILED,
+            $accountId,
+            self::VERIFICATION_WINDOW_SECONDS
+        );
+
+        if ($recentFailures >= self::VERIFICATION_MAX_ATTEMPTS) {
+            throw new AppException(
+                'RATE_LIMITED',
+                'Too many failed recovery attempts. Please request a new code.',
+                429,
+                ['field' => 'code']
+            );
+        }
+
+        if ($anyToken['used_at'] !== null) {
+            throw $this->resetFailed('recovery code has already been used.', $ipAddress, $accountId);
+        }
+
+        if ($anyToken['expires_at'] <= $nowStr) {
+            throw $this->resetFailed('recovery code has expired.', $ipAddress, $accountId);
+        }
+
+        return ['verified' => true, 'account_id' => $accountId];
+    }
+
+    /**
+     * Consume a PASSWORD_RECOVERY 6-digit code, set the new password and revoke
      * every live session of the account.
      *
      * @return array{account: Account}
@@ -328,26 +465,58 @@ final class AccountService
             $ipAddress
         );
 
-        if (!is_string($rawToken) || $rawToken === '') {
-            throw $this->resetFailed('recovery token is required.', $ipAddress);
+        if (!is_string($rawToken) || trim($rawToken) === '') {
+            throw $this->resetFailed('recovery code is required.', $ipAddress);
         }
 
+        $code = trim($rawToken);
         $password = PasswordPolicy::validate($rawPassword);
 
         $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        $token = $this->tokens->findValidByHash(
+        $nowStr = $now->format('Y-m-d H:i:s');
+        $hash = TokenHasher::hash($code);
+
+        $anyToken = $this->tokens->findByHash(
             AccountTokenRepository::TYPE_PASSWORD_RECOVERY,
-            TokenHasher::hash($rawToken),
-            $now->format('Y-m-d H:i:s')
+            $hash
         );
 
-        if ($token === null || !$this->tokens->markUsed((string) $token['id'], $now->format('Y-m-d H:i:s'))) {
-            throw $this->resetFailed('recovery token is invalid or expired.', $ipAddress);
+        if ($anyToken === null) {
+            throw $this->resetFailed('recovery code is invalid or expired.', $ipAddress);
         }
 
-        $account = $this->accounts->findById((string) $token['account_id']);
+        $accountId = (string) $anyToken['account_id'];
+
+        $recentFailures = $this->events->countRecentForAccount(
+            SecurityEventRepository::PASSWORD_RESET_FAILED,
+            $accountId,
+            self::VERIFICATION_WINDOW_SECONDS
+        );
+
+        if ($recentFailures >= self::VERIFICATION_MAX_ATTEMPTS) {
+            throw new AppException(
+                'RATE_LIMITED',
+                'Too many failed recovery attempts. Please request a new code.',
+                429,
+                ['field' => 'code']
+            );
+        }
+
+        if ($anyToken['used_at'] !== null) {
+            throw $this->resetFailed('recovery code has already been used.', $ipAddress, $accountId);
+        }
+
+        if ($anyToken['expires_at'] <= $nowStr) {
+            throw $this->resetFailed('recovery code has expired.', $ipAddress, $accountId);
+        }
+
+        if (!$this->tokens->markUsed((string) $anyToken['id'], $nowStr)) {
+            throw $this->resetFailed('recovery code has already been used.', $ipAddress, $accountId);
+        }
+
+        $account = $this->accounts->findById($accountId);
         if ($account === null) {
-            throw $this->resetFailed('account no longer exists.', $ipAddress);
+            throw $this->resetFailed('account no longer exists.', $ipAddress, $accountId);
         }
 
         $updated = $account->withPasswordHash(PasswordPolicy::hash($password), $now);
@@ -366,10 +535,171 @@ final class AccountService
         return ['account' => $updated];
     }
 
+    // ─── Internal helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Issue a 6-digit verification code, revoke any prior unused codes,
+     * and deliver the SPMS-branded HTML email via the Mailer.
+     *
+     * The raw code exists only in memory for the duration of this call and
+     * inside the delivered email. It is NEVER logged or persisted in plaintext.
+     * Only its SHA-256 hash is stored in account_tokens.
+     */
+    private function issueVerificationCodeAndSendMail(Account $account): bool
+    {
+        $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $nowStr = $now->format('Y-m-d H:i:s');
+
+        // Resend invalidation: revoke all prior unused codes before issuing a new one.
+        $this->tokens->revokeUnusedByAccountAndType(
+            $account->id(),
+            AccountTokenRepository::TYPE_EMAIL_VERIFICATION,
+            $nowStr
+        );
+
+        $attempts = 0;
+        while (true) {
+            $rawCode = TokenHasher::generateSixDigit();
+            try {
+                $this->tokens->create(
+                    $account->id(),
+                    AccountTokenRepository::TYPE_EMAIL_VERIFICATION,
+                    TokenHasher::hash($rawCode),
+                    $now->modify('+' . self::VERIFICATION_TTL_HOURS . ' hours')->format('Y-m-d H:i:s'),
+                    $nowStr
+                );
+                break;
+            } catch (\PDOException $e) {
+                if (++$attempts >= 5 || !str_contains($e->getMessage(), 'Duplicate entry')) {
+                    throw $e;
+                }
+            }
+        }
+
+        try {
+            $htmlBody = VerificationEmailTemplate::buildHtml($rawCode, self::VERIFICATION_TTL_HOURS);
+            $textBody = VerificationEmailTemplate::buildText($rawCode, self::VERIFICATION_TTL_HOURS);
+
+            $this->mailer->send(
+                $account->email(),
+                'SPMS — Verify your email address',
+                $textBody,
+                $htmlBody
+            );
+
+            $this->logger?->info('mail.dispatch_succeeded', [
+                'component' => 'Mail',
+                'operation' => 'verification email',
+                'token_type' => AccountTokenRepository::TYPE_EMAIL_VERIFICATION,
+                'recipient' => $account->email(),
+                // Code is intentionally NOT logged — never log verification codes.
+            ]);
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger?->error('mail.dispatch_failed', [
+                'component' => 'Mail',
+                'operation' => 'verification email',
+                'token_type' => AccountTokenRepository::TYPE_EMAIL_VERIFICATION,
+                'recipient' => $account->email(),
+                'exception' => get_class($e),
+                'error' => $e->getMessage(),
+            ]);
+
+            $this->events->record(
+                SecurityEventRepository::MAIL_SEND_FAILED,
+                null,
+                $account->id(),
+                ['token_type' => AccountTokenRepository::TYPE_EMAIL_VERIFICATION],
+                null
+            );
+
+            return false;
+        }
+    }
+
+    /**
+     * Issue a 6-digit recovery code, revoke any prior unused recovery codes,
+     * and deliver the SPMS-branded HTML email via the Mailer.
+     * Returns whether delivery succeeded.
+     */
+    private function issueRecoveryCodeAndSendMail(Account $account): bool
+    {
+        $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $nowStr = $now->format('Y-m-d H:i:s');
+
+        // Revoke any prior unused recovery codes for this account (resend invalidation)
+        $this->tokens->revokeUnusedByAccountAndType(
+            $account->id(),
+            AccountTokenRepository::TYPE_PASSWORD_RECOVERY,
+            $nowStr
+        );
+
+        $attempts = 0;
+        while (true) {
+            $rawCode = TokenHasher::generateSixDigit();
+            try {
+                $this->tokens->create(
+                    $account->id(),
+                    AccountTokenRepository::TYPE_PASSWORD_RECOVERY,
+                    TokenHasher::hash($rawCode),
+                    $now->modify('+' . self::RECOVERY_TTL_MINUTES . ' minutes')->format('Y-m-d H:i:s'),
+                    $nowStr
+                );
+                break;
+            } catch (\PDOException $e) {
+                if (++$attempts >= 5 || !str_contains($e->getMessage(), 'Duplicate entry')) {
+                    throw $e;
+                }
+            }
+        }
+
+        try {
+            $htmlBody = RecoveryEmailTemplate::buildHtml($rawCode, self::RECOVERY_TTL_MINUTES);
+            $textBody = RecoveryEmailTemplate::buildText($rawCode, self::RECOVERY_TTL_MINUTES);
+
+            $this->mailer->send(
+                $account->email(),
+                'SPMS — Reset your password',
+                $textBody,
+                $htmlBody
+            );
+
+            $this->logger?->info('mail.dispatch_succeeded', [
+                'component' => 'Mail',
+                'operation' => 'recovery email',
+                'token_type' => AccountTokenRepository::TYPE_PASSWORD_RECOVERY,
+                'recipient' => $account->email(),
+                // Code is intentionally NOT logged — never log recovery codes.
+            ]);
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger?->error('mail.dispatch_failed', [
+                'component' => 'Mail',
+                'operation' => 'recovery email',
+                'token_type' => AccountTokenRepository::TYPE_PASSWORD_RECOVERY,
+                'recipient' => $account->email(),
+                'exception' => get_class($e),
+                'error' => $e->getMessage(),
+            ]);
+
+            $this->events->record(
+                SecurityEventRepository::MAIL_SEND_FAILED,
+                null,
+                $account->id(),
+                ['token_type' => AccountTokenRepository::TYPE_PASSWORD_RECOVERY],
+                null
+            );
+
+            return false;
+        }
+    }
+
     /**
      * Issue a token of the given type and deliver it through the mail
-     * abstraction. Returns whether delivery succeeded; delivery failure
-     * is recorded as a security event and never leaks the raw token.
+     * abstraction (plain-text only — for password recovery long tokens).
+     * Returns whether delivery succeeded.
      */
     private function issueTokenAndSendMail(Account $account, string $type, string $ttl, string $subject, string $bodyTemplate): bool
     {
@@ -392,8 +722,24 @@ final class AccountService
                 str_replace('{TOKEN}', $rawToken, $bodyTemplate)
             );
 
+            $this->logger?->info('mail.dispatch_succeeded', [
+                'component' => 'Mail',
+                'operation' => 'recovery email',
+                'token_type' => $type,
+                'recipient' => $account->email(),
+            ]);
+
             return true;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            $this->logger?->error('mail.dispatch_failed', [
+                'component' => 'Mail',
+                'operation' => 'recovery email',
+                'token_type' => $type,
+                'recipient' => $account->email(),
+                'exception' => get_class($e),
+                'error' => $e->getMessage(),
+            ]);
+
             $this->events->record(
                 SecurityEventRepository::MAIL_SEND_FAILED,
                 null,
@@ -447,19 +793,21 @@ final class AccountService
             SecurityEventRepository::VERIFICATION_FAILED,
             null,
             $accountId,
-            ['message' => $message],
+            // Deliberately omit the message from the event to prevent
+            // code enumeration information leaking into the audit log
+            null,
             null
         );
 
-        return new AppException('VALIDATION_ERROR', $message, 422, ['field' => 'token']);
+        return new AppException('VALIDATION_ERROR', $message, 422, ['field' => 'code']);
     }
 
-    private function resetFailed(string $message, ?string $ipAddress): AppException
+    private function resetFailed(string $message, ?string $ipAddress, ?string $accountId = null): AppException
     {
         $this->events->record(
             SecurityEventRepository::PASSWORD_RESET_FAILED,
             RateLimiter::ipBucket($ipAddress),
-            null,
+            $accountId,
             ['message' => $message],
             $ipAddress
         );

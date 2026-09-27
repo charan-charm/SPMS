@@ -35,4 +35,15 @@ final class Authorization
 
         return $account;
     }
+
+    public static function currentAccount(Request $request): ?Account
+    {
+        $context = $request->authContext();
+
+        if (!$context instanceof AuthContext || !$context->isAuthenticated()) {
+            return null;
+        }
+
+        return $context->account();
+    }
 }

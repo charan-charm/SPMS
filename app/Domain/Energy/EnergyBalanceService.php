@@ -151,8 +151,12 @@ final class EnergyBalanceService
      * consumption tables). The honest answer is UNAVAILABLE, never a
      * fabricated zero or a classification from nothing.
      */
-    public function unavailableResult(?string $householdId = null): array
-    {
+    public function unavailableResult(
+        ?string $householdId = null,
+        ?string $explanation = null,
+        ?array $notes = null,
+        ?string $limitation = null
+    ): array {
         return [
             'analysis' => [
                 'type' => self::ANALYSIS_AGGREGATE,
@@ -167,7 +171,8 @@ final class EnergyBalanceService
                 'state' => 'UNAVAILABLE',
                 'classification' => null,
                 'balance_kwh' => null,
-                'explanation' => 'No solar generation or household consumption data sources are connected yet, so no energy balance can be calculated.',
+                'explanation' => $explanation ?? 'No solar generation or household consumption data sources are connected yet, so no energy balance can be calculated.',
+                'limitation' => $limitation ?? 'A balance can be calculated here once solar generation and household consumption data sources are connected.',
                 'data_nature' => null,
                 'data_status' => 'UNAVAILABLE',
                 'measurement_context' => self::MEASUREMENT_CONTEXT_POTENTIAL,
@@ -175,7 +180,7 @@ final class EnergyBalanceService
                 'quality' => null,
                 'tolerance' => null,
             ],
-            'notes' => [
+            'notes' => $notes ?? [
                 'Energy balance requires solar generation and household consumption data. Once connected data sources exist, this endpoint returns the classified balance.',
                 'A balance result is a potential energy situation, never confirmed grid import/export.',
             ],

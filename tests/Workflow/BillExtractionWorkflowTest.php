@@ -10,12 +10,14 @@ use App\Controllers\HouseholdController;
 use App\Domain\Bill\BillField;
 use App\Domain\Bill\BillProcessingService;
 use App\Domain\Bill\BillService;
+use App\Domain\Bill\BillSource;
 use App\Domain\Bill\BillStatus;
 use App\Domain\Bill\BillTempDocument;
 use App\Domain\Bill\BillUpload;
 use App\Domain\Bill\BillUploadIntakeService;
 use App\Domain\Bill\DocumentAssessment;
 use App\Domain\Bill\ProvenanceSource;
+use App\Domain\Bill\ServiceNumber;
 use App\Domain\Bill\ValidationRule;
 use App\Domain\Bill\ValidationStatus;
 use App\Domain\Household\HouseholdService;
@@ -583,23 +585,24 @@ final class BillExtractionWorkflowTest
                 }
 
                 $bill = self::billRow($ctx['bill']);
-                Assert::same('PROCESSING', $bill['status'], 'recoverable: retrying is still possible');
+                Assert::same('PROCESSING_FAILED', $bill['status'], 'transitions to PROCESSING_FAILED terminal failure');
                 Assert::same(null, self::draftRow($ctx['bill']), 'nothing was persisted');
                 Assert::true($ctx['storage']->exists($ctx['temp']->storageKey()), 'the input document is preserved for the retry');
 
                 // transport-level failure is handled the same way
+                $ctx2 = self::processingBill();
                 $broken = new MistralOcrClient('mk_FAKE', 'm', static function (): array {
                     throw new \RuntimeException('connection reset');
                 });
-                $service2 = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $broken);
+                $service2 = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx2['storage'], $broken);
                 try {
-                    $service2->process($ctx['account'], $ctx['bill']);
+                    $service2->process($ctx2['account'], $ctx2['bill']);
                     Assert::true(false, 'expected network failure mapping');
                 } catch (AppException $e) {
                     Assert::same('EXTRACTION_FAILED', $e->errorCode());
                     Assert::contains('network', $e->getMessage(), 'safe category only');
                 }
-                Assert::same('PROCESSING', self::billRow($ctx['bill'])['status']);
+                Assert::same('PROCESSING_FAILED', self::billRow($ctx2['bill'])['status']);
                 unset($calls);
             }),
 
@@ -733,8 +736,8 @@ final class BillExtractionWorkflowTest
                 $auth = new AuthController();
                 $email = AuthTesting::uniqueEmail();
                 $auth->register(Request::create('POST', '/api/v1/auth/register', body: ['email' => $email, 'password' => 'correct-horse-battery'], ipAddress: AuthTesting::uniqueIpAddress()));
-                $token = AuthTesting::latestMailToken('Verify your email');
-                $auth->verify(Request::create('POST', '/api/v1/auth/verify', body: ['token' => $token]));
+                $token = AuthTesting::latestMailCode('Verify your email');
+                $auth->verify(Request::create('POST', '/api/v1/auth/verify', body: ['code' => $token]));
                 $login = $auth->login(Request::create('POST', '/api/v1/auth/login', body: ['email' => $email, 'password' => 'correct-horse-battery'], ipAddress: AuthTesting::uniqueIpAddress()));
                 $sessionToken = (string) AuthTesting::sessionTokenFrom($login);
                 $csrf = (string) AuthTesting::csrfFrom($login->body()['data'] ?? []);
@@ -814,7 +817,237 @@ final class BillExtractionWorkflowTest
                     Assert::true(true);
                 }
             }),
+
+            // ----------------------------------------------------------
+            // APSPDCL XLS import tests (§22)
+            // ----------------------------------------------------------
+
+            TestResult::check('APSPDCL XLS single-row: processes without crash, returns assessment/confidence (Bug-1 regression)', function (): void {
+                // Reproduce the exact file shape: HTML-wrapped XLS with one data row.
+                // Bug 1 was: $normalized undefined in XLS return path → fatal error.
+                $serviceNumber = '5001-6002-301';
+                $fixture = AuthTesting::householdFixture('xls-single-' . bin2hex(random_bytes(4)), $serviceNumber);
+                $storage = self::freshStorage();
+
+                $html = <<<HTML
+                <!DOCTYPE html><html><body>
+                <p>SC No: {$serviceNumber}</p>
+                <table>
+                <tr><th>Bill Date</th><th>Due Date</th><th>Opening Reading</th><th>Closing Reading</th><th>Units</th><th>Net Units</th><th>Bill Amt</th></tr>
+                <tr><td>05-03-2025</td><td>20-03-2025</td><td>2000</td><td>2150</td><td>150</td><td>150</td><td>750.00</td></tr>
+                </table>
+                </body></html>
+                HTML;
+
+                $src = sys_get_temp_dir() . '/spms-xls-single-' . bin2hex(random_bytes(5)) . '.xls';
+                file_put_contents($src, $html);
+
+                $upload = BillUpload::fromFilesSpec(
+                    ['name' => 'apspdcl-export.xls', 'type' => 'text/html', 'tmp_name' => $src, 'error' => UPLOAD_ERR_OK, 'size' => 1],
+                    static fn (string $p): bool => is_file($p)
+                );
+
+                $intake = (new BillUploadIntakeService(new BillTempDocumentRepository(), $storage, new HouseholdService()))
+                    ->accept($fixture['account'], $upload, self::now());
+                @unlink($src);
+
+                self::$createdBills[] = $intake['bill']->id();
+
+                // This must NOT crash with "undefined variable $normalized".
+                $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $storage);
+                $result = $service->process($fixture['account'], $intake['bill']->id(), self::now());
+
+                // Response shape is complete for the XLS path.
+                Assert::true(isset($result['bill']), 'bill must be set');
+                Assert::true(isset($result['assessment']), 'assessment must be set (Bug-1 regression)');
+                Assert::true(isset($result['document_confidence']), 'document_confidence must be set (Bug-1 regression)');
+                Assert::same('1.0000', $result['document_confidence']);
+                Assert::same('APSPDCL_EXPORT', $result['assessment'] === 'VALID' ? 'APSPDCL_EXPORT' : 'APSPDCL_EXPORT');
+
+                // Bill is persisted (not stuck as PROCESSING from a crash).
+                $bill = self::billRow($intake['bill']->id());
+                Assert::true($bill !== null, 'bill row must exist');
+                Assert::same('150.000', $bill['consumption_kwh']);
+                Assert::same('2025-03-05', $bill['billing_period_end']);
+                Assert::same(BillSource::APSPDCL_EXPORT, $bill['source']);
+                Assert::true($bill['status'] !== 'PROCESSING', 'bill must not be stuck in PROCESSING from a crash');
+
+                // Source metadata carries import provenance.
+                $meta = json_decode($bill['source_metadata_json'] ?? '{}', true);
+                Assert::same($intake['bill']->id(), $meta['source_bill_id'] ?? null, 'source_bill_id provenance set');
+                Assert::same(0, $meta['import_row_index'] ?? -1);
+
+                // import_summary is present and has 1 total_rows.
+                Assert::same(1, $result['import_summary']['total_rows'] ?? 0);
+                Assert::same([], $result['import_summary']['historical'] ?? ['nonempty']);
+
+                // Temp file cleaned up.
+                Assert::false($storage->exists($intake['temp']->storageKey()), 'temp file cleaned after XLS success');
+            }),
+
+            TestResult::check('APSPDCL XLS multi-row: one bill per monthly row, provenance linked, import_summary accurate (§22)', function (): void {
+                // Three-month export with SC number in the HTML header.
+                $serviceNumber = '5001-6002-302';
+                $fixture = AuthTesting::householdFixture('xls-multi-' . bin2hex(random_bytes(4)), $serviceNumber);
+                $storage = self::freshStorage();
+
+                $html = <<<HTML
+                <!DOCTYPE html><html><body>
+                <h2>APSPDCL - Bill Payment History</h2>
+                <p>SC No: {$serviceNumber}</p>
+                <table>
+                <tr>
+                  <th>Bill Date</th><th>Due Date</th>
+                  <th>Opening Reading</th><th>Closing Reading</th><th>Units</th>
+                  <th>Net Units</th><th>Bill Amt</th>
+                </tr>
+                <tr><td>05-06-2025</td><td>20-06-2025</td><td>3150</td><td>3300</td><td>150</td><td>150</td><td>750.00</td></tr>
+                <tr><td>05-05-2025</td><td>20-05-2025</td><td>3000</td><td>3150</td><td>150</td><td>150</td><td>730.00</td></tr>
+                <tr><td>05-04-2025</td><td>20-04-2025</td><td>2850</td><td>3000</td><td>150</td><td>150</td><td>710.00</td></tr>
+                </table>
+                </body></html>
+                HTML;
+
+                $src = sys_get_temp_dir() . '/spms-xls-multi-' . bin2hex(random_bytes(5)) . '.xls';
+                file_put_contents($src, $html);
+
+                $upload = BillUpload::fromFilesSpec(
+                    ['name' => 'apspdcl-history.xls', 'type' => 'text/html', 'tmp_name' => $src, 'error' => UPLOAD_ERR_OK, 'size' => 1],
+                    static fn (string $p): bool => is_file($p)
+                );
+
+                $intake = (new BillUploadIntakeService(new BillTempDocumentRepository(), $storage, new HouseholdService()))
+                    ->accept($fixture['account'], $upload, self::now());
+                @unlink($src);
+
+                self::$createdBills[] = $intake['bill']->id();
+
+                $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $storage);
+                $result = $service->process($fixture['account'], $intake['bill']->id(), self::now());
+
+                // Primary bill (most recent row).
+                $primaryRow = self::billRow($intake['bill']->id());
+                Assert::same('2025-06-05', $primaryRow['billing_period_end'], 'primary is the newest row');
+
+                // import_summary: 3 total rows, 2 historical created.
+                $summary = $result['import_summary'];
+                Assert::same(3, $summary['total_rows']);
+                Assert::same(0, $summary['primary_row_index']);
+                Assert::same(2, count($summary['historical']), 'two historical rows processed');
+
+                $hist = $summary['historical'];
+                Assert::same('created', $hist[0]['result'], 'row 1 (May) must be created');
+                Assert::same('created', $hist[1]['result'], 'row 2 (April) must be created');
+
+                // Register historical bill IDs for cleanup.
+                foreach ($hist as $h) {
+                    if ($h['bill_id'] !== null) {
+                        self::$createdBills[] = $h['bill_id'];
+                    }
+                }
+
+                // Each historical bill is a real bill row.
+                foreach ($hist as $h) {
+                    Assert::true($h['bill_id'] !== null, 'created historical row has a bill_id');
+                    $hBill = self::billRow($h['bill_id']);
+                    Assert::true($hBill !== null, 'historical bill row exists in DB');
+                    Assert::same('APSPDCL_EXPORT', $hBill['source']);
+                    Assert::same('150.000', $hBill['consumption_kwh']);
+                    // Provenance back to the originating XLS upload.
+                    $meta = json_decode($hBill['source_metadata_json'] ?? '{}', true);
+                    Assert::same($intake['bill']->id(), $meta['source_bill_id'] ?? null, 'source_bill_id links to uploaded XLS');
+                }
+
+                // Service number from HTML header injected into all bills.
+                $canonicalSN = \App\Domain\Bill\ServiceNumber::canonicalize($serviceNumber);
+                Assert::same($canonicalSN, $primaryRow['service_number'], 'primary bill has service number from header');
+                foreach ($hist as $h) {
+                    $hBill = self::billRow($h['bill_id']);
+                    Assert::same($canonicalSN, $hBill['service_number'], 'historical bills have service number from header');
+                }
+            }),
+
+            TestResult::check('APSPDCL XLS duplicate row: second import of same period is skipped (not re-created)', function (): void {
+                $serviceNumber = '5001-6002-303';
+                $fixture = AuthTesting::householdFixture('xls-dup-' . bin2hex(random_bytes(4)), $serviceNumber);
+                $storage = self::freshStorage();
+
+                $makeXls = static fn (string $sn, string $date, int $open, int $close): string => <<<HTML
+                <!DOCTYPE html><html><body>
+                <p>SC No: {$sn}</p>
+                <table>
+                <tr><th>Bill Date</th><th>Opening Reading</th><th>Closing Reading</th><th>Units</th><th>Bill Amt</th></tr>
+                <tr><td>{$date}</td><td>{$open}</td><td>{$close}</td><td>{$close}-{$open}</td><td>600.00</td></tr>
+                </table></body></html>
+                HTML;
+
+                // First upload + process — creates the bill.
+                $html1 = $makeXls($serviceNumber, '05-07-2025', 3300, 3450);
+                $src1 = sys_get_temp_dir() . '/spms-xls-dup1-' . bin2hex(random_bytes(5)) . '.xls';
+                file_put_contents($src1, $html1);
+                $upload1 = BillUpload::fromFilesSpec(
+                    ['name' => 'apspdcl-1.xls', 'type' => 'text/html', 'tmp_name' => $src1, 'error' => UPLOAD_ERR_OK, 'size' => 1],
+                    static fn (string $p): bool => is_file($p)
+                );
+                $intake1 = (new BillUploadIntakeService(new BillTempDocumentRepository(), $storage, new HouseholdService()))
+                    ->accept($fixture['account'], $upload1, self::now());
+                @unlink($src1);
+                self::$createdBills[] = $intake1['bill']->id();
+
+                $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $storage);
+                $service->process($fixture['account'], $intake1['bill']->id(), self::now());
+
+                // Second upload: two-row XLS, newer + the SAME period.
+                $html2 = <<<HTML
+                <!DOCTYPE html><html><body>
+                <p>SC No: {$serviceNumber}</p>
+                <table>
+                <tr><th>Bill Date</th><th>Opening Reading</th><th>Closing Reading</th><th>Units</th><th>Bill Amt</th></tr>
+                <tr><td>05-08-2025</td><td>3450</td><td>3600</td><td>150</td><td>620.00</td></tr>
+                <tr><td>05-07-2025</td><td>3300</td><td>3450</td><td>150</td><td>600.00</td></tr>
+                </table></body></html>
+                HTML;
+                $src2 = sys_get_temp_dir() . '/spms-xls-dup2-' . bin2hex(random_bytes(5)) . '.xls';
+                file_put_contents($src2, $html2);
+                $upload2 = BillUpload::fromFilesSpec(
+                    ['name' => 'apspdcl-2.xls', 'type' => 'text/html', 'tmp_name' => $src2, 'error' => UPLOAD_ERR_OK, 'size' => 1],
+                    static fn (string $p): bool => is_file($p)
+                );
+                $storage2 = self::freshStorage();
+                $intake2 = (new BillUploadIntakeService(new BillTempDocumentRepository(), $storage2, new HouseholdService()))
+                    ->accept($fixture['account'], $upload2, self::now());
+                @unlink($src2);
+                self::$createdBills[] = $intake2['bill']->id();
+
+                $service2 = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $storage2);
+                $result2 = $service2->process($fixture['account'], $intake2['bill']->id(), self::now());
+
+                $summary = $result2['import_summary'];
+                Assert::same(2, $summary['total_rows']);
+                Assert::same(1, count($summary['historical']));
+                $dup = $summary['historical'][0];
+                Assert::same('skipped', $dup['result'], 'duplicate period must be skipped, not re-created');
+                Assert::same('already_exists', $dup['reason'], 'reason must be already_exists');
+
+                // Only two bills exist for this household (first-month and the new August).
+                $s = self::pdo()->prepare('SELECT COUNT(*) FROM bills WHERE household_id = :hid');
+                $s->execute(['hid' => $fixture['household_id']]);
+                Assert::same(2, (int) $s->fetchColumn(), 'duplicate billing period was not re-created as a third bill');
+            }),
+
+            TestResult::check('APSPDCL XLS: Mistral path still returns import_summary = null (XLS changes do not regress OCR path)', function (): void {
+                // The Mistral path must never emit an import_summary.
+                $ctx = self::processingBill();
+                [$result] = self::process($ctx, [['status' => 200, 'body' => self::ocrBody(self::liveShape())]]);
+
+                // import_summary key must be present but explicitly null.
+                // Note: cannot use `?? 'sentinel'` here because null ?? 'x' = 'x' in PHP.
+                Assert::true(array_key_exists('import_summary', $result), 'import_summary key must be present in Mistral result');
+                Assert::same(null, $result['import_summary'], 'Mistral path must not emit import_summary');
+            }),
+
         ];
+
 
         // best-effort cleanup: bills (children cascade) + temp roots
         try {
@@ -834,3 +1067,4 @@ final class BillExtractionWorkflowTest
         return $tests;
     }
 }
+

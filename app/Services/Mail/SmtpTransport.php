@@ -16,8 +16,13 @@ use RuntimeException;
  */
 final class SmtpTransport implements MailTransport
 {
-    public function send(string $toEmail, string $subject, string $textBody, array $headers = []): void
-    {
+    public function send(
+        string $toEmail,
+        string $subject,
+        string $textBody,
+        array $headers = [],
+        ?string $htmlBody = null
+    ): void {
         $host = Config::get('SMTP_HOST') ?? '';
         $port = Config::get('SMTP_PORT', '587') ?? '587';
         $username = Config::get('SMTP_USERNAME') ?? '';
@@ -60,14 +65,31 @@ final class SmtpTransport implements MailTransport
             $this->command($stream, 'RCPT TO:<' . $toEmail . '>', '250');
             $this->command($stream, 'DATA', '354');
 
-            $body = 'From: ' . ($headers['From'] ?? 'SPMS <' . $fromEmail . '>') . "\r\n"
-                . 'To: ' . $toEmail . "\r\n"
-                . 'Subject: ' . $subject . "\r\n"
-                . 'MIME-Version: 1.0' . "\r\n"
-                . 'Content-Type: text/plain; charset=utf-8' . "\r\n"
-                . "\r\n"
-                . preg_replace('/^\./m', '..', $textBody)
-                . "\r\n.";
+            if ($htmlBody !== null) {
+                $boundary = 'spms_' . bin2hex(random_bytes(8));
+                $body = 'From: ' . ($headers['From'] ?? 'SPMS <' . $fromEmail . '>') . "\r\n"
+                    . 'To: ' . $toEmail . "\r\n"
+                    . 'Subject: ' . $subject . "\r\n"
+                    . 'MIME-Version: 1.0' . "\r\n"
+                    . 'Content-Type: multipart/alternative; boundary="' . $boundary . '"' . "\r\n"
+                    . "\r\n"
+                    . '--' . $boundary . "\r\n"
+                    . 'Content-Type: text/plain; charset=utf-8' . "\r\n\r\n"
+                    . preg_replace('/^\./m', '..', $textBody) . "\r\n"
+                    . '--' . $boundary . "\r\n"
+                    . 'Content-Type: text/html; charset=utf-8' . "\r\n\r\n"
+                    . $htmlBody . "\r\n"
+                    . '--' . $boundary . "--\r\n.";
+            } else {
+                $body = 'From: ' . ($headers['From'] ?? 'SPMS <' . $fromEmail . '>') . "\r\n"
+                    . 'To: ' . $toEmail . "\r\n"
+                    . 'Subject: ' . $subject . "\r\n"
+                    . 'MIME-Version: 1.0' . "\r\n"
+                    . 'Content-Type: text/plain; charset=utf-8' . "\r\n"
+                    . "\r\n"
+                    . preg_replace('/^\./m', '..', $textBody)
+                    . "\r\n.";
+            }
 
             $this->command($stream, $body, '250');
             $this->command($stream, 'QUIT', '221');

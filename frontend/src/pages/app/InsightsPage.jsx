@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Lightbulb } from 'lucide-react'
+import { Link } from 'react-router'
+import { Lightbulb, Sparkles } from 'lucide-react'
+import { Button } from '../../components/ui/button'
 import { InsightCard } from '../../components/data-display/InsightCard'
 import { EmptyState } from '../../components/feedback/EmptyState'
 import { ErrorState } from '../../components/feedback/ErrorState'
@@ -62,13 +64,19 @@ export function InsightsPage() {
 
     return (
         <div className="mx-auto flex max-w-6xl flex-col gap-6">
-            <div>
-                <h1 className="font-display text-2xl font-semibold text-heading">Insights</h1>
-                <p className="mt-1 text-sm text-muted">
-                    Deterministic insights derived by the backend from your energy evidence. Every insight
-                    shows its significance, confidence and limitations. Insights are observations only —
-                    recommendations are a later milestone and are never implied here.
-                </p>
+            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                <div>
+                    <h1 className="font-display text-2xl font-semibold text-heading">Insights</h1>
+                    <p className="mt-1 text-sm text-muted">
+                        Deterministic observations derived by the backend from your energy evidence. For actionable household suggestions, see Recommendations.
+                    </p>
+                </div>
+                <Link to="/recommendations">
+                    <Button variant="secondary" size="sm" className="flex items-center gap-1.5">
+                        <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+                        <span>View Recommendations</span>
+                    </Button>
+                </Link>
             </div>
 
             {phase === 'loading' && <LoadingState label="Loading insights" />}

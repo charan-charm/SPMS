@@ -57,7 +57,7 @@ final class AuthSecurityTest
     {
         $email = AuthTesting::uniqueEmail();
         self::service()->register($email, 'correct-horse-battery', self::ip());
-        self::service()->verifyEmail((string) AuthTesting::latestMailToken('Verify your email'));
+        self::service()->verifyEmail((string) AuthTesting::latestMailCode('Verify your email'));
 
         $login = self::controller()->login(Request::create(
             'POST', '/api/v1/auth/login',
@@ -108,7 +108,7 @@ final class AuthSecurityTest
                 $email = AuthTesting::uniqueEmail();
                 self::service()->register($email, 'correct-horse-battery', self::ip());
 
-                $verificationToken = (string) AuthTesting::latestMailToken('Verify your email');
+                $verificationToken = (string) AuthTesting::latestMailCode('Verify your email');
                 self::service()->verifyEmail($verificationToken);
 
                 self::service()->requestPasswordRecovery($email, self::ip());
@@ -288,7 +288,7 @@ final class AuthSecurityTest
             TestResult::check('Login throttling: bounded failures, cooldown, no permanent lockout (D-053)', function (): void {
                 $email = AuthTesting::uniqueEmail();
                 self::service()->register($email, 'correct-horse-battery', self::ip());
-                self::service()->verifyEmail((string) AuthTesting::latestMailToken('Verify your email'));
+                self::service()->verifyEmail((string) AuthTesting::latestMailCode('Verify your email'));
 
                 // Failures 1..5 are accepted as 401s; the 6th attempt is
                 // throttled by the EMAIL bucket (each attempt uses a fresh

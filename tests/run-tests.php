@@ -79,6 +79,8 @@ Config::overrideForTesting([
     // storage/private/ or inherit a developer-local override.
     'BILL_TMP_DIR' => sys_get_temp_dir() . '/spms-b2-runner-' . getmypid(),
     'BILL_TEMP_RETENTION_HOURS' => '24',
+    // F12 Weather integration: automated test runner defaults to fake weather
+    'WEATHER_PROVIDER' => 'fake',
 ]);
 
 $suiteFilter = $argv[1] ?? null;
@@ -100,6 +102,16 @@ $suites = [
         Tests\Unit\BillDomainTest::class,
         Tests\Unit\BillUploadTest::class,
         Tests\Unit\BillExtractionNormalizerTest::class,
+        Tests\Unit\VerificationCodeTest::class,
+        Tests\Unit\EncryptionTest::class,
+        Tests\Unit\GoodWeNormalizationTest::class,
+        Tests\Unit\GoodWePhp85ResponseTest::class,
+        Tests\Unit\GoodWeModernInverterDiscoveryTest::class,
+        Tests\Unit\ForecastDomainTest::class,
+        Tests\Unit\OpenMeteoWeatherIntegrationTest::class,
+        Tests\Unit\ApspdclExportParserTest::class,
+        Tests\Unit\BillingPeriodSequenceValidatorTest::class,
+        Tests\Unit\RecommendationDomainTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
@@ -108,6 +120,9 @@ $suites = [
         Tests\Integration\HouseholdMigrationsTest::class,
         Tests\Integration\BillMigrationsTest::class,
         Tests\Integration\BillPersistenceTest::class,
+        Tests\Integration\SolarPersistenceTest::class,
+        Tests\Integration\ForecastPersistenceTest::class,
+        Tests\Integration\RecommendationPersistenceTest::class,
     ],
     'API' => [
         Tests\API\HealthApiTest::class,
@@ -117,19 +132,35 @@ $suites = [
         Tests\API\AuthApiTest::class,
         Tests\API\HouseholdApiTest::class,
         Tests\API\HouseholdProfileTest::class,
+        Tests\API\ForecastApiTest::class,
+        Tests\API\BillVerificationApiTest::class,
+        Tests\API\RecommendationApiTest::class,
+        Tests\API\ReportApiTest::class,
+        Tests\API\NotificationApiTest::class,
+        Tests\API\AnalyticsApiTest::class,
+        Tests\API\OnboardingApiTest::class,
     ],
     'Security' => [
         Tests\Security\SafeErrorsTest::class,
         Tests\Security\AuthSecurityTest::class,
         Tests\Security\OwnershipSecurityTest::class,
+        Tests\Security\EnvironmentIsolationTest::class,
+        Tests\Security\RecommendationSecurityTest::class,
+        Tests\Security\HouseholdServiceNumberSecurityTest::class,
     ],
     'Workflow' => [
+        Tests\Workflow\PublicPagesTest::class,
         Tests\Workflow\AuthWorkflowTest::class,
         Tests\Workflow\HouseholdOwnershipWorkflowTest::class,
         Tests\Workflow\HouseholdProfileWorkflowTest::class,
         Tests\Workflow\BillUploadWorkflowTest::class,
         Tests\Workflow\BillExtractionWorkflowTest::class,
+        Tests\Workflow\BillProcessingFailureAndRetryRegressionTest::class,
         Tests\Workflow\BillReadWorkflowTest::class,
+        Tests\Workflow\SolarConnectionWorkflowTest::class,
+        Tests\Workflow\DemoScenarioWorkflowTest::class,
+        Tests\Workflow\RecommendationWorkflowTest::class,
+        Tests\Workflow\DemoScenario01IntegrationTest::class,
     ],
 ];
 

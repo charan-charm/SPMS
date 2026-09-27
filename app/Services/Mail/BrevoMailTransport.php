@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Mail;
 
 use App\Support\Config;
+use App\Support\Logger;
 use RuntimeException;
 
 /**
@@ -29,15 +30,27 @@ final class BrevoMailTransport implements MailTransport
 
     /** @var callable|null(array{0:string,1:array<int,string>,2:string}):array{0:int,1:string} */
     private $httpClient;
+    private ?Logger $logger;
 
-    public function __construct(?callable $httpClient = null)
+    public function __construct(?callable $httpClient = null, ?Logger $logger = null)
     {
         $this->httpClient = $httpClient;
+        $this->logger = $logger ?? Logger::default();
     }
 
-    public function send(string $toEmail, string $subject, string $textBody, array $headers = []): void
-    {
+    public function send(
+        string $toEmail,
+        string $subject,
+        string $textBody,
+        array $headers = [],
+        ?string $htmlBody = null
+    ): void {
         if (Config::get('BREVO_ALLOW_REAL_SEND') !== '1') {
+            $this->logger?->warning('brevo.send_skipped', [
+                'component' => 'Brevo',
+                'operation' => 'verification email',
+                'reason' => 'BREVO_ALLOW_REAL_SEND flag is not enabled',
+            ]);
             throw new RuntimeException('Brevo transport is disabled: real sending requires the explicit BREVO_ALLOW_REAL_SEND flag.');
         }
 
@@ -46,6 +59,11 @@ final class BrevoMailTransport implements MailTransport
         $senderName = Config::get('BREVO_SENDER_NAME', 'SPMS') ?? 'SPMS';
 
         if ($apiKey === '' || $senderEmail === '') {
+            $this->logger?->error('brevo.configuration_missing', [
+                'component' => 'Brevo',
+                'operation' => 'verification email',
+                'reason' => 'API key or sender email is not configured',
+            ]);
             throw new RuntimeException('Brevo transport is not configured.');
         }
 
@@ -56,7 +74,20 @@ final class BrevoMailTransport implements MailTransport
             'textContent' => $textBody,
         ];
 
-        [$status] = $this->post(
+        // Include branded HTML when provided — Brevo delivers multipart/alternative.
+        if ($htmlBody !== null) {
+            $payload['htmlContent'] = $htmlBody;
+        }
+
+        $this->logger?->info('brevo.request_initiated', [
+            'component' => 'Brevo',
+            'operation' => 'verification email',
+            'endpoint' => self::API_ENDPOINT,
+            'sender' => $senderEmail,
+            'recipient' => $toEmail,
+        ]);
+
+        [$status, $responseBody] = $this->post(
             self::API_ENDPOINT,
             [
                 'api-key: ' . $apiKey,
@@ -67,8 +98,20 @@ final class BrevoMailTransport implements MailTransport
         );
 
         if ($status < 200 || $status >= 300) {
+            $this->logger?->error('brevo.request_failed', [
+                'component' => 'Brevo',
+                'operation' => 'verification email',
+                'http_status' => $status,
+                'provider_message' => self::sanitizeProviderMessage($responseBody),
+            ]);
             throw new RuntimeException('Brevo API request failed (HTTP ' . $status . ').');
         }
+
+        $this->logger?->info('brevo.request_succeeded', [
+            'component' => 'Brevo',
+            'operation' => 'verification email',
+            'http_status' => $status,
+        ]);
     }
 
     /**
@@ -106,9 +149,25 @@ final class BrevoMailTransport implements MailTransport
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
 
         if ($status === 0) {
+            $curlError = curl_error($handle);
+            $this->logger?->error('brevo.transport_error', [
+                'component' => 'Brevo',
+                'operation' => 'verification email',
+                'curl_error' => $curlError !== '' ? $curlError : 'transport connection error',
+            ]);
             throw new RuntimeException('Brevo API request failed (transport error).');
         }
 
         return [$status, $responseBody];
+    }
+
+    private static function sanitizeProviderMessage(string $body): string
+    {
+        $decoded = json_decode($body, true);
+        if (is_array($decoded) && isset($decoded['message']) && is_string($decoded['message'])) {
+            return substr($decoded['message'], 0, 255);
+        }
+
+        return 'HTTP error response from Brevo';
     }
 }

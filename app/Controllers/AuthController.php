@@ -42,23 +42,28 @@ final class AuthController
 
         $result = $this->accounts->register($email, $password, $request->ipAddress());
 
+        $activeProfile = \App\Support\Database::currentProfile();
+
         return Response::success([
             'account' => $result['account']->toPublicArray(),
             'verification' => [
                 'required' => true,
                 'sent' => $result['verification_sent'],
             ],
-        ], 201);
+        ], 201)->withHeader('Set-Cookie', "spms_env={$activeProfile}; Path=/; SameSite=Lax; Max-Age=86400");
     }
 
     public function verify(Request $request): Response
     {
-        $token = $request->bodyParam('token');
-        if (!is_string($token) || $token === '') {
-            throw new AppException('VALIDATION_ERROR', 'token is required.', 422, ['field' => 'token']);
+        $code = $request->bodyParam('code');
+        if (!is_string($code) || $code === '') {
+            throw new AppException('VALIDATION_ERROR', 'verification code is required.', 422, ['field' => 'code']);
         }
 
-        $account = $this->accounts->verifyEmail($token);
+        $email = $request->bodyParam('email');
+        $rawEmail = (is_string($email) && trim($email) !== '') ? trim($email) : null;
+
+        $account = $this->accounts->verifyEmail($code, $rawEmail);
 
         return Response::success([
             'account' => $account->toPublicArray(),
@@ -133,14 +138,34 @@ final class AuthController
         return Response::success(['accepted' => true]);
     }
 
-    public function recoveryConfirm(Request $request): Response
+    public function recoveryVerify(Request $request): Response
     {
-        $token = $request->bodyParam('token');
-        if (!is_string($token) || $token === '') {
-            throw new AppException('VALIDATION_ERROR', 'token is required.', 422, ['field' => 'token']);
+        $code = $request->bodyParam('code') ?? $request->bodyParam('token');
+        if (!is_string($code) || trim($code) === '') {
+            throw new AppException('VALIDATION_ERROR', 'recovery code is required.', 422, ['field' => 'code']);
         }
 
-        $result = $this->accounts->resetPassword($token, $request->bodyParam('password'), $request->ipAddress());
+        $email = $request->bodyParam('email');
+        if ($email !== null && (!is_string($email) || trim($email) === '')) {
+            $email = null;
+        }
+
+        $this->accounts->verifyRecoveryCode(trim($code), $email, $request->ipAddress());
+
+        return Response::success([
+            'valid' => true,
+            'verified' => true,
+        ]);
+    }
+
+    public function recoveryConfirm(Request $request): Response
+    {
+        $token = $request->bodyParam('token') ?? $request->bodyParam('code');
+        if (!is_string($token) || trim($token) === '') {
+            throw new AppException('VALIDATION_ERROR', 'recovery code is required.', 422, ['field' => 'token']);
+        }
+
+        $result = $this->accounts->resetPassword(trim($token), $request->bodyParam('password'), $request->ipAddress());
 
         return Response::success([
             'password_reset' => true,

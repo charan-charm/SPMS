@@ -298,7 +298,9 @@ final class BillReadWorkflowTest
             $row = $rows[0];
             Assert::same(
                 [
-                    'bill_id', 'status', 'service_number', 'billing_period_start', 'billing_period_end',
+                    'bill_id', 'status', 'source', 'document_type', 'service_number', 'source_statement_serial', 'solar_applicability',
+                    'billing_period_start', 'billing_period_end',
+                    'bill_date', 'due_date',
                     'consumption_kwh', 'solar_units_kwh', 'net_units_kwh',
                     'bill_amount', 'total_due', 'verified_at', 'updated_at',
                 ],
@@ -487,8 +489,8 @@ final class BillReadWorkflowTest
             $auth->register(Request::create('POST', '/api/v1/auth/register', body: [
                 'email' => $email, 'password' => 'correct-horse-battery',
             ], ipAddress: AuthTesting::uniqueIpAddress()));
-            $token = AuthTesting::latestMailToken('Verify your email');
-            $auth->verify(Request::create('POST', '/api/v1/auth/verify', body: ['token' => $token]));
+            $token = AuthTesting::latestMailCode('Verify your email');
+            $auth->verify(Request::create('POST', '/api/v1/auth/verify', body: ['code' => $token]));
             $login = $auth->login(Request::create('POST', '/api/v1/auth/login', body: [
                 'email' => $email, 'password' => 'correct-horse-battery',
             ], ipAddress: AuthTesting::uniqueIpAddress()));
@@ -543,6 +545,31 @@ final class BillReadWorkflowTest
             }
         });
 
+        $tests[] = TestResult::check('bills are ordered canonically by billing_period_start DESC, billing_period_end DESC, id DESC', function (): void {
+            $fixture = AuthTesting::householdFixture('b4-order-' . bin2hex(random_bytes(4)), self::FIXTURE_SERVICE);
+            $b1 = self::processingBill('b4-o1', $fixture);
+            $b2 = self::processingBill('b4-o2', $fixture);
+            $b3 = self::processingBill('b4-o3', $fixture);
+
+            // Set periods out-of-order relative to insertion and created_at:
+            // b1 inserted first -> period 2026-06-01 to 2026-07-01
+            // b2 inserted second -> period 2026-08-01 to 2026-09-01 (should be 1st)
+            // b3 inserted third, latest created_at -> period 2026-07-01 to 2026-08-01 (should be 2nd)
+            self::pdo()->prepare("UPDATE bills SET billing_period_start = '2026-06-01', billing_period_end = '2026-07-01', created_at = '2026-01-01 10:00:00' WHERE id = :id")->execute(['id' => $b1['bill']]);
+            self::pdo()->prepare("UPDATE bills SET billing_period_start = '2026-08-01', billing_period_end = '2026-09-01', created_at = '2026-01-01 12:00:00' WHERE id = :id")->execute(['id' => $b2['bill']]);
+            self::pdo()->prepare("UPDATE bills SET billing_period_start = '2026-07-01', billing_period_end = '2026-08-01', created_at = '2026-01-01 14:00:00' WHERE id = :id")->execute(['id' => $b3['bill']]);
+
+            $response = self::controller()->index(
+                Request::create('GET', '/api/v1/bills')->withAuthContext(AuthTesting::contextFor($fixture['account']))
+            );
+
+            Assert::same(200, $response->status());
+            $rows = $response->body()['data']['bills'];
+            $ids = array_map(static fn (array $r): string => $r['bill_id'], $rows);
+
+            Assert::same([$b2['bill'], $b3['bill'], $b1['bill']], $ids, 'canonical period ordering regardless of created_at');
+        });
+
         $tests[] = TestResult::check('cleanup removes every read-test bill and its rows', function (): void {
             $pdo = self::pdo();
             foreach (self::$createdBills as $id) {
@@ -580,3 +607,4 @@ final class BillReadWorkflowTest
         return '4f8a2b1c-0d3e-5a6b-7c8d-9e0f1a2b3c4d';
     }
 }
+

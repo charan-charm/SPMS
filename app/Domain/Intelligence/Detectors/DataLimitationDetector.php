@@ -74,8 +74,13 @@ final class DataLimitationDetector implements InsightDetector
         foreach ($evidence->costResults() as $payload) {
             $result = $payload['result'];
             if ($result['state'] === 'UNAVAILABLE') {
-                $limitations[] = 'Historical verified cost: UNAVAILABLE. '
-                    . ($result['explanation'] ?? 'No verified historical cost is available, so no cost history insight can be produced.');
+                $explanation = $result['explanation'] ?? null;
+                if ($explanation === null || str_contains($explanation, 'not implemented yet')) {
+                    $explanation = $evidence->consumptionPeriods() !== []
+                        ? 'Historical verified cost compilation is not active for this period; only verified energy consumption is tracked.'
+                        : 'Verified historical cost requires verified electricity bill records. Upload and verify recent bills to enable historical cost analysis.';
+                }
+                $limitations[] = 'Historical verified cost: UNAVAILABLE. ' . $explanation;
             } elseif ($result['state'] === 'INSUFFICIENT_EVIDENCE') {
                 $limitations[] = 'Cost estimate: INSUFFICIENT_EVIDENCE. '
                     . ($result['explanation'] ?? 'No reliable pricing evidence was declared, so no cost-derived insight can be produced.');

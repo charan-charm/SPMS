@@ -1842,9 +1842,43 @@ commit).
 
 13. **Controlled REAL pipeline verification (owner-authorized live runs).** Three real Mistral calls executed the full §U chain on `spms_real`: bill test-01 → VALID, meter/solar/net all PASS (145 / 322 / −177 signs intact), service number 86233…0998 genuinely extracted, honestly NEEDS_REVIEW while unregistered; after registering that extracted number, bill test-02 → ownership MATCH, meter/solar PASS, NET CONFLICT expected=−177 extracted=+177 preserved verbatim, single INCONSISTENT_NET_UNITS flag; logo → NOT_A_BILL, zero adopted values. Database inspection: exactly 1 bills / 1 draft / 19–21 provenance / 3 validation rows per extracted bill, temp documents DELETED, 0 raw/PII columns anywhere, nothing auto-VERIFIED. Cross-environment counts confirmed REAL↔DEMO non-pollution and 0 cross-database foreign keys.
 
-**Verification:** backend 392/392 (fresh spms_test), frontend 32/32, lint clean, build clean; `migrate --verify` identical sets real/demo/test; live pipeline evidence above. B4 UI extended minimally: Bill identity section, ownership notice between information and validation in the review journey, new honest quality-flag translations, dev-preview scenarios for match/mismatch/not-checked/unreadable, DEMO badge — no redesign, no B5 affordances.
+## D-072 — F7 Recommendations Module Architecture, Taxonomy, and Advisory Rails — Intelligence/Recommendations
 
-**Consequences:** REAL/DEMO isolation is now physical and verifiable; ownership of a bill is a recorded, evidence-backed property rather than an assumption; the "AI said so" pathway to an authoritative-looking bill is closed at the persistence boundary; test runs stop contaminating owner data permanently; the archive dump is the rollback anchor for the old development database until the owner accepts and retires it.
+**Date:** 2026-09-22
+**Status:** RATIFIED (owner task "F7 RECOMMENDATIONS MODULE FINAL 3-DAY BUILD")
+**Context:** SPMS is designed not merely as a passive monitoring dashboard, but to deliver actionable, trustworthy household energy advisory.
 
+**Decision:**
+
+1. **Strict Advisory-Only Boundary (No Appliance Automation).**
+   Recommendations are household-level guidance (e.g. shift flexible consumption to solar window, pre-cool rooms, investigate solar array). They contain NO direct appliance switching, remote relay control, or smart-plug scheduling. Recommendations inform and advise the user; the user controls their home.
+
+2. **Deterministic Backend Rule Engine (No LLM in Calculation or Generation).**
+   Recommendations are derived through a pure deterministic PHP domain engine (`RecommendationEngine`, `RecommendationService`). Numerical values, confidence ranks, surplus/deficit timings, and priorities are calculated with zero hallucinations. Generative AI is never in the numerical calculation or generation path.
+
+3. **Controlled 8-Type Recommendation Taxonomy.**
+   Recommendations belong strictly to 8 canonical types:
+   - `SHIFT_TO_SOLAR_WINDOW`: Shift flexible load to daytime solar window.
+   - `USE_AVAILABLE_SOLAR`: Maximize self-consumption of sustained solar surplus.
+   - `AVOID_DEFICIT_WINDOW`: Curtail discretionary consumption during grid deficit.
+   - `EVENING_DEFICIT_PREPARATION`: Pre-cool/charge during afternoon solar before evening deficit.
+   - `HIGH_DEMAND_REDUCTION`: Stagger concurrent appliance use to avoid peak demand and slab surcharges.
+   - `COST_AWARE_SHIFT`: Optimize daily consumption to remain within lower APSPDCL tariff slabs.
+   - `SOLAR_DECLINE_RESPONSE`: Prompt inspection for panel degradation, soiling, or shading.
+   - `DATA_LIMITATION`: Honest non-actionable system limitation notice (never presented as a household chore).
+
+4. **Worst-Of Confidence Aggregation.**
+   A recommendation's confidence cannot exceed the weakest critical input (`worstOf` aggregator). Degraded or stale source telemetry pulls recommendation confidence down to `LOW` or `INSUFFICIENT`, suppressing fabricated financial or energy savings claims.
+
+5. **Household-Scoped Persistence and RESTRICT Foreign Keys.**
+   Migration `0021_create_recommendations.php` establishes `recommendations` with canonical fields, indexed lookups, and a `RESTRICT` foreign key to `households` preventing orphaned records. All queries, listing, generation, and dismissals are authenticated and strictly household-isolated (cross-household access returns 404).
+
+6. **Bounded Prioritization, Deduplication, and Cooldown.**
+   - Active recommendations are bounded to a maximum of 5 per household.
+   - Exact deduplication suppresses duplicate recommendations for the same evaluation period.
+   - 12-hour cooldown suppresses regeneration of recommendation types recently dismissed by the user.
+
+7. **Frontend Architecture & Honest Data Quality.**
+   Frontend route `/recommendations` displays recommendations with clear priority, confidence, timing window, reason, potential non-guaranteed impact, and collapsible technical evidence with provenance. Specialized `RecommendationLimitationsCard` provides clear notices and unlock pathways without blaming the user.
 
 **END OF DECISION LOG**

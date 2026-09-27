@@ -69,36 +69,100 @@ final class AuthMiddleware
 
     private function resolve(Request $request): AuthContext
     {
-        $rawToken = SessionCookie::extractToken($request->header('cookie'));
+        $matchedCookieName = null;
+        $rawToken = SessionCookie::extractToken($request->header('cookie'), $matchedCookieName);
 
         if ($rawToken === null) {
+            $this->applyUnauthenticatedEnvironmentHint($request);
             return AuthContext::anonymous();
         }
 
+        $targetProfile = match ($matchedCookieName) {
+            'spms_demo_session' => 'demo',
+            'spms_test_session' => 'test',
+            default => 'real',
+        };
+
+        if ($targetProfile === 'test' && PHP_SAPI !== 'cli' && getenv('SPMS_DATA_ENVIRONMENT') !== 'test') {
+            $this->applyUnauthenticatedEnvironmentHint($request);
+            return AuthContext::anonymous();
+        }
+
+        \App\Support\Database::switchTo($targetProfile);
         $session = $this->sessionService->resolve($rawToken, new DateTimeImmutable('now', new \DateTimeZone('UTC')));
 
-        if ($session === null) {
-            return AuthContext::anonymous();
+        if ($session !== null) {
+            $account = $this->accounts->findById((string) $session['account_id']);
+
+            if ($account === null || !$account->canAuthenticate()) {
+                $this->sessions->revoke((string) $session['id'], gmdate('Y-m-d H:i:s'));
+                $this->events->record(
+                    SecurityEventRepository::SESSION_REVOKED,
+                    null,
+                    $session['account_id'],
+                    ['session_id' => $session['id'], 'reason' => 'ACCOUNT_STATE'],
+                    null
+                );
+
+                return AuthContext::anonymous();
+            }
+
+            return AuthContext::authenticated($account, $session);
         }
 
-        $account = $this->accounts->findById((string) $session['account_id']);
+        $this->applyUnauthenticatedEnvironmentHint($request);
+        return AuthContext::anonymous();
+    }
 
-        if ($account === null || !$account->canAuthenticate()) {
-            // A session whose account can no longer authenticate
-            // (deleted or disabled) is revoked, never silently honored.
-            $this->sessions->revoke((string) $session['id'], gmdate('Y-m-d H:i:s'));
-            $this->events->record(
-                SecurityEventRepository::SESSION_REVOKED,
-                null,
-                $session['account_id'],
-                ['session_id' => $session['id'], 'reason' => 'ACCOUNT_STATE'],
-                null
-            );
+    private function applyUnauthenticatedEnvironmentHint(Request $request): void
+    {
+        $rawHint = $request->bodyParam('environment')
+            ?? $request->header('X-SPMS-Environment')
+            ?? $request->header('X-SPMS-Environment-Hint')
+            ?? $this->cookieValue($request, 'spms_env');
 
-            return AuthContext::anonymous();
+        if (is_string($rawHint) && trim($rawHint) !== '') {
+            $hint = strtolower(trim($rawHint));
+
+            if ($hint === 'test') {
+                throw new AppException(
+                    'VALIDATION_ERROR',
+                    'TEST environment cannot be selected via HTTP interface.',
+                    400,
+                    ['field' => 'environment']
+                );
+            }
+
+            if (in_array($hint, ['real', 'demo'], true)) {
+                \App\Support\Database::switchTo($hint);
+                return;
+            }
         }
 
-        return AuthContext::authenticated($account, $session);
+        $defaultProfile = getenv('SPMS_DATA_ENVIRONMENT') ?: 'real';
+        if (in_array($defaultProfile, ['real', 'demo', 'test'], true)) {
+            \App\Support\Database::switchTo($defaultProfile);
+        } else {
+            \App\Support\Database::switchTo('real');
+        }
+    }
+
+    private function cookieValue(Request $request, string $name): ?string
+    {
+        $cookieHeader = $request->header('cookie');
+        if (!is_string($cookieHeader) || $cookieHeader === '') {
+            return null;
+        }
+
+        foreach (explode(';', $cookieHeader) as $pair) {
+            $parts = explode('=', trim($pair), 2);
+            if (count($parts) === 2 && strtolower(trim($parts[0])) === strtolower($name)) {
+                $val = trim($parts[1]);
+                return $val === '' ? null : $val;
+            }
+        }
+
+        return null;
     }
 
     private function assertCsrfToken(Request $request, AuthContext $context): void

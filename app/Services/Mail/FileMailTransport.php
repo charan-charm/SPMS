@@ -17,8 +17,13 @@ use RuntimeException;
  */
 final class FileMailTransport implements MailTransport
 {
-    public function send(string $toEmail, string $subject, string $textBody, array $headers = []): void
-    {
+    public function send(
+        string $toEmail,
+        string $subject,
+        string $textBody,
+        array $headers = [],
+        ?string $htmlBody = null
+    ): void {
         $dir = Config::get('MAIL_FILE_DIR', dirname(__DIR__, 3) . '/storage/mail')
             ?? dirname(__DIR__, 3) . '/storage/mail';
 
@@ -26,17 +31,43 @@ final class FileMailTransport implements MailTransport
             throw new RuntimeException('Mail sink directory is not writable.');
         }
 
-        $lines = [
-            'From: ' . ($headers['From'] ?? 'SPMS <no-reply@spms.local>'),
-            'To: ' . $toEmail,
-            'Subject: ' . $subject,
-            'Date: ' . gmdate('r'),
-            'MIME-Version: 1.0',
-            'Content-Type: text/plain; charset=utf-8',
-            '',
-            $textBody,
-            '',
-        ];
+        if ($htmlBody !== null) {
+            // Multipart MIME for dev inspection of the branded HTML template
+            $boundary = 'spms_' . bin2hex(random_bytes(8));
+            $lines = [
+                'From: ' . ($headers['From'] ?? 'SPMS <no-reply@spms.local>'),
+                'To: ' . $toEmail,
+                'Subject: ' . $subject,
+                'Date: ' . gmdate('r'),
+                'MIME-Version: 1.0',
+                'Content-Type: multipart/alternative; boundary="' . $boundary . '"',
+                '',
+                '--' . $boundary,
+                'Content-Type: text/plain; charset=utf-8',
+                '',
+                $textBody,
+                '',
+                '--' . $boundary,
+                'Content-Type: text/html; charset=utf-8',
+                '',
+                $htmlBody,
+                '',
+                '--' . $boundary . '--',
+                '',
+            ];
+        } else {
+            $lines = [
+                'From: ' . ($headers['From'] ?? 'SPMS <no-reply@spms.local>'),
+                'To: ' . $toEmail,
+                'Subject: ' . $subject,
+                'Date: ' . gmdate('r'),
+                'MIME-Version: 1.0',
+                'Content-Type: text/plain; charset=utf-8',
+                '',
+                $textBody,
+                '',
+            ];
+        }
 
         // Full-precision epoch in the filename keeps chronological
         // ordering unambiguous when several mails are delivered within

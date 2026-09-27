@@ -88,6 +88,13 @@ final class Request
 
     public static function create(string $method, string $path, array $query = [], array $body = [], array $headers = [], ?string $ipAddress = null, array $files = []): self
     {
+        if (str_contains($path, '?')) {
+            $parts = explode('?', $path, 2);
+            $path = $parts[0];
+            parse_str($parts[1], $parsedQuery);
+            $query = array_merge($parsedQuery, $query);
+        }
+
         $normalized = [];
         foreach ($headers as $name => $value) {
             $normalized[strtolower((string) $name)] = (string) $value;

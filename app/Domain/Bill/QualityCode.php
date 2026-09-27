@@ -40,6 +40,10 @@ final class QualityCode
     public const SERVICE_NUMBER_MISSING = 'SERVICE_NUMBER_MISSING';
     public const HOUSEHOLD_SERVICE_NOT_CONFIGURED = 'HOUSEHOLD_SERVICE_NOT_CONFIGURED';
 
+    /** Chronological sequence exception codes. */
+    public const INCOMPLETE_HISTORY = 'INCOMPLETE_HISTORY';
+    public const BILLING_GAP_PRECEDING = 'BILLING_GAP_PRECEDING';
+
     public const ALL = [
         self::MISSING_CONSUMPTION,
         self::MISSING_BILLING_PERIOD,
@@ -53,6 +57,8 @@ final class QualityCode
         self::SERVICE_NUMBER_MISMATCH,
         self::SERVICE_NUMBER_MISSING,
         self::HOUSEHOLD_SERVICE_NOT_CONFIGURED,
+        self::INCOMPLETE_HISTORY,
+        self::BILLING_GAP_PRECEDING,
     ];
 
     public static function isValid(string $code): bool

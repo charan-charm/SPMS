@@ -971,6 +971,18 @@ The two resets have different meanings and remain separate.
 
 # 51. APPLICATION ARCHITECTURE — Q91–Q100
 
+> **Implementation direction update (F0):** docs/04 is the shared SPMS
+> UX/design-system authority — visual identity, tokens, components,
+> states, data presentation, and accessibility rules. The concrete
+> frontend implementation layer is defined in `docs/12_FRONTEND_DESIGN_SYSTEM.md`
+> and `docs/11_FRONTEND_ARCHITECTURE.md`: React + Tailwind CSS +
+> shadcn/ui + Motion + Lucide + Recharts implement the design system
+> defined here. The original Q93 stack wording below is superseded by
+> that locked direction (decision log D-003–D-012); all other decisions
+> in this section remain valid. Chart semantic rules (actual solid,
+> predicted dashed, estimated dotted, stale muted, demo labeled) remain
+> unchanged.
+
 ## Q91 — B: Modular PHP application with clear layers
 
 Use understandable modules and layers rather than one giant file/page.
@@ -979,13 +991,13 @@ Use understandable modules and layers rather than one giant file/page.
 
 Separate presentation, request/controller handling, domain/business services, and data access.
 
-## Q93 — B: HTML + CSS + Vanilla JS with progressive enhancement
+## Q93 — B: (SUPERSEDED — see F0 note above) React SPA with Tailwind CSS
 
-Frontend uses semantic HTML/CSS and Vanilla JS; JS enhances the experience without requiring a large frontend framework.
+The original decision ("HTML + CSS + Vanilla JS with progressive enhancement") is superseded by the locked React frontend direction. The spirit is preserved: accessible, semantic markup rendered through reusable components, without introducing technologies outside the approved stack (React, Vite, Tailwind CSS, Motion, shadcn/ui, Lucide, Recharts, React Router).
 
 ## Q94 — B: PHP JSON API layer
 
-Frontend communicates with PHP JSON endpoints.
+Frontend communicates with PHP JSON endpoints through a centralized API client over `/api/v1/...`.
 
 ## Q95 — B: PDO + prepared statements
 

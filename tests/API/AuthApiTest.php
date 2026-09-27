@@ -149,26 +149,26 @@ final class AuthApiTest
                 $email = AuthTesting::uniqueEmail();
                 self::accountService()->register($email, 'correct-horse-battery', self::ip());
 
-                $token = AuthTesting::latestMailToken('Verify your email');
+                $token = AuthTesting::latestMailCode('Verify your email');
                 Assert::true(is_string($token), 'verification mail must be delivered through the sink');
 
-                $response = self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['token' => $token], ipAddress: self::ip()));
+                $response = self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['code' => $token], ipAddress: self::ip()));
                 Assert::same(200, $response->status());
                 Assert::same(Account::STATUS_ACTIVE, $response->body()['data']['account']['status']);
 
                 // Reuse must fail.
                 try {
-                    self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['token' => $token], ipAddress: self::ip()));
+                    self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['code' => $token], ipAddress: self::ip()));
                     Assert::true(false, 'Expected token reuse rejection');
                 } catch (AppException $e) {
                     Assert::same('VALIDATION_ERROR', $e->errorCode());
                     Assert::same(422, $e->httpStatus());
-                    Assert::same('token', $e->context()['field']);
+                    Assert::same('code', $e->context()['field']);
                 }
 
                 // Invalid token must fail identically.
                 try {
-                    self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['token' => str_repeat('ab', 32)], ipAddress: self::ip()));
+                    self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['code' => str_repeat('ab', 32)], ipAddress: self::ip()));
                     Assert::true(false, 'Expected invalid token rejection');
                 } catch (AppException $e) {
                     Assert::same('VALIDATION_ERROR', $e->errorCode());
@@ -179,8 +179,8 @@ final class AuthApiTest
             TestResult::check('Login issues an HttpOnly session cookie and CSRF token; failures are uniform', function (): void {
                 $email = AuthTesting::uniqueEmail();
                 self::accountService()->register($email, 'correct-horse-battery', self::ip());
-                $token = AuthTesting::latestMailToken('Verify your email');
-                self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['token' => $token], ipAddress: self::ip()));
+                $token = AuthTesting::latestMailCode('Verify your email');
+                self::authController()->verify(Request::create('POST', '/api/v1/auth/verify', body: ['code' => $token], ipAddress: self::ip()));
 
                 $response = self::authController()->login(Request::create(
                     'POST', '/api/v1/auth/login',
@@ -258,7 +258,7 @@ final class AuthApiTest
 
                 $email = AuthTesting::uniqueEmail();
                 self::accountService()->register($email, 'correct-horse-battery', self::ip());
-                $active = self::accountService()->verifyEmail((string) AuthTesting::latestMailToken('Verify your email'));
+                $active = self::accountService()->verifyEmail((string) AuthTesting::latestMailCode('Verify your email'));
                 $disabled = $active->withStatus(Account::STATUS_DISABLED, null, new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
                 (new AccountRepository())->updateStatus($disabled);
 
@@ -288,7 +288,7 @@ final class AuthApiTest
 
                 $email = AuthTesting::uniqueEmail();
                 $registered = self::accountService()->register($email, 'correct-horse-battery', self::ip());
-                $token = AuthTesting::latestMailToken('Verify your email');
+                $token = AuthTesting::latestMailCode('Verify your email');
                 $active = self::accountService()->verifyEmail((string) $token);
 
                 $login = self::authController()->login(Request::create(
@@ -313,7 +313,7 @@ final class AuthApiTest
             TestResult::check('CSRF protects authenticated state-changing requests (D-052)', function (): void {
                 $email = AuthTesting::uniqueEmail();
                 self::accountService()->register($email, 'correct-horse-battery', self::ip());
-                $active = self::accountService()->verifyEmail((string) AuthTesting::latestMailToken('Verify your email'));
+                $active = self::accountService()->verifyEmail((string) AuthTesting::latestMailCode('Verify your email'));
                 unset($active);
 
                 $login = self::authController()->login(Request::create(
@@ -360,7 +360,7 @@ final class AuthApiTest
             TestResult::check('Password recovery is uniform, single-use and revokes sessions', function (): void {
                 $email = AuthTesting::uniqueEmail();
                 self::accountService()->register($email, 'correct-horse-battery', self::ip());
-                self::accountService()->verifyEmail((string) AuthTesting::latestMailToken('Verify your email'));
+                self::accountService()->verifyEmail((string) AuthTesting::latestMailCode('Verify your email'));
 
                 $login = self::authController()->login(Request::create(
                     'POST', '/api/v1/auth/login',
@@ -470,3 +470,4 @@ final class AuthApiTest
         ];
     }
 }
+

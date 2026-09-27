@@ -44,7 +44,7 @@ final class BillTempDocument
         private readonly ?string $deletedAt,
         private readonly string $updatedAt
     ) {
-        if (preg_match('/^[0-9a-f-]{36}\.(?:jpg|png|pdf)$/', $storageKey) !== 1) {
+        if (preg_match('/^[0-9a-f-]{36}\.(?:jpg|png|pdf|xls)$/', $storageKey) !== 1) {
             throw new InvalidArgumentException('temporary document storage key is not opaque/safe.');
         }
     }

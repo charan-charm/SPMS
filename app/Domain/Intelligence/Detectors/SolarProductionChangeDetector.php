@@ -101,7 +101,7 @@ final class SolarProductionChangeDetector implements InsightDetector
                 evidenceSummary: 'Two most recent solar generation period records.',
                 explanation: sprintf(
                     'The two most recent solar periods differ by %s. The values above are taken as reported from the evidence pipeline and keep their reported data nature; this is an observed movement, not a verified physical diagnosis.',
-                    EvidenceFormat::kwh($delta)
+                    EvidenceFormat::kwh(abs($delta))
                 ),
                 explanationSource: self::EXPLANATION_SOURCE,
                 evidenceDomains: ['solar'],

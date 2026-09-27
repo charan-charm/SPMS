@@ -257,6 +257,17 @@ final class EnergyCostTest
                     static fn (): mixed => $controller->estimate(Request::create('POST', '/api/v1/energy/cost/estimate', body: $payload('3.0'))),
                     'solar_generation.value_kwh'
                 );
+
+                $consumptionPayload = static fn (mixed $value): array => [
+                    'solar_generation' => ['value_kwh' => 2.0, 'data_nature' => 'ACTUAL', 'data_status' => 'FRESH'],
+                    'household_consumption' => ['value_kwh' => $value, 'data_nature' => 'ACTUAL', 'data_status' => 'FRESH'],
+                    'pricing' => self::pricing(),
+                ];
+
+                self::assertValidationField(
+                    static fn (): mixed => $controller->estimate(Request::create('POST', '/api/v1/energy/cost/estimate', body: $consumptionPayload(-2.5))),
+                    'household_consumption.value_kwh'
+                );
             }),
 
             TestResult::check('Invalid enums are rejected with field context', function (): void {
@@ -481,6 +492,39 @@ final class EnergyCostTest
                 Assert::same('2026-09-01', $data['analysis']['period']['start']);
                 Assert::same('MONTH', $data['analysis']['period']['resolution']);
                 Assert::same('household-1', $data['scope']['household_id']);
+            }),
+
+            TestResult::check('POTENTIAL_SURPLUS yields zero material deficit and zero variable cost with fixed charges separate', function (): void {
+                $data = (new EnergyCostService())->estimate([
+                    'solar' => self::energy(28.302, 'PREDICTED', 'FRESH', ['confidence_level' => 'LOW']),
+                    'consumption' => self::energy(5.758, 'PREDICTED', 'FRESH', ['confidence_level' => 'LOW']),
+                    'pricing' => self::pricing(EnergyCostService::BASIS_USER_PROVIDED_RATE, 7.50),
+                    'fixed_charge' => ['amount' => 30.0, 'currency' => 'INR', 'label' => 'APSPDCL monthly fixed charge'],
+                ], ['start' => '2026-09-26T00:00:00Z', 'end' => '2026-09-26T23:59:59Z'], 'real-hh-kodumur');
+
+                Assert::same('POTENTIAL_SURPLUS', $data['energy_position']['classification']);
+                Assert::same(22.544, $data['energy_position']['balance_kwh']);
+                Assert::same(0.0, $data['energy_position']['grid_dependent_kwh']);
+                Assert::same(0.0, $data['result']['estimated_variable_cost']);
+                Assert::same(0.0, $data['result']['range']['low']);
+                Assert::same(0.0, $data['result']['range']['high']);
+                Assert::same(25.0, $data['result']['range']['half_width_percent']);
+                Assert::same(30.0, $data['result']['fixed_charge']['amount']);
+                Assert::same('SEPARATE_NOT_INCLUDED', $data['result']['fixed_charge']['treatment']);
+                Assert::same('PREDICTED', $data['result']['data_nature']);
+                Assert::same(EnergyCostService::MEASUREMENT_CONTEXT_ESTIMATED, $data['result']['measurement_context']);
+            }),
+
+            TestResult::check('Cost estimate bounds are strictly non-negative', function (): void {
+                $data = (new EnergyCostService())->estimate([
+                    'solar' => self::energy(1.0, 'PREDICTED', 'FRESH', ['confidence_level' => 'LOW']),
+                    'consumption' => self::energy(5.0, 'PREDICTED', 'FRESH', ['confidence_level' => 'LOW']),
+                    'pricing' => self::pricing(EnergyCostService::BASIS_USER_PROVIDED_RATE, 7.50),
+                ]);
+
+                Assert::true($data['result']['estimated_variable_cost'] >= 0.0);
+                Assert::true($data['result']['range']['low'] >= 0.0);
+                Assert::true($data['result']['range']['high'] >= 0.0);
             }),
         ];
     }

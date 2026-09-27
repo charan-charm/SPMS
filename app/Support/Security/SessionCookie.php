@@ -31,9 +31,10 @@ final class SessionCookie
      */
     public static function name(): string
     {
-        $configured = Config::get('SPMS_SESSION_COOKIE');
-
-        return is_string($configured) && $configured !== '' ? $configured : self::NAME;
+        $profile = \App\Support\Database::currentProfile();
+        return $profile === \App\Support\DataEnvironments::REAL
+            ? self::NAME
+            : 'spms_' . $profile . '_session';
     }
 
     /** Set-Cookie header value establishing the session. */
@@ -51,19 +52,29 @@ final class SessionCookie
     /**
      * Extract the raw session token from a Cookie request header.
      *
+     * @param string|null $cookieHeader
+     * @param string|null $matchedName Output parameter capturing which cookie name was matched
      * @return string|null raw opaque token, or null when absent
      */
-    public static function extractToken(?string $cookieHeader): ?string
+    public static function extractToken(?string $cookieHeader, ?string &$matchedName = null): ?string
     {
         if ($cookieHeader === null || $cookieHeader === '') {
             return null;
         }
 
+        $possibleNames = ['spms_session', 'spms_demo_session', 'spms_test_session'];
+
         foreach (explode(';', $cookieHeader) as $pair) {
             $parts = explode('=', trim($pair), 2);
-            if (count($parts) === 2 && $parts[0] === self::name()) {
-                $token = trim($parts[1]);
-                return $token === '' ? null : $token;
+            if (count($parts) === 2) {
+                $cookieName = trim($parts[0]);
+                if (in_array($cookieName, $possibleNames, true)) {
+                    $token = trim($parts[1]);
+                    if ($token !== '') {
+                        $matchedName = $cookieName;
+                        return $token;
+                    }
+                }
             }
         }
 

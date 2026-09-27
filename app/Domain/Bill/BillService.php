@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace App\Domain\Bill;
 
 use App\Domain\Account\Account;
+use App\Domain\Household\Household;
 use App\Domain\Household\HouseholdService;
 use App\Repositories\BillRepository;
+use App\Domain\Bill\Sequence\BillingPeriodSequenceValidator;
+use App\Domain\Notification\Notification;
+use App\Domain\Notification\NotificationService;
 use App\Support\AppException;
 use DateTimeImmutable;
 use InvalidArgumentException;
@@ -40,7 +44,9 @@ final class BillService
 {
     public function __construct(
         private readonly BillRepository $bills = new BillRepository(),
-        private readonly HouseholdService $households = new HouseholdService()
+        private readonly HouseholdService $households = new HouseholdService(),
+        private readonly BillingPeriodSequenceValidator $sequenceValidator = new BillingPeriodSequenceValidator(),
+        private readonly NotificationService $notifications = new NotificationService()
     ) {
     }
 
@@ -89,7 +95,24 @@ final class BillService
 
     public function markProcessingFailed(Account $account, string $billId, DateTimeImmutable $now): Bill
     {
-        return $this->transition($account, $billId, BillStatus::PROCESSING_FAILED, $now);
+        $householdId = $this->requireHousehold($account);
+        $bill = $this->transition($account, $billId, BillStatus::PROCESSING_FAILED, $now);
+
+        try {
+            $this->notifications->notify(
+                householdId: $householdId,
+                type: Notification::TYPE_BILL,
+                severity: Notification::SEVERITY_WARNING,
+                title: 'Bill Processing Failed',
+                message: 'An error occurred while processing your utility bill statement. Please review or re-upload the document.',
+                relatedResourceType: 'BILL',
+                relatedResourceId: $billId,
+                eventKey: "bill_failed_{$billId}"
+            );
+        } catch (\Throwable) {
+        }
+
+        return $bill;
     }
 
     /**
@@ -221,13 +244,17 @@ final class BillService
                     : self::validationError($e);
             }
 
+            $isStructured = ($values[BillField::SOURCE] ?? null) === BillSource::APSPDCL_EXPORT
+                || $draft->provider() === 'apspdcl_export';
+            $provSource = $isStructured ? ProvenanceSource::STRUCTURED_IMPORT : ProvenanceSource::AI_EXTRACTION;
+
             $provenance = [];
             foreach ($values as $field => $value) {
                 if ($value === null) {
                     continue; // no provenance row for data that does not exist
                 }
                 $provenance[$field] = [
-                    'source' => ProvenanceSource::AI_EXTRACTION,
+                    'source' => $provSource,
                     'confidence' => $draft->confidences()[$field] ?? null,
                 ];
             }
@@ -247,6 +274,57 @@ final class BillService
     public function householdServiceNumber(Account $account): ?string
     {
         return $this->requireHouseholdContext($account)->serviceNumber();
+    }
+
+    /**
+     * D-071 / Correction reconciliation:
+     * Re-evaluate ownership flags for a specific bill against the caller household's
+     * currently registered service number.
+     *
+     * Only unverified bills (EXTRACTED, NEEDS_REVIEW) are subject to reconciliation.
+     * Preserves original extraction draft, provenance, and values.
+     * Does NOT jump the bill to VERIFIED — verification remains an explicit user action.
+     */
+    public function reconcileOwnership(Account $account, string $billId, ?DateTimeImmutable $now = null): Bill
+    {
+        $household = $this->requireHouseholdContext($account);
+        $bill = $this->loadScoped($billId, $household->id());
+
+        if ($bill->status() === BillStatus::VERIFIED) {
+            return $bill;
+        }
+
+        $now = $now ?? new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $timestamp = $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+
+        $billServiceNumber = $bill->value(BillField::SERVICE_NUMBER);
+        $newFlags = self::ownershipFlags($household->serviceNumber(), $billServiceNumber);
+
+        $this->bills->syncOwnershipQualityFlags($bill->id(), $household->id(), $newFlags, $timestamp);
+
+        return $bill;
+    }
+
+    /**
+     * Re-evaluate ownership for all unverified bills of a household.
+     * Called when the household service number is corrected/updated.
+     */
+    public function reconcileHouseholdBillsOwnership(Household $household, ?DateTimeImmutable $now = null): void
+    {
+        $bills = $this->bills->listForHousehold($household->id());
+        $now = $now ?? new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $timestamp = $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+
+        foreach ($bills as $bill) {
+            if ($bill->status() === BillStatus::VERIFIED) {
+                continue;
+            }
+
+            $billServiceNumber = $bill->value(BillField::SERVICE_NUMBER);
+            $newFlags = self::ownershipFlags($household->serviceNumber(), $billServiceNumber);
+
+            $this->bills->syncOwnershipQualityFlags($bill->id(), $household->id(), $newFlags, $timestamp);
+        }
     }
 
     /**
@@ -296,8 +374,14 @@ final class BillService
      * The ONLY path to authoritative data (§17): explicit, scoped,
      * lifecycle-guarded; stamps verified_at; touches neither the draft
      * nor the provenance rows it accepts.
+     *
+     * Enforces:
+     * - Ownership: bills with SERVICE_NUMBER_MISMATCH cannot verify;
+     * - Chronological sequence: contiguous periods pass; duplicates and
+     *   overlaps are rejected (409); gaps require explicit acknowledgment
+     *   ($acceptGap = true) to prevent trapped users, flagging INCOMPLETE_HISTORY.
      */
-    public function verify(Account $account, string $billId, DateTimeImmutable $now): Bill
+    public function verify(Account $account, string $billId, DateTimeImmutable $now, bool $acceptGap = false): Bill
     {
         $householdId = $this->requireHousehold($account);
         $bill = $this->loadScoped($billId, $householdId);
@@ -308,11 +392,105 @@ final class BillService
             throw self::stateError($e);
         }
 
+        // 1. Ownership mismatch check: cannot verify foreign/mismatched bills
+        $flags = $this->bills->findQualityFlags($billId, $householdId);
+        foreach ($flags as $f) {
+            if ($f->code() === QualityCode::SERVICE_NUMBER_MISMATCH) {
+                throw new AppException(
+                    'OWNERSHIP_MISMATCH',
+                    'Cannot verify a bill whose service number does not match your registered household service number.',
+                    422
+                );
+            }
+        }
+
+        // 2. Sequence validation against canonical statement sequence
+        $sequenceBills = array_values(array_filter(
+            $this->bills->listForHousehold($householdId),
+            static fn (Bill $b): bool => $b->id() !== $bill->id()
+                && $b->value(BillField::BILLING_PERIOD_START) !== null
+                && $b->value(BillField::BILLING_PERIOD_END) !== null
+                && in_array($b->status(), [BillStatus::VERIFIED, BillStatus::EXTRACTED, BillStatus::NEEDS_REVIEW], true)
+        ));
+
+        $seqResult = $this->sequenceValidator->validate(
+            $bill->value(BillField::BILLING_PERIOD_START),
+            $bill->value(BillField::BILLING_PERIOD_END),
+            $sequenceBills
+        );
+
+        if ($seqResult->status() === BillingPeriodSequenceValidator::DUPLICATE_PERIOD) {
+            throw new AppException('DUPLICATE_BILL_PERIOD', $seqResult->message(), 409);
+        }
+
+        if ($seqResult->status() === BillingPeriodSequenceValidator::OVERLAPPING_PERIOD) {
+            throw new AppException('OVERLAPPING_BILL_PERIOD', $seqResult->message(), 409);
+        }
+
+        if ($seqResult->status() === BillingPeriodSequenceValidator::INVALID_REVERSED || $seqResult->status() === BillingPeriodSequenceValidator::MISSING_PERIOD_DATES) {
+            throw new AppException('INVALID_BILL_PERIOD', $seqResult->message(), 422);
+        }
+
+        if ($seqResult->status() === BillingPeriodSequenceValidator::GAP_DETECTED) {
+            if (!$acceptGap) {
+                throw new AppException(
+                    'BILLING_GAP_DETECTED',
+                    $seqResult->message(),
+                    422,
+                    [
+                        'missing_period' => $seqResult->missingPeriod(),
+                        'requires_acknowledgment' => true,
+                    ]
+                );
+            }
+
+            // Controlled exception: gap accepted by user. Flag history as incomplete.
+            $stamp = $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+            $this->bills->recordQualityFlag($bill->id(), BillQualityFlag::create(QualityCode::INCOMPLETE_HISTORY, null), $stamp);
+            $this->bills->recordQualityFlag($bill->id(), BillQualityFlag::create(QualityCode::BILLING_GAP_PRECEDING, BillField::BILLING_PERIOD_START), $stamp);
+        }
+
         if (!$this->bills->save($updated)) {
             throw new AppException('NOT_FOUND', 'The requested bill was not found.', 404);
         }
 
+        try {
+            $start = $updated->value(BillField::BILLING_PERIOD_START) ?? 'Unknown';
+            $end = $updated->value(BillField::BILLING_PERIOD_END) ?? 'Unknown';
+            $this->notifications->notify(
+                householdId: $householdId,
+                type: Notification::TYPE_BILL,
+                severity: Notification::SEVERITY_SUCCESS,
+                title: 'Utility Bill Statement Verified',
+                message: "APSPDCL electricity statement for period {$start} to {$end} was verified.",
+                relatedResourceType: 'BILL',
+                relatedResourceId: $updated->id(),
+                eventKey: "bill_verified_{$updated->id()}"
+            );
+        } catch (\Throwable) {
+        }
+
         return $updated;
+    }
+
+    public function sequenceValidationFor(Account $account, string $billId): \App\Domain\Bill\Sequence\BillingSequenceResult
+    {
+        $householdId = $this->requireHousehold($account);
+        $bill = $this->loadScoped($billId, $householdId);
+
+        $sequenceBills = array_values(array_filter(
+            $this->bills->listForHousehold($householdId),
+            static fn (Bill $b): bool => $b->id() !== $bill->id()
+                && $b->value(BillField::BILLING_PERIOD_START) !== null
+                && $b->value(BillField::BILLING_PERIOD_END) !== null
+                && in_array($b->status(), [BillStatus::VERIFIED, BillStatus::EXTRACTED, BillStatus::NEEDS_REVIEW], true)
+        ));
+
+        return $this->sequenceValidator->validate(
+            $bill->value(BillField::BILLING_PERIOD_START),
+            $bill->value(BillField::BILLING_PERIOD_END),
+            $sequenceBills
+        );
     }
 
     public function draftFor(Account $account, string $billId): ?BillExtractionDraft

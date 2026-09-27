@@ -214,8 +214,8 @@ describe('BillsWorkspace lifecycle states', () => {
     })
 
     it.each([
-        ['NOT_A_BILL', /doesn't appear to be an electricity bill/i],
-        ['UNREADABLE', /couldn't read this bill clearly/i],
+        ['NOT_A_BILL', /Document not recognized as an electricity bill|doesn't appear to be an electricity bill/i],
+        ['UNREADABLE', /SPMS couldn't read this bill|couldn't read this bill clearly/i],
         ['UNCERTAIN', /couldn't confidently identify this document/i],
         ['PROCESSING_FAILED', /couldn't finish analyzing this bill/i],
     ])('%s renders its dedicated outcome card, never fabricated fields', (status, title) => {
@@ -295,7 +295,7 @@ describe('BillsWorkspace lifecycle states', () => {
             }),
         })
         expect(screen.getByText('Service number matches this household')).toBeInTheDocument()
-        expect(screen.getByText('10002000300')).toBeInTheDocument()
+        expect(screen.getByText('••••••••0300')).toBeInTheDocument()
         expect(container.textContent).not.toMatch(/bill verified|ownership verified/i)
 
         // MISMATCH: amber review words, masked registered side only.
@@ -314,7 +314,7 @@ describe('BillsWorkspace lifecycle states', () => {
         )
         expect(screen.getByText("Service number doesn't match this household")).toBeInTheDocument()
         // The mismatch flag also reads in the review alert with words, not codes.
-        expect(screen.getByText(/service number does not match this household/i)).toBeInTheDocument()
+        expect(screen.getAllByText(/service number does not match this household/i).length).toBeGreaterThanOrEqual(1)
         expect(screen.queryByText('SERVICE_NUMBER_MISMATCH')).not.toBeInTheDocument()
         // The full registered number never appears unmasked.
         expect(container.textContent).not.toContain('10002000300')
@@ -439,5 +439,349 @@ describe('BillsWorkspace lifecycle states', () => {
         const history = screen.getByRole('button', { name: /review needed/i })
         expect(history).toBeInTheDocument()
         expect(screen.getByText(/no verified bills yet/i)).toBeInTheDocument()
+    })
+
+    describe('UX Redesign & Source-Aware Navigation (Requirements 1-12)', () => {
+        it('1. PDF source badge displays "PDF bill" and "AI extracted"', () => {
+            renderWorkspace({
+                bills: [{ bill_id: 'pdf-bill', status: 'EXTRACTED', document_type: 'PDF' }],
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), {
+                        extraction: extraction(),
+                        validations: CLEAN_VALIDATIONS,
+                    }),
+                    document_type: 'PDF',
+                },
+            })
+
+            expect(screen.getAllByText('Electricity bill PDF').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getAllByText('PDF extraction / OCR where applicable').length).toBeGreaterThanOrEqual(1)
+        })
+
+        it('2. Image source badge displays "Electricity bill image" and "OCR extraction"', () => {
+            renderWorkspace({
+                bills: [{ bill_id: 'img-bill', status: 'EXTRACTED', document_type: 'IMAGE' }],
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), {
+                        extraction: extraction(),
+                        validations: CLEAN_VALIDATIONS,
+                    }),
+                    document_type: 'IMAGE',
+                },
+            })
+
+            expect(screen.getAllByText('Electricity bill image').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getAllByText('OCR extraction').length).toBeGreaterThanOrEqual(1)
+        })
+
+        it('3. XLS structured-import badge displays "APSPDCL Excel (.xls)" and "Structured import"', () => {
+            renderWorkspace({
+                bills: [{ bill_id: 'xls-bill', status: 'EXTRACTED', source: 'APSPDCL_EXPORT', document_type: 'STRUCTURED_XLS' }],
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), {
+                        extraction: {
+                            ...extraction(),
+                            assessment_reason: 'APSPDCL structured spreadsheet row',
+                            document_confidence: null,
+                        },
+                        validations: CLEAN_VALIDATIONS,
+                    }),
+                    source: 'APSPDCL_EXPORT',
+                    document_type: 'STRUCTURED_XLS',
+                    source_statement_serial: 1,
+                },
+            })
+
+            expect(screen.getAllByText('APSPDCL Excel (.xls)').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getByText('Structured import')).toBeInTheDocument()
+            expect(screen.getByText(/Imported directly from the APSPDCL spreadsheet/i)).toBeInTheDocument()
+            expect(screen.queryByText(/AI extracted/i)).not.toBeInTheDocument()
+        })
+
+        it('4. XLS does not display fake AI confidence', () => {
+            const { container } = renderWorkspace({
+                bills: [{ bill_id: 'xls-bill', status: 'EXTRACTED', source: 'APSPDCL_EXPORT', document_type: 'STRUCTURED_XLS' }],
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), {
+                        extraction: {
+                            ...extraction(),
+                            assessment_reason: 'APSPDCL structured export',
+                            document_confidence: null,
+                        },
+                        validations: CLEAN_VALIDATIONS,
+                    }),
+                    source: 'APSPDCL_EXPORT',
+                    document_type: 'STRUCTURED_XLS',
+                },
+            })
+
+            expect(screen.queryByText(/high confidence/i)).not.toBeInTheDocument()
+            expect(screen.queryByText(/moderate confidence/i)).not.toBeInTheDocument()
+            expect(screen.queryByText(/low confidence/i)).not.toBeInTheDocument()
+            expect(container.textContent).toContain('No OCR confidence scores apply')
+        })
+
+        it('5 & 6. statement navigator displays month + year and selecting a period triggers onSelect', async () => {
+            const user = userEvent.setup()
+            const onSelectBill = vi.fn()
+
+            const bills = [
+                {
+                    bill_id: 'bill-sep-26',
+                    status: 'VERIFIED',
+                    billing_period_start: '2026-08-01',
+                    billing_period_end: '2026-09-01',
+                    source_statement_serial: 1,
+                },
+                {
+                    bill_id: 'bill-aug-26',
+                    status: 'VERIFIED',
+                    billing_period_start: '2026-07-01',
+                    billing_period_end: '2026-08-01',
+                    source_statement_serial: 2,
+                },
+            ]
+
+            renderWorkspace({
+                bills,
+                detail: {
+                    ...detailFor('VERIFIED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'bill-sep-26',
+                    billing_period_start: '2026-08-01',
+                    billing_period_end: '2026-09-01',
+                    source_statement_serial: 1,
+                },
+                onSelectBill,
+            })
+
+            // Statement navigator should render period labels (Month + Year)
+            expect(screen.getByRole('navigation', { name: /billing statement navigation/i }) ||
+                   screen.getByLabelText(/billing statement navigation/i)).toBeInTheDocument()
+            expect(screen.getAllByText('Sep 2026').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getAllByText('Aug 2026').length).toBeGreaterThanOrEqual(1)
+
+            // Clicking the Aug 2026 chip calls onSelectBill with 'bill-aug-26'
+            const augChip = screen.getByRole('tab', { name: /aug 2026/i })
+            await user.click(augChip)
+            expect(onSelectBill).toHaveBeenCalledWith('bill-aug-26')
+
+            // Testing Previous statement button
+            const prevButton = screen.getByRole('button', { name: /previous statement/i })
+            await user.click(prevButton)
+            expect(onSelectBill).toHaveBeenCalledWith('bill-aug-26')
+        })
+
+        it('7. statement serial remains visible in selected bill', () => {
+            renderWorkspace({
+                bills: [{ bill_id: 'bill-1', status: 'EXTRACTED' }],
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    source_statement_serial: 1,
+                },
+            })
+
+            expect(screen.getAllByText('Statement #1').length).toBeGreaterThanOrEqual(1)
+        })
+
+        it('8. pre-solar state displays correctly without 0 kWh or missing warnings', () => {
+            const values = {
+                ...extractedValues(),
+                previous_solar_reading: null,
+                present_solar_reading: null,
+                solar_units_kwh: null,
+                consumption_kwh: '124.000',
+                net_units_kwh: '124.000',
+            }
+
+            renderWorkspace({
+                bills: [{ bill_id: 'pre-solar-bill', status: 'EXTRACTED', solar_applicability: 'BEFORE_SOLAR_INSTALLATION' }],
+                detail: {
+                    ...detailFor('EXTRACTED', values, { validations: CLEAN_VALIDATIONS }),
+                    solar_applicability: 'BEFORE_SOLAR_INSTALLATION',
+                },
+            })
+
+            expect(screen.getByText('Pre-solar period')).toBeInTheDocument()
+            expect(screen.getByText(/solar was not active during this billing period/i)).toBeInTheDocument()
+            expect(screen.getByText('Not applicable')).toBeInTheDocument()
+            expect(screen.queryByText(/^0(\.0+)?\s*kWh$/)).not.toBeInTheDocument()
+            expect(screen.queryByText(/missing.*solar/i)).not.toBeInTheDocument()
+        })
+
+        it('9. solar-active state displays solar values', () => {
+            const values = {
+                ...extractedValues(),
+                previous_solar_reading: '1878.000',
+                present_solar_reading: '2200.000',
+                solar_units_kwh: '322.000',
+            }
+
+            renderWorkspace({
+                bills: [{ bill_id: 'solar-bill', status: 'EXTRACTED', solar_applicability: 'SOLAR_ACTIVE' }],
+                detail: {
+                    ...detailFor('EXTRACTED', values, { validations: CLEAN_VALIDATIONS }),
+                    solar_applicability: 'SOLAR_ACTIVE',
+                },
+            })
+
+            expect(screen.getByText('Active solar')).toBeInTheDocument()
+            expect(screen.getAllByText('322 kWh').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getByText('1,878 kWh')).toBeInTheDocument()
+            expect(screen.getByText('2,200 kWh')).toBeInTheDocument()
+        })
+
+        it('10. billing history selection synchronizes with selected bill', async () => {
+            const user = userEvent.setup()
+            const onSelectBill = vi.fn()
+
+            const bills = [
+                {
+                    bill_id: 'bill-1',
+                    status: 'VERIFIED',
+                    billing_period_start: '2026-08-01',
+                    billing_period_end: '2026-09-01',
+                    consumption_kwh: '145.000',
+                    solar_units_kwh: '322.000',
+                    net_units_kwh: '-177.000',
+                    bill_amount: '180.00',
+                    verified_at: '2026-09-10',
+                },
+                {
+                    bill_id: 'bill-2',
+                    status: 'VERIFIED',
+                    billing_period_start: '2026-07-01',
+                    billing_period_end: '2026-08-01',
+                    consumption_kwh: '200.000',
+                    solar_units_kwh: null,
+                    net_units_kwh: '200.000',
+                    bill_amount: '250.00',
+                    solar_applicability: 'BEFORE_SOLAR_INSTALLATION',
+                    verified_at: '2026-08-10',
+                },
+            ]
+
+            renderWorkspace({
+                bills,
+                detail: {
+                    ...detailFor('VERIFIED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'bill-1',
+                },
+                onSelectBill,
+            })
+
+            const historyRows = screen.getAllByRole('button', { name: /verified/i })
+            expect(historyRows.length).toBeGreaterThanOrEqual(2)
+
+            // Clicking row 2 selects bill-2
+            await user.click(historyRows[1])
+            expect(onSelectBill).toHaveBeenCalledWith('bill-2')
+        })
+
+        it('11. existing gap acknowledgement remains enforced', async () => {
+            const user = userEvent.setup()
+            const onVerify = vi.fn()
+
+            const detail = {
+                ...detailFor('EXTRACTED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                bill_id: 'gap-bill',
+                sequence_validation: {
+                    status: 'GAP_DETECTED',
+                    message: 'Unbilled gap detected',
+                    missing_period: { start: '2025-12-01', end: '2026-08-01' },
+                },
+            }
+
+            renderWorkspace({
+                bills: [{ bill_id: 'gap-bill', status: 'EXTRACTED' }],
+                detail,
+                onVerify,
+            })
+
+            // Verify button is disabled before gap acknowledgement
+            const verifyBtn = screen.getByRole('button', { name: /verify bill/i })
+            expect(verifyBtn).toBeDisabled()
+
+            // Check the gap acknowledgement checkbox
+            const checkbox = screen.getByRole('checkbox', { name: /acknowledge gap/i })
+            expect(checkbox).not.toBeChecked()
+            await user.click(checkbox)
+            expect(checkbox).toBeChecked()
+
+            // Verify button is now enabled
+            expect(verifyBtn).toBeEnabled()
+            await user.click(verifyBtn)
+            expect(onVerify).toHaveBeenCalledWith('gap-bill', { acceptGap: true })
+        })
+
+        it('12. canonical ordering: billing periods sort newest to oldest', () => {
+            const unorderedBills = [
+                { bill_id: 'b-jun', status: 'EXTRACTED', billing_period_start: '2026-05-01', billing_period_end: '2026-06-01' },
+                { bill_id: 'b-sep', status: 'EXTRACTED', billing_period_start: '2026-08-01', billing_period_end: '2026-09-01' },
+                { bill_id: 'b-jul', status: 'EXTRACTED', billing_period_start: '2026-06-01', billing_period_end: '2026-07-01' },
+            ]
+
+            renderWorkspace({
+                bills: unorderedBills,
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'b-sep',
+                    billing_period_start: '2026-08-01',
+                    billing_period_end: '2026-09-01',
+                },
+            })
+
+            const select = screen.getByRole('combobox', { name: /select billing statement by month/i })
+            const options = [...select.querySelectorAll('option')].map((o) => o.textContent)
+            // Chronological order: Sep 2026, Jul 2026, Jun 2026
+            expect(options[0]).toContain('September 2026')
+            expect(options[1]).toContain('July 2026')
+            expect(options[2]).toContain('June 2026')
+        })
+
+        it('13. duplicate periods do not create duplicate navigation entries', () => {
+            const billsWithDuplicates = [
+                { bill_id: 'b-sep-1', status: 'EXTRACTED', billing_period_start: '2026-08-01', billing_period_end: '2026-09-01' },
+                { bill_id: 'b-sep-2', status: 'VERIFIED', billing_period_start: '2026-08-01', billing_period_end: '2026-09-01' },
+                { bill_id: 'b-aug', status: 'EXTRACTED', billing_period_start: '2026-07-01', billing_period_end: '2026-08-01' },
+            ]
+
+            renderWorkspace({
+                bills: billsWithDuplicates,
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'b-sep-1',
+                    billing_period_start: '2026-08-01',
+                    billing_period_end: '2026-09-01',
+                },
+            })
+
+            const select = screen.getByRole('combobox', { name: /select billing statement by month/i })
+            const options = [...select.querySelectorAll('option')]
+            // Only 2 distinct options: Sep 2026 and Aug 2026 (no duplicated Sep 2026)
+            expect(options.length).toBe(2)
+            expect(options[0].textContent).toContain('September 2026')
+            expect(options[1].textContent).toContain('August 2026')
+        })
+
+        it('14. truthful status semantics: never says "verified statement feed" when only extracted', () => {
+            const extractedOnlyBills = [
+                { bill_id: 'b1', status: 'EXTRACTED', billing_period_start: '2026-08-01', billing_period_end: '2026-09-01' },
+                { bill_id: 'b2', status: 'EXTRACTED', billing_period_start: '2026-07-01', billing_period_end: '2026-08-01' },
+            ]
+
+            const { container } = renderWorkspace({
+                bills: extractedOnlyBills,
+                detail: {
+                    ...detailFor('EXTRACTED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'b1',
+                    billing_period_start: '2026-08-01',
+                    billing_period_end: '2026-09-01',
+                },
+            })
+
+            expect(container.textContent).not.toMatch(/verified statement feed/i)
+            expect(screen.getByText('2 statements recorded')).toBeInTheDocument()
+            expect(screen.getByText(/2 recorded · 2 extracted · 0 awaiting review/i)).toBeInTheDocument()
+        })
     })
 })

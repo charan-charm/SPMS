@@ -20,6 +20,8 @@ export const authRoutes = [
     { path: '/recover', name: 'Account recovery' },
 ]
 
+export const onboardingRoute = { path: '/onboarding', name: 'Onboarding' }
+
 export const protectedRoutes = [
     { path: '/dashboard', name: 'Dashboard' },
     { path: '/solar', name: 'Solar' },
@@ -27,6 +29,7 @@ export const protectedRoutes = [
     { path: '/energy/cost', name: 'Energy cost' },
     { path: '/forecasts', name: 'Forecasts' },
     { path: '/insights', name: 'Insights' },
+    { path: '/recommendations', name: 'Recommendations' },
     { path: '/analytics', name: 'Analytics' },
     { path: '/bills', name: 'Bills' },
     { path: '/reports', name: 'Reports' },

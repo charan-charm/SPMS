@@ -94,6 +94,49 @@ final class ConfidenceModel
             $rank = min($rank, InsightConfidence::rank(InsightConfidence::MODERATE));
         }
 
+        // Upstream confidence ceilings (worst-of rule): an insight cannot be more
+        // confident than the upstream pipeline sources it relied upon.
+        $upstreamConfidences = [];
+        foreach ($candidate->evidenceDomains as $domain) {
+            if ($domain === 'balance') {
+                foreach ($evidence->balanceResults() as $payload) {
+                    if (isset($payload['result']['confidence_level'])) {
+                        $upstreamConfidences[] = $payload['result']['confidence_level'];
+                    }
+                }
+            } elseif ($domain === 'solar') {
+                foreach ($evidence->solarPeriods() as $record) {
+                    if (isset($record['confidence_level'])) {
+                        $upstreamConfidences[] = $record['confidence_level'];
+                    }
+                }
+            } elseif ($domain === 'consumption') {
+                foreach ($evidence->consumptionPeriods() as $record) {
+                    if (isset($record['confidence_level'])) {
+                        $upstreamConfidences[] = $record['confidence_level'];
+                    }
+                }
+            } elseif ($domain === 'forecast') {
+                foreach ($evidence->forecastPeriods() as $record) {
+                    if (isset($record['confidence_level'])) {
+                        $upstreamConfidences[] = $record['confidence_level'];
+                    }
+                }
+            } elseif ($domain === 'cost') {
+                foreach ($evidence->costResults() as $payload) {
+                    if (isset($payload['result']['confidence_level'])) {
+                        $upstreamConfidences[] = $payload['result']['confidence_level'];
+                    }
+                }
+            }
+        }
+
+        foreach ($upstreamConfidences as $upstreamConf) {
+            if (is_string($upstreamConf) && InsightConfidence::isValid($upstreamConf)) {
+                $rank = min($rank, InsightConfidence::rank($upstreamConf));
+            }
+        }
+
         return InsightConfidence::fromRank($rank);
     }
 

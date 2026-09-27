@@ -1306,9 +1306,9 @@ Analytics Service
         ↓
 Graph-ready Semantic Dataset
         ↓
-Shared SPMS Chart Layer
+Shared SPMS Chart Components
         ↓
-Chart.js
+Recharts (React)
         ↓
 UI
 ```
@@ -1768,13 +1768,11 @@ Memory line:
 Mana architecture simple ga:
 
 ```text
-Browser
+Browser (React SPA)
    ↓
-HTML / CSS / JavaScript
+Central API Client (fetch)
    ↓
-fetch()
-   ↓
-PHP JSON API
+PHP REST API (/api/v1)
    ↓
 Controller
    ↓
@@ -1816,23 +1814,31 @@ Golden rule:
 
 # 50. Technical Architecture 🏗️
 
-MVP kosam full framework avasaram ledu.
+MVP kosam heavy backend framework avasaram ledu.
 
 Use:
 
 ```text
 PHP
 MySQL
-HTML
-CSS
-Vanilla JavaScript
 Composer
 Apache / XAMPP
+
+Frontend (locked F0 direction):
+React
+Vite (build tooling only)
+Tailwind CSS
+Motion
+shadcn/ui where appropriate
+Lucide Icons
+Recharts
+React Router
+fetch() via centralized API client
 ```
 
 Architecture:
 
-> **Lightweight MVC-like modular PHP application.**
+> **Lightweight MVC-like modular PHP backend + React SPA frontend.**
 
 Folder idea:
 
@@ -2896,14 +2902,16 @@ PHP 8.4 minimum
 Composer
 MySQL
 Apache
-HTML
-CSS
-Vanilla JavaScript
+
+Frontend:
+React
+Vite
+Tailwind CSS
 ```
 
 Architecture:
 
-> **Lightweight modular PHP + MVC-like separation**
+> **Lightweight modular PHP + MVC-like separation, React SPA frontend**
 
 Web root:
 
@@ -3058,37 +3066,44 @@ AI:
 
 # 79. Phase 6 Frontend Memory 💻
 
-Frontend stack:
+Frontend stack (locked F0 direction — docs/11, docs/12):
 
 ```text
-HTML
-CSS
-Vanilla JS
-fetch()
-Chart.js through shared SPMS Chart Layer
+React
+Vite (build tooling only)
+Tailwind CSS
+Motion
+shadcn/ui where appropriate
+Lucide Icons
+Recharts
+React Router
+fetch() via centralized API client
 ```
 
-JS responsibilities:
+React responsibilities:
 
-- DOM/UI updates
+- UI rendering
+- component state
 - user interactions
 - form UX
-- presentation calculations
-- graph interaction
+- presentation-only calculations
+- API consumption via centralized client
+- graph rendering
 
-JS cannot become authoritative owner of:
+React cannot become authoritative owner of:
 
 - energy balance
 - cost truth
 - prediction truth
 - authorization
+- ownership
 - provenance
 - quality
 - operation status
 
 Memory:
 
-> **Backend truth. Frontend presentation.**
+> **Backend truth. React presentation.**
 
 ---
 
@@ -3433,4 +3448,26 @@ Once this works cleanly, mana actual SPMS construction start avtundi. 🛠️☀
 # 88. FINAL MEMORY LINE 🧠🔥
 
 > **SPMS = Solar + Household Energy + Prediction + Balance + Cost + Intelligence + Recommendation — all built around trustworthy data, clear uncertainty, secure architecture, and useful household decisions.**
+
+---
+
+# 89. F7 — Recommendation Management Module Complete 💡☀️
+
+F7 Recommendations Module implementation complete aypoyindi!
+
+### Mana Golden Rules:
+1. **Advisory-Only Boundary:** Household ki guidance ivvadam (e.g., washing machine ni noon solar window lo run cheyyandi, pre-cool rooms before evening deficit). Absolutely direct appliance automation or smart-plug switching cheyyakudadhu! User is always in control.
+2. **Deterministic Rules (No LLM hallucinations):** Pure deterministic PHP domain engine (`RecommendationEngine`). Number calculations, surplus/deficit timings, and priorities are 100% deterministic.
+3. **Controlled 8 Taxonomy Types:**
+   - `SHIFT_TO_SOLAR_WINDOW` (High midday solar unappudu flexible load shift)
+   - `USE_AVAILABLE_SOLAR` (Sustained surplus ni EV or heat pump ki use cheyyadam)
+   - `AVOID_DEFICIT_WINDOW` (Peak deficit time lo heavy loads postpone cheyyadam)
+   - `EVENING_DEFICIT_PREPARATION` (Afternoon surplus lo pre-cool/charge for evening)
+   - `HIGH_DEMAND_REDUCTION` (Appliances ni concurrently run cheyyakunda peak reduce cheyyadam)
+   - `COST_AWARE_SHIFT` (Telescopic tariff upper slab cross avvakunda consumption manage cheyyadam)
+   - `SOLAR_DECLINE_RESPONSE` (Solar production taggithe panel dust/shade check cheyyadaniki prompt)
+   - `DATA_LIMITATION` (Data missing or degraded unte honest explanation notice, never a user chore!)
+4. **Worst-Of Confidence:** Weakest input entha confidence untundo recommendation confidence kooda anthe untundi. Missing data unappudu fake numbers fabricate cheyyakudadhu.
+5. **Deduplication & 12-Hour Cooldown:** Dismiss chesina recommendation malli ventane recreate avvadhu. Max 5 active recommendations per household.
+
 

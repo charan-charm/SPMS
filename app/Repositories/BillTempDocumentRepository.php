@@ -130,6 +130,6 @@ class BillTempDocumentRepository
 
     private function connection(): PDO
     {
-        return $this->pdo ??= Database::connection();
+        return $this->pdo ?? Database::connection();
     }
 }

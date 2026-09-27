@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { FileCheck2, TriangleAlert, UploadCloud, X } from 'lucide-react'
+import { ExternalLink, FileCheck2, TriangleAlert, UploadCloud, X } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { ACCEPTED_UPLOAD_ATTR, clientSideUploadCheck, formatBytes } from './presentation'
@@ -66,7 +66,7 @@ export function BillUploadPanel({ onUpload, busy = false, externalError = null, 
                     <UploadCloud className="size-5 text-secondary" aria-hidden="true" />
                     Upload your electricity bill
                 </CardTitle>
-                <CardDescription>PDF, JPG or PNG up to 25 MB. The bill stays private to your household.</CardDescription>
+                <CardDescription>PDF, JPG, PNG or APSPDCL .xls up to 25 MB. The bill stays private to your household.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
                 <div
@@ -151,6 +151,19 @@ export function BillUploadPanel({ onUpload, busy = false, externalError = null, 
                     <Button type="button" onClick={submit} loading={uploading} disabled={!file || busy}>
                         Upload bill
                     </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted">
+                    <span>Don&apos;t have your bill handy?</span>
+                    <a
+                        href="https://www.apspdcl.in"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                    >
+                        <span>Download statement from APSPDCL Portal</span>
+                        <ExternalLink className="size-3" aria-hidden="true" />
+                    </a>
                 </div>
             </CardContent>
         </Card>

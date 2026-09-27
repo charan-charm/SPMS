@@ -23,7 +23,7 @@ final class InsightEvidenceInput
     private const NATURES = EvidenceSemantics::NATURES;
     private const STATUSES = ['FRESH', 'STALE', 'DEGRADED'];
     private const QUALITIES = EvidenceSemantics::QUALITIES;
-    private const CONFIDENCES = ['HIGH', 'MODERATE', 'LOW', 'VERY_LOW'];
+    private const CONFIDENCES = ['HIGH', 'MODERATE', 'LOW', 'VERY_LOW', 'INSUFFICIENT'];
     private const BALANCE_CLASSIFICATIONS = ['POTENTIAL_SURPLUS', 'BALANCED', 'POTENTIAL_DEFICIT'];
     private const BALANCE_STATES = ['CLASSIFIED', 'UNAVAILABLE'];
     private const COST_STATES = ['ESTIMATED', 'UNAVAILABLE', 'INSUFFICIENT_EVIDENCE'];
@@ -280,6 +280,7 @@ final class InsightEvidenceInput
                     'data_nature' => self::validatedOptional($result['data_nature'] ?? null, self::NATURES, sprintf('balance.%d.result.data_nature', $index)),
                     'data_status' => self::validatedOptional($result['data_status'] ?? null, EvidenceSemantics::STATUSES, sprintf('balance.%d.result.data_status', $index)),
                     'quality' => self::validatedOptional($result['quality'] ?? null, self::QUALITIES, sprintf('balance.%d.result.quality', $index)),
+                    'confidence_level' => self::validatedOptional($result['confidence_level'] ?? null, self::CONFIDENCES, sprintf('balance.%d.result.confidence_level', $index)),
                     'explanation' => self::validatedText($result['explanation'] ?? null, sprintf('balance.%d.result.explanation', $index)),
                 ],
             ];
@@ -346,6 +347,7 @@ final class InsightEvidenceInput
                     'pricing_basis' => $pricingBasis,
                     'data_nature' => self::validatedOptional($result['data_nature'] ?? null, self::NATURES, sprintf('cost.%d.result.data_nature', $index)),
                     'data_status' => self::validatedOptional($result['data_status'] ?? null, EvidenceSemantics::STATUSES, sprintf('cost.%d.result.data_status', $index)),
+                    'confidence_level' => self::validatedOptional($result['confidence_level'] ?? null, self::CONFIDENCES, sprintf('cost.%d.result.confidence_level', $index)),
                     'explanation' => self::validatedText($result['explanation'] ?? null, sprintf('cost.%d.result.explanation', $index)),
                 ],
             ];
@@ -463,7 +465,7 @@ final class InsightEvidenceInput
 
     private static function parseDate(string $value): ?\DateTimeImmutable
     {
-        $formats = ['Y-m-d\TH:i:s', 'Y-m-d\TH:i', 'Y-m-d'];
+        $formats = ['Y-m-d\TH:i:s\Z', 'Y-m-d\TH:i:sp', 'Y-m-d\TH:i:sP', 'Y-m-d\TH:i:s', 'Y-m-d\TH:i', 'Y-m-d'];
         foreach ($formats as $format) {
             $date = \DateTimeImmutable::createFromFormat($format . '|', $value);
             if ($date instanceof \DateTimeImmutable) {

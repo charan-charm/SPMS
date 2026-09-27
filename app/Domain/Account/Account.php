@@ -59,8 +59,12 @@ final class Account
     }
 
     /** Registration default — the only client-independent creation path. */
-    public static function register(string $email, string $passwordHash, \DateTimeImmutable $now): self
-    {
+    public static function register(
+        string $email,
+        string $passwordHash,
+        \DateTimeImmutable $now,
+        string $mode = self::MODE_REAL
+    ): self {
         $timestamp = $now->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
 
         return new self(
@@ -69,7 +73,7 @@ final class Account
             passwordHash: $passwordHash,
             status: self::STATUS_PENDING_VERIFICATION,
             role: self::ROLE_USER,
-            mode: self::MODE_REAL,
+            mode: $mode,
             emailVerifiedAt: null,
             createdAt: $timestamp,
             updatedAt: $timestamp

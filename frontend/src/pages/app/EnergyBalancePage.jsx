@@ -130,10 +130,16 @@ function BalanceResult({ data }) {
                                 status={data.inputs.household_consumption.data_status}
                             />
                             <MetricCard
-                                label="Balance"
-                                value={`${result.balance_kwh > 0 ? '+' : ''}${formatKwh(result.balance_kwh)}`}
+                                label={result.classification === 'POTENTIAL_DEFICIT' ? 'Potential Deficit' : (result.classification === 'POTENTIAL_SURPLUS' ? 'Potential Surplus' : 'Balance')}
+                                value={result.classification === 'POTENTIAL_DEFICIT' || result.classification === 'POTENTIAL_SURPLUS'
+                                    ? `${formatKwh(Math.abs(result.balance_kwh))}`
+                                    : `${formatKwh(result.balance_kwh)}`}
                                 unit="kWh"
-                                comparison="Solar generation − household consumption"
+                                comparison={result.classification === 'POTENTIAL_DEFICIT'
+                                    ? 'Household consumption exceeds solar generation'
+                                    : (result.classification === 'POTENTIAL_SURPLUS'
+                                        ? 'Solar generation exceeds household consumption'
+                                        : 'Solar generation matches household consumption')}
                             />
                         </div>
 
@@ -269,13 +275,32 @@ export function EnergyBalancePage() {
                                 variant="unavailable"
                                 icon={AlertCircle}
                                 explanation={storedData.result.explanation}
-                                limitation="A balance can be calculated here once solar generation and household consumption data sources are connected."
+                                limitation={storedData.result.limitation || "A balance can be calculated here once solar generation and household consumption data sources are connected."}
                             />
                         ) : (
                             <BalanceResult data={storedData} />
                         ))}
 
-                    {phase === 'result' && resultData && <BalanceResult data={resultData} />}
+                    {phase === 'result' && resultData && (
+                        <div className="flex flex-col gap-3">
+                            <div className="flex items-center justify-between rounded-lg border border-chart-demo/40 bg-chart-demo/10 px-4 py-2.5 text-sm">
+                                <span className="font-semibold text-chart-demo">
+                                    Showing Sample Analysis Result (Simulated Scenario)
+                                </span>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        setResultData(null)
+                                        setPhase('ready')
+                                    }}
+                                >
+                                    View Live Household Balance
+                                </Button>
+                            </div>
+                            <BalanceResult data={resultData} />
+                        </div>
+                    )}
 
                     <Card>
                         <CardHeader>

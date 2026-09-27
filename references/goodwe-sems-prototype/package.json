@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "data": "node sems-data.js",
+    "login": "node sems-login.js",
+    "replay-har": "node sems-har-replay.js",
+    "test-login": "node test.js"
+  },
+  "dependencies": {
+    "axios": "^1.19.0"
+  }
+}

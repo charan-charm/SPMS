@@ -216,7 +216,11 @@ export function BillValidationSummary({ validations }) {
                                         {rule?.short ?? validation.rule.replace(/_/g, ' ')}
                                     </p>
                                     <p className={cn('text-sm', statusTone)}>
-                                        {validation.status === 'NOT_CHECKED' ? (rule?.notChecked ?? result) : result}
+                                        {validation.status === 'NOT_CHECKED'
+                                            ? validation.reason_code === 'BEFORE_SOLAR_INSTALLATION'
+                                                ? 'Solar not active / not recorded for this billing period'
+                                                : (rule?.notChecked ?? result)
+                                            : result}
                                     </p>
                                 </div>
                             </li>

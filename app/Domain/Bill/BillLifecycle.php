@@ -49,7 +49,9 @@ final class BillLifecycle
         BillStatus::NOT_A_BILL => [],
         BillStatus::UNREADABLE => [],
         BillStatus::UNCERTAIN => [],
-        BillStatus::PROCESSING_FAILED => [],
+        BillStatus::PROCESSING_FAILED => [
+            BillStatus::PROCESSING,
+        ],
     ];
 
     public static function can(string $from, string $to): bool

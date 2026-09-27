@@ -113,13 +113,32 @@ Bedrock may explain validated facts, but cannot invent numerical facts.
 ## F7 — Recommendation Management
 
 Responsibilities:
-- Convert validated insights into household-specific recommendations.
-- Consider confidence, impact, data quality, user context, and feedback.
-- Adjust recommendation strength to uncertainty.
-- Avoid recommendations when evidence is too weak.
+- Convert validated insights, authoritative forecasts (F3), energy balance positions (F4), cost impacts (F5), and utility billings into household-specific advisory recommendations.
+- Consider confidence, impact, data quality, user context, and dismissal feedback.
+- Strictly adhere to the advisory-only boundary: provide actionable guidance to the household (e.g. shift flexible loads into solar window) with absolutely no direct appliance automation, remote relay switching, or smart-plug control.
+- Adjust recommendation strength to uncertainty using worst-of confidence aggregation (a recommendation can never claim higher confidence than its weakest critical input).
+- Avoid recommendations and emit honest `DATA_LIMITATION` notices when source telemetry is missing or stale.
 
-Example:
-Potential solar surplus → recommend shifting flexible household usage into the solar-rich period.
+### Controlled Taxonomy (8 Canonical Types)
+1. `SHIFT_TO_SOLAR_WINDOW`: Shift flexible household loads into peak solar generation window.
+2. `USE_AVAILABLE_SOLAR`: Maximize self-consumption of sustained daytime solar overproduction.
+3. `AVOID_DEFICIT_WINDOW`: Curtail discretionary heavy consumption during projected grid deficit periods.
+4. `EVENING_DEFICIT_PREPARATION`: Pre-cool or charge devices during afternoon solar surplus before zero evening solar.
+5. `HIGH_DEMAND_REDUCTION`: Stagger concurrent appliance use to mitigate peak demand and upper slab tier exposure.
+6. `COST_AWARE_SHIFT`: Moderate daily discretionary consumption to stay below higher telescopic tariff slab thresholds.
+7. `SOLAR_DECLINE_RESPONSE`: Prompt inspection of solar array for shading, soiling, or inverter faults upon sustained generation decline.
+8. `DATA_LIMITATION`: Honest non-actionable notification of missing or degraded telemetry; never presented as a household chore or action.
+
+### Engine Rules & Prioritization
+- Evaluated deterministically in backend PHP (no LLM in the numerical calculation or generation loop).
+- Bounded to a maximum of 5 active recommendations per household (HIGH > MEDIUM > LOW priority).
+- Deduplication: suppresses duplicate recommendations for the same evaluation period.
+- Cooldown: 12-hour suppression on newly generated recommendations of a type recently dismissed by the user.
+
+### Lifecycle Management
+- States: `ACTIVE`, `DISMISSED`, `EXPIRED`, `SUPERSEDED`.
+- Users can dismiss recommendations (`POST /api/v1/recommendations/{id}/dismiss`), recording `dismissed_at` and triggering cooldown.
+- Expired recommendations transition automatically past `valid_until`.
 
 ---
 

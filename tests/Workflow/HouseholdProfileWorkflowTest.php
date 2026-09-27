@@ -45,9 +45,9 @@ final class HouseholdProfileWorkflowTest
             'password' => 'correct-horse-battery',
         ], ipAddress: AuthTesting::uniqueIpAddress()));
 
-        $token = AuthTesting::latestMailToken('Verify your email');
+        $token = AuthTesting::latestMailCode('Verify your email');
         Assert::true($token !== null, 'verification mail must reach the sink');
-        $auth->verify(Request::create('POST', '/api/v1/auth/verify', body: ['token' => $token]));
+        $auth->verify(Request::create('POST', '/api/v1/auth/verify', body: ['code' => $token]));
 
         $login = $auth->login(Request::create('POST', '/api/v1/auth/login', body: [
             'email' => $email,
@@ -160,3 +160,4 @@ final class HouseholdProfileWorkflowTest
         ];
     }
 }
+

@@ -844,6 +844,133 @@ final class InsightTest
                 Assert::same('POOR', EvidenceSemantics::worstQuality(['VERIFIED', 'POOR', null]));
                 Assert::same(null, EvidenceSemantics::worstQuality([]));
             }),
+
+            TestResult::check('InsightEvidenceInput accepts ISO 8601 UTC dates with trailing Z and offsets', function (): void {
+                $evidence = InsightEvidenceInput::fromArray([
+                    'household_id' => 'hh-iso',
+                    'forecast' => [
+                        [
+                            'period' => [
+                                'start' => '2026-09-26T14:00:00Z',
+                                'end' => '2026-09-27T14:00:00Z',
+                                'resolution' => 'HOURLY',
+                            ],
+                            'value_kwh' => 25.5,
+                            'data_nature' => 'PREDICTED',
+                            'data_status' => 'FRESH',
+                            'quality' => 'GOOD',
+                        ],
+                    ],
+                ]);
+                Assert::same(1, count($evidence->forecastPeriods()));
+                Assert::same('2026-09-26T14:00:00Z', $evidence->forecastPeriods()[0]['period']['start']);
+            }),
+
+            TestResult::check('ConfidenceModel enforces upstream confidence ceiling on candidate domains', function (): void {
+                $candidate = new DetectedCandidate(
+                    type: InsightTaxonomy::TYPE_RECURRING_POTENTIAL_SURPLUS,
+                    title: 'Recurring potential energy surplus',
+                    summary: 'Summary.',
+                    affectedPeriod: ['start' => '2026-09-26T00:00:00', 'end' => '2026-09-27T00:00:00', 'resolution' => 'DAY'],
+                    supportingFacts: ['Fact.'],
+                    limitations: [],
+                    evidenceSummary: 'Evidence.',
+                    explanation: 'Explanation.',
+                    explanationSource: 'ENERGY_SITUATION_PATTERN_DETECTOR_V1',
+                    evidenceDomains: ['balance'],
+                    natures: ['PREDICTED', 'PREDICTED', 'PREDICTED'],
+                    statuses: ['FRESH', 'FRESH', 'FRESH'],
+                    qualities: ['GOOD', 'GOOD', 'GOOD'],
+                    detectors: ['ENERGY_SITUATION_PATTERN_DETECTOR_V1'],
+                    significanceHint: InsightSignificance::MODERATE,
+                    comparisonCount: 3
+                );
+
+                $evidence = InsightEvidenceInput::fromArray([
+                    'household_id' => 'hh-balance-upstream',
+                    'balance' => [
+                        [
+                            'result' => [
+                                'state' => 'CLASSIFIED',
+                                'classification' => 'POTENTIAL_SURPLUS',
+                                'data_nature' => 'PREDICTED',
+                                'data_status' => 'FRESH',
+                                'confidence_level' => 'LOW',
+                            ],
+                        ],
+                    ],
+                ]);
+
+                $model = new ConfidenceModel();
+                $assessed = $model->assess($candidate, $evidence);
+                Assert::same(InsightConfidence::LOW, $assessed, 'Upstream LOW confidence must cap candidate confidence to LOW');
+            }),
+
+            TestResult::check('DataLimitationDetector produces sanitized honest cost notices without dev placeholders', function (): void {
+                $detector = new \App\Domain\Intelligence\Detectors\DataLimitationDetector();
+
+                // Case 1: verified consumption periods exist, historical cost is UNAVAILABLE
+                $evidenceWithBills = InsightEvidenceInput::fromArray([
+                    'household_id' => 'hh-bills',
+                    'consumption' => [
+                        [
+                            'period' => ['start' => '2026-06-01', 'end' => '2026-07-01', 'resolution' => 'MONTH'],
+                            'value_kwh' => 150.0,
+                            'data_nature' => 'ACTUAL',
+                            'data_status' => 'FRESH',
+                            'quality' => 'VERIFIED',
+                        ],
+                    ],
+                    'cost' => [
+                        [
+                            'result' => [
+                                'state' => 'UNAVAILABLE',
+                                'cost_type' => 'HISTORICAL_COST',
+                                'data_status' => 'UNAVAILABLE',
+                                'explanation' => 'Bill persistence and verification are not implemented yet.',
+                            ],
+                        ],
+                    ],
+                ]);
+
+                $candidates = $detector->detect($evidenceWithBills);
+                Assert::same(1, count($candidates));
+                $limitationText = implode(' ', $candidates[0]->limitations);
+                Assert::false(str_contains($limitationText, 'not implemented yet'), 'Dev placeholder must not appear in limitation notice');
+                Assert::true(str_contains($limitationText, 'Historical verified cost compilation is not active') || str_contains($limitationText, 'UNAVAILABLE'));
+
+                // Case 2: no consumption periods exist
+                $evidenceNoBills = InsightEvidenceInput::fromArray([
+                    'household_id' => 'hh-nobills',
+                    'cost' => [
+                        [
+                            'result' => [
+                                'state' => 'UNAVAILABLE',
+                                'cost_type' => 'HISTORICAL_COST',
+                                'data_status' => 'UNAVAILABLE',
+                                'explanation' => 'Bill persistence and verification are not implemented yet.',
+                            ],
+                        ],
+                    ],
+                ]);
+
+                $candidatesNoBills = $detector->detect($evidenceNoBills);
+                Assert::same(1, count($candidatesNoBills));
+                $limitationTextNoBills = implode(' ', $candidatesNoBills[0]->limitations);
+                Assert::false(str_contains($limitationTextNoBills, 'not implemented yet'));
+                Assert::true(str_contains($limitationTextNoBills, 'Upload and verify recent bills'));
+            }),
+
+            TestResult::check('EvidenceFormat periodLabel handles identical start and end dates cleanly', function (): void {
+                Assert::same('2027-09-09', \App\Domain\Intelligence\Detectors\EvidenceFormat::periodLabel([
+                    'start' => '2027-09-09',
+                    'end' => '2027-09-09',
+                ]));
+                Assert::same('2026-08-01 to 2026-09-01', \App\Domain\Intelligence\Detectors\EvidenceFormat::periodLabel([
+                    'start' => '2026-08-01',
+                    'end' => '2026-09-01',
+                ]));
+            }),
         ];
     }
 }

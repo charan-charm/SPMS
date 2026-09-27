@@ -50,6 +50,9 @@ final class AuthTesting
             'APP_ENV' => 'development',
             'MAIL_TRANSPORT' => 'file',
             'MAIL_FILE_DIR' => sys_get_temp_dir() . '/spms-w1-mail-' . bin2hex(random_bytes(4)),
+            'SPMS_INTEGRATION_KEY' => 'e8f23789a1024cd4b5689102efab890123456789abcdef0123456789abcdef01',
+            'SOLAR_PROVIDER' => 'fake',
+            'WEATHER_PROVIDER' => 'fake',
         ]);
 
         // D-071 fail-closed choke point: any DB-touching fixture path must
@@ -84,10 +87,48 @@ final class AuthTesting
     }
 
     /**
-     * Extract the raw token from the newest delivered mail matching the
-     * subject. The raw token exists only inside the mail sink file —
-     * never in the database. Filenames carry microsecond timestamps, so
-     * sorting by name is chronological.
+     * Extract the raw 6-digit verification code from the newest delivered
+     * mail matching the subject. The code exists only inside the mail sink
+     * file — never in the database (only its hash is stored). Filenames
+     * carry microsecond timestamps, so sorting by name is chronological.
+     *
+     * For backward compatibility, also aliased as latestMailToken() — but
+     * callers should prefer latestMailCode() for clarity.
+     */
+    public static function latestMailCode(string $subjectPart): ?string
+    {
+        $config = Config::get('MAIL_FILE_DIR') ?? '';
+        if ($config === '' || !is_dir($config)) {
+            return null;
+        }
+
+        $files = glob($config . '/*.eml') ?: [];
+        if ($files === []) {
+            return null;
+        }
+
+        sort($files);
+
+        foreach (array_reverse($files) as $file) {
+            $content = (string) file_get_contents($file);
+            if (!str_contains($content, $subjectPart)) {
+                continue;
+            }
+
+            // 6-digit verification code: the code appears in the email body
+            // as a standalone 6-digit number (word-boundary delimited).
+            if (preg_match('/\b(\d{6})\b/', $content, $matches) === 1) {
+                return $matches[1];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract the raw recovery/verification token from the newest delivered
+     * mail matching the subject. Supports both 6-digit numeric codes and
+     * 64-character hex tokens.
      */
     public static function latestMailToken(string $subjectPart): ?string
     {
@@ -109,6 +150,12 @@ final class AuthTesting
                 continue;
             }
 
+            // 6-digit numeric code (verification or password recovery)
+            if (preg_match('/\b(\d{6})\b/', $content, $matches) === 1) {
+                return $matches[1];
+            }
+
+            // Long 64-char hex token (legacy)
             if (preg_match('/\b([0-9a-f]{64})\b/', $content, $matches) === 1) {
                 return $matches[1];
             }
@@ -163,12 +210,14 @@ final class AuthTesting
 
         $service->register($email, 'correct-horse-battery', self::uniqueIpAddress());
 
-        $token = self::latestMailToken('Verify your email');
-        if ($token === null) {
+        // Verification now uses a 6-digit code delivered to the mail sink.
+        // The code is extracted from the newest matching .eml file.
+        $code = self::latestMailCode('Verify your email');
+        if ($code === null) {
             throw new \RuntimeException('W3 fixture: no verification mail token found in sink.');
         }
 
-        return $service->verifyEmail($token);
+        return $service->verifyEmail($code);
     }
 
     /**

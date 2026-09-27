@@ -2,582 +2,378 @@
 
 ## Document Status
 
-- **Phase:** 5 — Technical Architecture
+- **Phase:** 5 — Technical Architecture, frontend direction updated
 - **Status:** 🔒 ARCHITECTURE BASELINE ESTABLISHED
-- **Decision coverage:** Q1–Q280
-- **Final consistency audit:** ✅ Passed
-- **Implementation status:** Not started
+- **Decision coverage:** Q1–Q280 plus approved F0 frontend direction
+- **Final consistency audit:** ✅ Passed before implementation
+- **Implementation status:** M0 backend foundation implemented; previous PHP-rendered frontend direction superseded
 
----
+## 1. Architecture Objective
 
-# 1. Architecture Objective
+SPMS helps households understand solar availability and electricity requirements, predict future solar generation and household consumption, identify potential surplus/deficit situations, evaluate cost and impact, and provide understandable insights and recommendations.
 
-SPMS is a household Solar Power Management System that helps households understand solar availability and electricity requirements, predict future solar generation and household consumption, identify potential surplus/deficit situations, evaluate cost and impact, and provide understandable insights and recommendations.
+The architecture supports evidence collection, validation, quality, provenance, adaptive prediction, authoritative analytical services, AI-assisted interpretation, recommendations, notifications, analytics, reports, exports, graceful degradation, secure lifecycles, historical integrity, model evaluation, and a modern React frontend.
 
-The architecture supports:
+## 2. Core Architecture Principles
 
-- solar, household, billing, and environmental evidence collection
-- validation, quality, provenance, and measurement context
-- adaptive energy prediction
-- authoritative energy-balance and cost analysis
-- controlled AI-assisted interpretation
-- recommendations, notifications, analytics, reports, and exports
-- graceful degradation
-- secure account, household, file, and admin lifecycles
-- historical integrity and model evaluation
+1. PHP remains the backend runtime.
+2. React is the frontend application.
+3. Vite is frontend development/build tooling.
+4. Node.js, when present, is frontend tooling only.
+5. Express is not part of SPMS.
+6. GoodWe behavior is isolated behind an integration boundary.
+7. Business logic belongs in PHP services/domain capabilities.
+8. Database access belongs in repositories.
+9. External-system communication belongs in integrations.
+10. Analytical numerical truth remains inside authoritative SPMS analytical capabilities.
+11. Bedrock is an AI interpretation/explanation capability, not numerical prediction authority.
+12. Frontend calculations are presentation-only.
+13. Actual, predicted, estimated, simulated, cached, and stale data remain distinguishable.
+14. Data quality and provenance are first-class concerns.
+15. Historical analytical truth must not be silently overwritten.
+16. External-service failure degrades capabilities rather than destroying trustworthy independent data.
+17. Backend authorization is authoritative.
+18. Long-running work uses controlled background operations.
+19. Graphs, reports, and exports consume backend-authoritative datasets.
+20. Demo/Test uses the same core pipeline where practical.
+21. Explicit user preferences take priority over defaults and learned personalization.
+22. React is an untrusted client from the backend security perspective.
 
----
-
-# 2. Core Architecture Principles
-
-1. PHP is the actual application runtime.
-2. No Node.js runtime is required by the final SPMS.
-3. The existing GoodWe Node implementation is research/reference material only.
-4. GoodWe-specific behavior is isolated behind a provider/integration boundary.
-5. Business logic belongs in services/domain capabilities, not pages or JavaScript.
-6. Database access belongs in repositories.
-7. External-system communication belongs in integrations.
-8. Analytical numerical truth remains inside authoritative SPMS analytical capabilities.
-9. Amazon Bedrock is an AI interpretation/explanation capability, not the numerical prediction authority.
-10. Frontend calculations are presentation-only.
-11. Actual, predicted, estimated, simulated, cached, and stale data remain semantically distinguishable.
-12. Data quality and provenance are first-class concerns.
-13. Historical analytical truth must not be silently overwritten.
-14. External-service failure degrades capabilities rather than destroying trustworthy independent data.
-15. Backend authorization is authoritative.
-16. Long-running work uses controlled background operations.
-17. Graphs, reports, and exports consume backend-authoritative datasets.
-18. Demo/Test uses the same core pipeline where practical.
-19. Explicit user preferences take priority over defaults and learned personalization.
-20. Provider-specific implementation details may be verified during implementation without unnecessarily reopening the architecture.
-
----
-
-# 3. High-Level Architecture
+## 3. High-Level Architecture
 
 ```text
-                         SPMS
-                          │
-                 ┌────────▼────────┐
-                 │ Browser / User  │
-                 │ HTML/CSS/JS     │
-                 └────────┬────────┘
-                          │
-                 ┌────────▼────────┐
-                 │ Public Entry     │
-                 │ /public/index.php│
-                 └────────┬────────┘
-                          │
-                 ┌────────▼────────┐
-                 │ Router           │
-                 └────────┬────────┘
-                          │
-                 ┌────────▼────────┐
-                 │ Middleware       │
-                 └────────┬────────┘
-                          │
-                 ┌────────▼────────┐
-                 │ Controllers      │
-                 └────────┬────────┘
-                          │
-                 ┌────────▼────────┐
-                 │ Domain Services  │
-                 └──────┬──────┬────┘
-                        │      │
-                ┌───────▼──┐ ┌─▼────────────┐
-                │Repositories│ │ Integrations │
-                └───────┬──┘ └──────┬───────┘
-                        │            │
-                        ▼      ┌─────┼─────────────┐
-                      MySQL    ▼     ▼             ▼
-                            GoodWe Weather      AWS/AI
+Browser
+   │
+   ▼
+React Frontend
+   │
+   │ REST / JSON
+   ▼
+PHP REST API
+   │
+   ▼
+public/index.php
+   │
+   ▼
+Router → Middleware
+   │
+   ▼
+Controllers
+   │
+   ▼
+Services / Domain
+   ├───────────────┐
+   ▼               ▼
+Repositories   Integrations
+   │            GoodWe / Weather /
+   ▼            AWS / Bedrock / Email
+ MySQL
 ```
 
-Cross-cutting capabilities:
+## 4. Frontend Architecture
+
+Frontend location:
 
 ```text
-Authentication
-Authorization
+frontend/
+```
+
+Primary layers:
+
+```text
+app/
+components/
+layouts/
+pages/
+features/
+charts/
+hooks/
+services/api/
+lib/
+styles/
+```
+
+The exact implementation may evolve without changing responsibility boundaries.
+
+## 5. Frontend Responsibilities
+
+React owns:
+
+- presentation
+- components
+- layouts
+- client-side UI state
+- interactions
+- API consumption
+- chart rendering
+- animation
+- accessibility behavior
+- presentation-only formatting/calculation
+
+React does not own:
+
+- authoritative energy balance
+- authoritative cost
+- prediction truth
+- recommendation truth
+- authorization
+- data quality
+- provenance
+- operation completion
+- lifecycle truth
+
+## 6. Backend Responsibilities
+
+PHP owns:
+
+- REST API
+- authentication
+- authorization
+- validation
+- business rules
+- services/domain logic
+- repositories
+- integrations
+- analytical authority
+- data quality
+- provenance
+- operations
+- lifecycle management
+- security
+- persistence orchestration
+
+## 7. Build and Development Tooling
+
+Vite is the approved React build/development tool.
+
+Development may use:
+
+```text
+Vite
+localhost:5173
+      │
+      │ /api/*
+      ▼
+PHP development server / Apache
+      │
+      ▼
+MySQL
+```
+
+The frontend should use an API proxy during development where practical.
+
+Production may serve compiled React assets through Apache while `/api/*` is routed to PHP.
+
+Node.js is not an application runtime for SPMS.
+
+## 8. Routing
+
+React Router manages frontend navigation.
+
+Public:
+
+```text
+/
+/login
+/register
+/verify
+/recover
+```
+
+Protected:
+
+```text
+/dashboard
+/solar
+/energy
+/forecasts
+/insights
+/analytics
+/bills
+/reports
+/notifications
+/settings
+```
+
+Frontend guards are navigation UX. Backend authorization remains authoritative.
+
+## 9. API Client
+
+React communicates with PHP through a centralized API client.
+
+```text
+Component
+↓
+Feature service
+↓
+Central API client
+↓
+REST API
+```
+
+## 10. Backend Request Flow
+
+```text
+HTTP
+↓
+public/index.php
+↓
+Bootstrap
+↓
+Router
+↓
+Middleware
+↓
+Controller
+↓
+Service
+↓
+Repository / Integration
+↓
+Database / Provider
+↓
+Service
+↓
+Controller
+↓
+JSON
+```
+
+## 11. Database Architecture
+
+MySQL-compatible relational database.
+
+Use normalized schema, foreign keys, unique constraints, explicit nullability, version-controlled migrations, canonical timestamps, units, currency, provenance, quality, historical records, and lifecycle fields where required.
+
+## 12. GoodWe
+
+GoodWe remains the primary source of actual solar measurements.
+
+GoodWe/SEMS+ is an official external integration domain of SPMS. The
+earlier prototype under `references/goodwe-sems-prototype/` is evidence
+only — endpoint discovery, HAR capture/replay tooling, response samples,
+research CLIs. Its Node/Express implementation never enters production
+(Express is forbidden as the SPMS production backend).
+
+Production request flow (entirely server-side):
+
+```text
+React
+↓
+SPMS PHP REST API (authenticated/authorized)
+↓
+Solar domain service
+↓
+GoodWe integration boundary
+↓
+GoodWe/SEMS+ API
+```
+
+React never calls GoodWe directly. GoodWe-specific URLs, headers,
+authentication protocol, token handling, retries, provider error codes
+and naming stay inside the integration boundary.
+
+Ingestion pipeline (G0 formalizes endpoint semantics):
+
+```text
+GoodWe raw response
+↓
+Provider adapter/client
+↓
 Validation
-Security
-Data Quality
-Provenance
-Measurement Context
-Confidence
-Operations
-Audit
-Logging
-Configuration
-Error Handling
-Testing
-Lifecycle Management
+↓
+Normalization
+↓
+Canonical SPMS solar data
+↓
+Provenance / quality classification
+↓
+Domain services (F4/F5/F6, forecasting)
+↓
+Persistence
 ```
 
----
+Availability follows the existing SPMS degradation model (available /
+stale / degraded / unavailable / error / recovered): GoodWe failure never
+fabricates live data, keeps last-known actual data distinct from
+estimated/predicted fallbacks, exposes freshness, and reconciles on
+recovery.
 
-# 4. Layer Responsibilities
+The GoodWe MVP is READ-ONLY: monitoring, historical/near-current
+production, telemetry, time series, flow, weather, station statistics,
+inverter/device information. Remote inverter/device/battery/appliance
+control is out of scope; control surfaces discovered in the reference
+prototype are documentation-only.
 
-## Browser / Frontend
+SPMS and GoodWe credentials are separate credential domains (docs/08
+§14, docs/10 D-059). Provider authentication mechanism, token lifecycle,
+storage and household-bound ownership are G0 decisions after official
+provider verification.
 
-Technology:
+G0 outcome (docs/10 D-060, D-061): the canonical GoodWe solar ingestion
+contract, nature/quality/freshness mapping, sync lifecycle, degradation
+rules and raw-retention policy are ratified SPMS-side decisions; the
+provider authentication mechanism, endpoint schemas, token TTL and rate
+limits remain PROVISIONAL (prototype observation only) and are locked to
+the G1 validation gate before any production integration code exists.
 
-- HTML
-- Custom CSS and SPMS design tokens
-- Vanilla JavaScript
-- ES modules
-- Fetch API
-- Chart.js
+G1 Round 2A outcome (docs/10 D-063): the official GOODWE Open Platform
+API contract (AppId/AppSecret login, 4-hour reusable TOKEN, IP
+whitelist, tenant-scoped station/device/day-month-year data) is now
+documented as OFFICIAL evidence and is preferred for production; access
+for this project's specific household plant is CONDITIONAL on GoodWe
+authorization and remains unvalidated. No production code is
+authorized yet.
 
-The browser renders pages, handles interaction, performs UX validation, calls APIs, maintains temporary UI state, and renders graph-ready data.
+Credentials remain backend-only.
 
-It is never authoritative for calculations, authorization, verification, operation completion, or analytical truth.
+Failure preserves prior actual solar data and degrades live capability.
 
-## Public Entry Point
-
-`/public/index.php` is the main front controller. Only `public/` is web-accessible.
-
-## Router
-
-Centralized Web/API routing. API routes use `/api/v1/...`.
-
-## Middleware
-
-Ordered shared pipeline for correlation ID, rate limiting where applicable, session authentication, authorization, CSRF for applicable state-changing browser requests, and request validation.
-
-## Controllers
-
-Controllers handle HTTP concerns and delegate business behavior to services. They do not own raw SQL, GoodWe protocol details, authoritative calculations, or uncontrolled AI behavior.
-
-## Services
-
-Services own domain/application behavior and orchestration.
-
-Major services include:
+Recovery:
 
 ```text
-AccountService
-HouseholdService
-SolarService
-EnergyService
-ForecastService
-IntelligenceService
-RecommendationService
-BillService
-AnalyticsService
-ReportService
-NotificationService
-```
-
-Supporting capabilities include quality, provenance, personalization, operations, and audit.
-
-## Repositories
-
-Repositories own persistence and retrieval through PDO/prepared statements. They do not become a second business-logic layer.
-
-## Integrations
-
-External systems are isolated under dedicated integration boundaries:
-
-```text
-Integrations/
-├── GoodWe/
-├── Weather/
-├── AWS/
-├── Bedrock/
-└── Email/
-```
-
----
-
-# 5. GoodWe / SEMS Integration
-
-The final SPMS does not reproduce the old Node project file-for-file.
-
-```text
-Solar Service
-      ↓
-SolarDataProvider
-      ↓
-GoodWeProvider
-      ↓
-GoodWe Integration
-      ↓
-GoodWe / SEMS
-```
-
-Conceptual GoodWe components, created only when actually needed:
-
-```text
-GoodWeProvider
-GoodWeClient
-GoodWeAuthenticator
-GoodWeEndpointRegistry
-GoodWeRequestBuilder
-GoodWeResponseMapper
-GoodWeException
-DTOs
-```
-
-The GoodWe boundary owns authentication, provider sessions/tokens, signatures, headers, timestamps, UUID/client metadata, API versions, endpoint definitions, request construction, provider response interpretation, retries, timeouts, response normalization, and provider-specific failures.
-
-Endpoint adoption is requirement-driven:
-
-```text
-SPMS requirement
-      ↓
-Required capability
-      ↓
-GoodWe endpoint research
-      ↓
-Endpoint verification
-      ↓
-Implementation
-```
-
-Do not integrate every endpoint found in the reference project.
-
-## GoodWe synchronization
-
-```text
-Trigger
-  ↓
-Operation Created
-  ↓
-Validate Connection
-  ↓
-Authenticate
-  ↓
-Fetch
-  ↓
-Normalize
-  ↓
-Validate
-  ↓
+Reconnect
+↓
+Resync
+↓
 Deduplicate
-  ↓
-Quality Assessment
-  ↓
-Provenance
-  ↓
-Transactional Persistence
-  ↓
-Update Sync State
-  ↓
-Refresh affected analytics
+↓
+Validate
+↓
+Reconcile
 ```
 
-Automatic background synchronization and manual Sync Now are supported. Synchronization uses bounded retries, timeouts, controlled concurrency, idempotency, late/out-of-order handling, and recovery reconciliation.
+## 13. Weather
 
-GoodWe failure preserves trusted historical data and marks live capability stale/degraded. The system never fabricates live GoodWe measurements.
+Weather supports solar prediction and does not replace GoodWe actual measurements.
 
----
+Preserve provider, retrieval time, forecast/observation context, location, quality, and provenance.
 
-# 6. Provider Abstraction
-
-Solar providers implement a common internal contract:
-
-```text
-SolarDataProvider
-├── GoodWeProvider
-└── DemoSolarProvider
-```
-
-Demo/Test therefore follows the same normalized solar pipeline.
-
-Weather follows:
-
-```text
-WeatherService
-      ↓
-WeatherProvider
-      ↓
-External Weather API
-```
-
-Provider-specific structures are normalized before reaching core SPMS logic.
-
----
-
-# 7. Authoritative Data and Analytical Pipeline
-
-```text
-COLLECT
-   ↓
-VALIDATE
-   ↓
-QUALITY
-   ↓
-PROVENANCE
-   ↓
-PREDICT
-   ↓
-COMPARE
-   ↓
-COST / IMPACT
-   ↓
-INTELLIGENCE
-   ↓
-RECOMMEND
-   ↓
-NOTIFY
-   ↓
-LEARN
-   ↓
-REPEAT
-```
-
-Detailed analytical boundary:
-
-```text
-Validated Evidence
-        ↓
-Authoritative Analysis
-        ↓
-Prediction / Energy Balance / Cost
-        ↓
-Validated Facts
-        ↓
-Intelligence Layer
-        ↓
-Bedrock Explanation
-        ↓
-Insights
-        ↓
-Recommendations
-        ↓
-Possible User Action
-```
-
----
-
-# 8. Prediction Architecture
-
-Solar and household-consumption prediction are separate capabilities with shared infrastructure where appropriate.
-
-Prediction lifecycle:
-
-```text
-Validated Evidence
-      ↓
-Prediction Service
-      ↓
-Model
-      ↓
-Prediction Result
-      ↓
-Validation
-      ↓
-Confidence / Uncertainty
-      ↓
-Historical Prediction Record
-```
-
-Meaningful prediction records retain target period, value, horizon, resolution, generated time, model identifier/version, configuration, input/context metadata, confidence, uncertainty where valid, quality, provenance, and fallback context.
-
-Historical predictions are immutable.
-
-Fallback hierarchy:
-
-```text
-Primary Model
-     ↓
-Fresh Previous Prediction
-     ↓
-Statistical / Historical / Seasonal / Trend / Persistence / Baseline
-     ↓
-No Reliable Prediction
-```
-
-Fallbacks reduce precision/confidence appropriately. Bedrock is never the numerical fallback engine.
-
----
-
-# 9. Energy Balance and Measurement Semantics
-
-For future situations:
-
-```text
-Predicted Solar
-       -
-Predicted Household Consumption
-       ↓
-Potential Surplus / Potential Deficit
-```
-
-The system distinguishes:
-
-```text
-Potential Surplus ≠ Confirmed Grid Export
-Potential Deficit ≠ Confirmed Grid Import
-Predicted Consumption ≠ Measured Consumption
-```
-
-Data nature and measurement context remain explicit.
-
----
-
-# 10. Cost Analysis
-
-Cost analysis is a dedicated backend capability using verified bill/tariff evidence, historical relationships, and supported fallback assumptions.
-
-The system distinguishes:
-
-```text
-Historical Verified Cost
-Future Estimated Cost
-```
-
-Fixed charges are not automatically treated as proportional energy costs. Without direct grid-import measurement, confirmed future grid-import cost is not claimed.
-
----
-
-# 11. Data Quality and Provenance
-
-## Data Quality
-
-Answers:
-
-> Can this information be trusted for its intended use?
-
-Relevant dimensions include reliability, freshness, completeness, plausibility, consistency, verification, source quality, and measurement context.
-
-Quality propagates downstream and may reduce precision, confidence, recommendation strength, and notification priority.
-
-## Provenance
-
-Answers:
-
-> What is this, where did it come from, and what happened to it?
-
-Meaningful data retains sufficient source, identifier, timestamp, nature, processing, transformation, quality, and measurement-context information.
-
-Provenance flows through validation, analysis, prediction, intelligence, recommendations, reports, exports, and UI.
-
----
-
-# 12. AI / Amazon Bedrock Boundary
-
-```text
-Validated SPMS Facts
-        ↓
-Controlled Semantic Context
-        ↓
-AI Service
-        ↓
-Amazon Bedrock
-        ↓
-Structured Output
-        ↓
-Schema Validation
-        ↓
-Business / Safety / Quality Validation
-        ↓
-SPMS Output
-```
-
-Bedrock may support bill interpretation, semantic interpretation, insight explanations, recommendation explanations, report summaries, and contextual natural-language intelligence.
-
-Bedrock must not become:
-
-- the numerical prediction authority
-- the energy-balance calculator
-- the cost calculator
-- an uncontrolled database writer
-
-AI receives minimum necessary validated context. AI configuration/prompts are centralized and versioned.
-
-If Bedrock fails, analytical truth continues and controlled deterministic/template explanations may be used.
-
----
-
-# 13. Database Architecture
-
-The database is domain-oriented and normalized.
-
-Major domains/entities include:
-
-```text
-Account
-Household
-SolarPlant
-SolarMeasurements
-Bills
-ConsumptionEvidence
-Predictions
-EnergyBalance
-CostAnalysis
-Insights
-Recommendations
-Feedback
-Notifications
-Reports
-Operations
-Audit
-DataQuality
-Provenance
-ModelEvaluation
-```
-
-Technical database decisions:
-
-- MySQL 8.x
-- InnoDB
-- utf8mb4
-- normalized relational design
-- foreign-key integrity
-- explicit nullable/required semantics
-- meaningful uniqueness constraints
-- internal generated identifiers
-- canonical timestamps
-- domain-specific deletion behavior
-- controlled lifecycle states
-- immutable historical records where required
-
-Database changes use version-controlled migrations.
-
----
-
-# 14. Electricity Bill Processing
+## 14. Electricity Bill Processing
 
 ```text
 Upload
-  ↓
+↓
 File Validation
-  ↓
+↓
 Private Storage
-  ↓
+↓
 Processing
-  ↓
+↓
 Extraction
-  ↓
+↓
 AI Interpretation / Normalization
-  ↓
+↓
 Verification
-  ↓
+↓
 Correction if needed
-  ↓
+↓
 Authoritative Bill Record
 ```
 
-Original documents are stored securely. AI extraction remains draft information until user verification.
+## 15. Background Operations
 
-If automated extraction fails:
-
-```text
-Original Bill
-      ↓
-Manual Entry / Verification
-```
-
-The exact AWS document-analysis service is verified during implementation after supported bill formats are examined.
-
----
-
-# 15. Background Operations
-
-Long-running operations use controlled PHP background workers/cron.
-
-Candidates include:
+Candidates:
 
 - GoodWe synchronization
 - bill processing
@@ -589,40 +385,25 @@ Lifecycle:
 
 ```text
 NOT STARTED
-     ↓
+↓
 QUEUED
-     ↓
+↓
 PROCESSING
-     ↓
+↓
 COMPLETED
 
 PROCESSING
-     ↓
+↓
 FAILED
-     ↓
+↓
 RECOVERING
-     ↓
+↓
 RECOVERED
 ```
 
-Where safe, operations support cancellation, bounded retries, backoff, idempotency, safe diagnostics, and user-visible status.
+## 16. Authentication and Authorization
 
----
-
-# 16. Authentication and Authorization
-
-Authentication uses:
-
-- PHP server-side sessions
-- secure cookies
-- `password_hash()` / `password_verify()`
-- email verification
-- secure recovery tokens
-- bounded attempts/brute-force protection
-
-Authorization is backend-enforced for every protected operation.
-
-The backend validates account, role, capability, household ownership, resource scope, and lifecycle state.
+Authentication uses PHP server-side sessions, secure cookies, password hashing, email verification, recovery tokens, and bounded brute-force protection.
 
 Roles:
 
@@ -633,667 +414,129 @@ Admin
 
 Demo/Test is an account mode, not a role.
 
----
+## 17. File Security
 
-# 17. File Security
+Private files remain outside the public web root and are accessed through authorized backend paths.
 
-Bills and other private files are stored outside the public web root.
-
-```text
-Browser
-   ↓
-Upload
-   ↓
-MIME / content / size / filename validation
-   ↓
-Private Storage
-   ↓
-Controlled Processing
-   ↓
-Backend-authorized Access
-```
-
-Server-generated storage names are used. Suspicious/invalid files are rejected.
-
----
-
-# 18. API Architecture
-
-The browser communicates with SPMS through PHP APIs.
-
-Base:
+## 18. Analytical Architecture
 
 ```text
-/api/v1
+Validated Evidence
+↓
+Prediction
+↓
+Energy Balance
+↓
+Cost Analysis
+↓
+Validated Facts
+↓
+Intelligence
+↓
+Bedrock Explanation
+↓
+Insights
+↓
+Recommendations
+↓
+Notification Decision
 ```
 
-Success envelope:
+React only presents these results.
 
-```json
-{
-  "success": true,
-  "data": {},
-  "meta": {}
-}
-```
-
-Failure envelope:
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "STABLE_ERROR_CODE",
-    "message": "Safe user-facing message",
-    "context": {}
-  }
-}
-```
-
-Protected APIs require authenticated session context and backend authorization.
-
-APIs use request validation, structured errors, rate limiting for sensitive operations, correlation identifiers, and controlled lifecycle/status responses.
-
----
-
-# 19. Frontend and Graph Architecture
-
-Frontend structure:
-
-```text
-public/assets/js/
-├── core/
-├── components/
-├── charts/
-└── pages/
-```
-
-A shared Fetch-based API client handles consistent communication and errors.
-
-Graph pipeline:
+## 19. Chart Architecture
 
 ```text
 Authoritative Data
-       ↓
+↓
 Analytics / Reporting
-       ↓
-Graph-Ready Semantic Dataset
-       ↓
-Shared SPMS Chart Layer
-       ↓
-Chart.js
+↓
+Graph-ready semantic dataset
+↓
+React chart component
+↓
+Recharts / approved chart library
+↓
+Rendered chart
 ```
 
-Graph semantics include:
+Charts preserve nature, status, confidence, units, measurement context, and relevant provenance.
 
-- Actual → solid
-- Predicted → dashed
-- Estimated → differentiated
-- Stale → muted/subdued
-- Demo/Simulated → explicitly differentiated
-
-Important graphs provide accessible summaries/tables/data representations. Color is never the sole semantic mechanism.
-
----
-
-# 20. Reports and Exports
+## 20. Reports and Exports
 
 Reports are backend-authoritative validated snapshots.
 
-```text
-Analytics
-Prediction
-Balance
-Cost
-Insights
-Recommendations
-       ↓
-Validated Report Dataset
-       ↓
-Report Generator
-       ↓
-Version / Context Tracking
-       ↓
-Report
-```
+Exports are authorized packaging of supported data.
 
-A generated report represents its generation-time context and does not silently change with later dashboard data.
+React may initiate and display operation state; PHP determines authorization, scope, content, and completion.
 
-Exports follow:
+## 21. Security Boundary
 
 ```text
-Request
- ↓
-Authentication
- ↓
-Authorization
- ↓
-Scope Validation
- ↓
-Dataset Validation
- ↓
-Export Pipeline
- ↓
-CSV / XLSX / PDF / JSON
+React = untrusted client
+PHP = security authority
+MySQL = persistence/integrity
 ```
 
-Exports preserve semantic meaning, provenance, and measurement context.
+Client state, URLs, local storage, and UI permission flags never grant access.
 
----
+## 22. Failure / Recovery
 
-# 21. Notifications and Personalization
+Failures degrade affected capabilities. Never fabricate certainty.
 
-Notification flow:
+React network failure must not be interpreted as backend completion or failure without authoritative confirmation where operation state matters.
+
+## 23. Demo / Test
+
+Demo/Test uses the same architecture where practical. Simulated data is explicitly labeled.
+
+## 24. Design System Architecture
+
+Approved foundations:
+
+- Tailwind CSS
+- shadcn/ui
+- Lucide
+- Motion
+- Recharts/approved chart library
+
+Page-specific styling must compose the shared SPMS design system rather than create unrelated visual languages.
+
+## 26. Electricity Bill & Utility Net Metering Architecture
+
+### 26.1 Dual Intake Pipeline
+SPMS supports two intake paths into the bill domain:
+1. **Unstructured Documents (PDF/JPEG/PNG):** Processed through Mistral OCR, normalized via `BillAnnotationNormalizer`, with AI-extracted values held as immutable drafts (`bill_extraction_drafts`) until explicit user review.
+2. **Structured Utility Statements (APSPDCL `.xls`):** Ingests official HTML-table monthly statements, bypassing OCR. Extracts canonical fields (`billing_period_start`, `billing_period_end`, `bill_date`, `due_date`, `opening_kvah`, `closing_kvah`, `consumption_kvah`, `solar_units_kwh`, `net_units_kwh`, `bill_amount`), verifies deterministic arithmetic cross-checks, and captures utility-specific line-items inside bounded `source_metadata_json` (VARCHAR(4000)).
+
+### 26.2 Strict Telemetry vs Utility Bill Separation
+- **GoodWe SEMS Telemetry:** High-frequency, inverter-measured power and energy (`data_nature: ACTUAL`). Stored in `solar_readings`. Evaluated for real-time freshness (15-minute SLA).
+- **APSPDCL Net Metering:** Monthly utility settlement records (`data_nature: VERIFIED` once accepted). Billed grid export (`net_units_kwh < 0`) is a monthly commercial credit, never conflated with instantaneous inverter telemetry or battery state.
+
+### 26.3 Chronological Sequence Validation
+To ensure forecasting and consumption models receive clean time-series history:
+- `BillingPeriodSequenceValidator` enforces contiguous billing cycles (with a ±5 day reading-schedule tolerance).
+- Detects `DUPLICATE_PERIOD` and `OVERLAPPING_PERIOD`, which fail closed (HTTP 409).
+- Flags `GAP_DETECTED` when an intervening billing cycle is absent.
+
+### 26.4 Controlled Missing-History Exception
+To prevent trapped households who lack past paper statements:
+- Verification permits explicit gap acknowledgment (`accept_gap: true`).
+- Attaches persistent quality flags (`INCOMPLETE_HISTORY`, `BILLING_GAP_PRECEDING`).
+- Forecasting algorithms detect these flags and widen uncertainty intervals without inventing or interpolating fabricated consumption numbers.
+
+## 27. Architecture Baseline
 
 ```text
-Event
- ↓
-Significance
- ↓
-Impact
- ↓
-Confidence
- ↓
-Urgency
- ↓
-Relevance
- ↓
-Recurrence / Deduplication
- ↓
-User Preferences
- ↓
-Notification Decision
- ↓
-Delivery
+React / Vite Frontend
+          ↓
+       REST API
+          ↓
+     PHP Backend
+          ↓
+        MySQL
 ```
 
-Every event is not automatically a notification, and a recommendation is not automatically a notification.
+Backend services/integrations remain responsible for authoritative business and analytical truth.
 
-Preference hierarchy:
-
-```text
-Explicit User Preference
-        ↓
-Intelligent Default
-        ↓
-Learned Personalization
-```
-
-Learning may affect presentation, relevance, frequency, timing, and supported categories but never overrides explicit preferences or changes objective analytical truth.
-
-Feedback references recommendations/insights rather than replacing prediction evaluation.
-
----
-
-# 22. Graceful Degradation
-
-SPMS distinguishes:
-
-```text
-Actual
-Predicted
-Estimated
-Simulated
-Cached
-Stale
-Degraded
-Unavailable
-```
-
-### GoodWe unavailable
-
-Trusted historical data remains available; live capability becomes stale/degraded; supported fallback analytics may continue.
-
-### Weather unavailable
-
-Historical/pattern-based fallback may continue with reduced confidence.
-
-### Bedrock unavailable
-
-Numerical analytics continue with controlled explanation fallback.
-
-### Prediction failure
-
-The validated fallback hierarchy is used; if no reliable prediction exists, the system explicitly states that.
-
----
-
-# 23. Historical Integrity and Lifecycle
-
-Historically meaningful records are preserved, including verified bills, historical predictions, evaluation context, model/version information, recommendation history, analytical results where required, provenance, and audit records.
-
-Older high-volume data may be aggregated/archived according to retention rules without destroying required historical meaning.
-
-Account deletion:
-
-```text
-Deletion Request
- ↓
-Authorization
- ↓
-Disable Access
- ↓
-Revoke Active Processing/Credentials
- ↓
-Category-Specific Data Disposition
- ↓
-Retain Only Legitimately Required Data
-```
-
-Deletion is a controlled lifecycle, not a single-row deletion.
-
----
-
-# 24. Model Lifecycle and Evaluation
-
-```text
-Model Candidate
-     ↓
-Validation
-     ↓
-Evaluation
-     ↓
-Comparison
-     ↓
-Controlled Deployment
-     ↓
-Monitoring
-     ↓
-Rollback if necessary
-```
-
-Evaluation uses reliable comparable observations and appropriate metrics such as MAE, RMSE, bias, percentage error, and interval coverage/calibration where meaningful.
-
-Results are contextualized by model, household, horizon, resolution, season, weather, and data quality.
-
-A new model must be validated before replacing a validated production version.
-
----
-
-# 25. Operations, Audit, Errors and Recovery
-
-Operational records are separate from analytical records.
-
-Operational/audit coverage includes synchronization, background operations, bill processing, prediction execution, reports/exports, failures, recovery, health checks, authentication/security events, account lifecycle, significant admin actions, deletion, and model/configuration lifecycle events.
-
-Errors use stable categories/codes and safe user-facing messages.
-
-General recovery:
-
-```text
-Detect
- ↓
-Classify
- ↓
-Preserve trustworthy state
- ↓
-Retry when safe
- ↓
-Fallback when valid
- ↓
-Record
- ↓
-Expose understandable state
- ↓
-Recover / Reconcile
-```
-
-Logs are structured and minimized. Secrets and unnecessary sensitive data are not logged.
-
----
-
-# 26. Concurrency and Idempotency
-
-Meaningful mutable operations use backend version/context validation.
-
-Duplicate execution is controlled through:
-
-- idempotency context/keys
-- provider/source identifiers
-- timestamp/context uniqueness
-- database constraints
-- operation-state validation
-
-Unsafe silent last-write-wins behavior is avoided for meaningful concurrent changes.
-
----
-
-# 27. Configuration and Environment
-
-Target local environment:
-
-```text
-Windows
-XAMPP
-Apache
-PHP 8.4
-MySQL 8.x
-Composer
-```
-
-Development, Testing, and Production are separate environments.
-
-Environment-specific configuration and secrets remain outside source control.
-
-Composer lockfile provides reproducible dependency versions.
-
----
-
-# 28. Testing Strategy
-
-Testing layers:
-
-```text
-                 E2E / Workflow
-                       ▲
-                API / Security
-                       ▲
-                 Integration
-                       ▲
-              Service / Domain
-                       ▲
-                    Unit
-```
-
-Coverage includes:
-
-- domain/service unit tests
-- repository/database tests
-- GoodWe/weather/AWS/Bedrock/email integration tests
-- API tests
-- W1–W29 workflow tests
-- security tests
-- failure/recovery tests
-- analytical calculation validation
-- separate prediction evaluation
-- reproducible Demo/Test scenarios
-
----
-
-# 29. Implementation Project Structure
-
-```text
-D:\SPMS
-├── app/
-│   ├── Controllers/
-│   ├── Domain/
-│   │   ├── Account/
-│   │   ├── Analytics/
-│   │   ├── Bills/
-│   │   ├── Energy/
-│   │   ├── Forecast/
-│   │   ├── Household/
-│   │   ├── Intelligence/
-│   │   ├── Notification/
-│   │   ├── Recommendation/
-│   │   ├── Reports/
-│   │   └── Solar/
-│   ├── Integrations/
-│   ├── Repositories/
-│   ├── Services/
-│   └── Support/
-├── config/
-├── database/
-│   ├── migrations/
-│   └── seeders/
-├── docs/
-├── public/
-│   ├── index.php
-│   └── assets/
-│       ├── css/
-│       ├── fonts/
-│       ├── images/
-│       └── js/
-├── resources/
-│   └── views/
-├── storage/
-│   ├── cache/
-│   ├── logs/
-│   └── temp/
-├── tests/
-│   ├── API/
-│   ├── Integration/
-│   ├── Security/
-│   ├── Unit/
-│   └── Workflow/
-├── composer.json
-├── composer.lock
-├── .env
-├── .env.example
-├── .gitignore
-└── README.md
-```
-
-This tree represents the established Phase 6 repository organization. Layer responsibilities remain as described in Sections 3–4; domain capability logic is organized under `app/Domain/` rather than a generic `Models/` directory. The concrete implementation placement of cross-cutting components (middleware, validation, exceptions, and similar mechanisms) is determined during M0 according to the Phase 6 implementation specification, without changing the architecture.
-
-Only `public/` is the web root.
-
-Composer uses PSR-4 autoloading with the `SPMS\` namespace.
-
-Naming:
-
-- PHP classes: PascalCase
-- PHP methods/variables: camelCase
-- DB: snake_case
-- JavaScript: camelCase
-- files: domain-oriented naming
-
----
-
-# 30. W1–W29 Coverage
-
-```text
-W1  Account Registration & Activation
-W2  Authentication & Session Lifecycle
-W3  Household Setup & Energy Profile Initialization
-W4  Household/Profile Modification
-W5  Account/Household Deletion
-W6  GoodWe Connection & Validation
-W7  Solar Data Synchronization
-W8  Solar Disconnection, Degradation & Recovery
-W9  Electricity Bill Processing
-W10 Manual Bill Entry & Verification
-W11 Household Energy Profile Development
-W12 Location Establishment
-W13 Environmental Data Retrieval & Context Update
-W14 Environmental Failure & Fallback
-W15 Energy Forecasting
-W16 Prediction Validation & Fallback
-W17 Energy Balance & Situation Analysis
-W18 Energy Cost Analysis
-W19 Energy Intelligence & Insight Generation
-W20 Recommendation Generation
-W21 Notification Evaluation & Delivery
-W22 Feedback & Personalization Adaptation
-W23 Historical Analytics & Visualization Data Preparation
-W24 Report Generation
-W25 Export
-W26 Data Quality Assessment & Propagation
-W27 Provenance & Measurement Context Tracking
-W28 Operational Monitoring & Audit
-W29 Prediction Evaluation & Model Lifecycle
-```
-
-All W1–W29 have an implementation path.
-
----
-
-# 31. Phase 3 Page Coverage
-
-```text
-Dashboard
-  → analytical aggregation services
-
-Solar
-  → solar services
-
-Energy
-  → energy / balance / cost services
-
-Forecasts
-  → prediction services
-
-Insights & Recommendations
-  → intelligence / recommendation services
-
-Analytics
-  → analytics services
-
-Bills
-  → bill services
-
-Reports
-  → report services
-
-Notifications
-  → notification services
-
-Settings
-  → account / household / preference services
-
-Demo/Test
-  → scenario / simulation services
-```
-
-No major page is merely a disconnected visual shell.
-
----
-
-# 32. Phase 4 UX Compatibility
-
-The technical architecture supports the locked UX system through concrete mechanisms:
-
-| UX requirement | Technical mechanism |
-|---|---|
-| Adaptive loading | Operation lifecycle |
-| Actual/predicted distinction | Data-nature metadata |
-| Confidence | Prediction metadata |
-| Provenance | Provenance capability |
-| Quality states | Data-quality capability |
-| Graceful degradation | Capability/service states |
-| Graph semantics | Graph-ready datasets |
-| Personalization | Preference/default/learning hierarchy |
-| Search/filtering | Authorized backend/context-aware exploration |
-| Accessibility | Semantic UI + alternative data representation |
-| Localization | Stable semantic IDs/resources |
-| Dark mode | Persistent theme preference |
-| Drafts | Lifecycle/state model |
-| Confirmation | Action/result lifecycle |
-| Cross-page context | Intent continuity + backend revalidation |
-| Cross-device continuity | Persistent preference/intent synchronization |
-
----
-
-# 33. Final Architecture Consistency Audit
-
-The final audit covered:
-
-1. layer responsibility separation
-2. W1–W29 workflow coverage
-3. Phase 3 page/backend coverage
-4. analytical authority
-5. Bedrock boundaries
-6. GoodWe isolation
-7. provider abstraction
-8. database integrity
-9. historical truth
-10. quality/provenance propagation
-11. measurement semantics
-12. graceful degradation
-13. security boundaries
-14. background operations
-15. graph architecture
-16. report/export authority
-17. notification separation
-18. personalization rules
-19. UX/technical compatibility
-20. dependency direction
-
-### Result
-
-**🟢 PASS — No blocking architectural gap identified.**
-
-Two implementation clarifications were confirmed:
-
-1. Email remains behind an email service/provider boundary.
-2. Browser state is never treated as authoritative system state.
-
-Neither requires an architecture change.
-
----
-
-# 34. Architecture Baseline
-
-Phase 5 is implementation-ready at the architectural level.
-
-```text
-Phase 1 — Foundation
-        ↓
-Phase 2 — Functional Blueprint
-        ↓
-Phase 3 — Page Architecture
-        ↓
-Phase 4 — UI/UX Design System
-        ↓
-Phase 5 — Technical Architecture
-        ↓
-Q1–Q280 🔒
-        ↓
-Final Consistency Audit ✅
-        ↓
-ARCHITECTURE BASELINE
-        ↓
-Phase 6 — Implementation Foundation
-```
-
-Future verification items such as exact GoodWe endpoint behavior, exact AWS document-processing service selection, provider payload fields, dependency versions, database indexes, and concrete API payloads are implementation tasks unless they expose a genuine architectural contradiction.
-
----
-
-# 35. Git Checkpoint
-
-Phase 5 documentation is intended to be reviewed as a complete architecture baseline and committed as one meaningful stable Git checkpoint.
-
-Do not create tiny commits for individual architecture paragraphs.
-
----
-
-# 36. Next Phase
-
-## Phase 6 — Implementation Foundation
-
-Recommended sequence:
-
-1. Verify local environment
-2. Initialize Composer
-3. Establish PSR-4 autoloading
-4. Create project directories
-5. Create `public/index.php`
-6. Establish routing
-7. Establish middleware pipeline
-8. Establish configuration loading
-9. Establish PDO database connection
-10. Establish migration system
-11. Establish base API response/error handling
-12. Establish base HTML/view shell
-13. Establish authentication foundation
-14. Establish first tests
-15. Verify the end-to-end skeleton
-16. Review documentation
-17. Create the stable Git checkpoint
-
-GoodWe and Bedrock should be integrated only after the foundation is stable.
-
----
-
-## Phase 5 Final Status
-
-**Phase 5 Technical Architecture: 🔒 COMPLETE**
-
-**Q1–Q280: 🔒 LOCKED**
-
-**Final Architecture Consistency Audit: ✅ PASSED**
-
-**Architecture Baseline: ✅ ESTABLISHED**
-
-**Next: Phase 6 — Implementation Foundation**
+**END OF TECHNICAL ARCHITECTURE**

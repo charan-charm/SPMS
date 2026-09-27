@@ -41,6 +41,16 @@ use Throwable;
  *  5. successful persist → best-effort immediate temporary cleanup;
  *     any failure there is intentionally non-fatal because the B2
  *     expiry cleanup service remains the durable backstop.
+ *
+ * APSPDCL XLS multi-row import (§22):
+ *  When the uploaded document is an APSPDCL HTML-formatted .xls export,
+ *  ApspdclExportParser returns one record per billing-period row.
+ *  records[0] is the primary bill (newest in the export); records[1..n]
+ *  are historical months. Each historical month is independently
+ *  persisted through the same recordExtraction lifecycle. Per-row
+ *  outcomes are captured in import_summary and returned to the caller
+ *  so the API surface can expose exactly which months were created,
+ *  skipped (already exists), or failed — nothing is silently discarded.
  */
 final class BillProcessingService
 {
@@ -58,7 +68,8 @@ final class BillProcessingService
      *     assessment: string,
      *     document_confidence: string|null,
      *     validations: list<BillValidation>,
-     *     quality_flags: list<BillQualityFlag>
+     *     quality_flags: list<BillQualityFlag>,
+     *     import_summary: array<string,mixed>|null
      * }
      */
     public function process(Account $account, string $billId, ?DateTimeImmutable $now = null): array
@@ -72,11 +83,13 @@ final class BillProcessingService
             throw new AppException('NOT_FOUND', 'The requested bill was not found.', 404);
         }
 
-        // 2. Idempotency gate: extraction runs only from PROCESSING —
-        //    never overwrites an existing immutable draft, never burns a
-        //    provider call for a bill that has already been extracted,
-        //    never re-runs a terminal bill.
-        if ($bill->status() !== BillStatus::PROCESSING) {
+        // 2. Idempotency gate: extraction runs from PROCESSING or retry from
+        //    PROCESSING_FAILED. Never overwrites an existing immutable draft,
+        //    never burns a provider call for a bill that has already reached
+        //    authoritative or recognized states.
+        if ($bill->status() === BillStatus::PROCESSING_FAILED) {
+            $bill = $this->bills->markProcessing($account, $billId, $now);
+        } elseif ($bill->status() !== BillStatus::PROCESSING) {
             throw new AppException(
                 'INVALID_BILL_STATE',
                 'Only a PROCESSING bill can be extracted; this bill is ' . $bill->status() . '.',
@@ -102,8 +115,303 @@ final class BillProcessingService
             );
         }
 
-        // 4. Provider call — through the ratified client only (image
-        //    data-URL / PDF Files-API routes; no duplicated HTTP here).
+        // 4. Processing dispatch: APSPDCL spreadsheet export vs. Mistral OCR.
+        if ($temp->mimeType() === BillUpload::TYPE_XLS || str_ends_with(strtolower($temp->storageKey()), '.xls')) {
+            return $this->processXls($account, $bill, $temp, $path, $now);
+        }
+
+        return $this->processMistral($account, $bill, $temp, $path, $now);
+    }
+
+    // ------------------------------------------------------------------
+    // APSPDCL XLS path (§22)
+    // ------------------------------------------------------------------
+
+    /**
+     * @return array{
+     *     bill: Bill,
+     *     assessment: string,
+     *     document_confidence: string,
+     *     validations: list<BillValidation>,
+     *     quality_flags: list<BillQualityFlag>,
+     *     import_summary: array<string,mixed>
+     * }
+     */
+    private function processXls(
+        Account $account,
+        Bill $bill,
+        BillTempDocument $temp,
+        string $path,
+        DateTimeImmutable $now
+    ): array {
+        $content = file_get_contents($path);
+        if ($content === false) {
+            $this->bills->markProcessingFailed($account, $bill->id(), $now);
+            throw new AppException('DOCUMENT_UNAVAILABLE', 'The uploaded document could not be read.', 410);
+        }
+
+        $parser = new \App\Domain\Bill\Apspdcl\ApspdclExportParser();
+        try {
+            $records = $parser->parse($content);
+        } catch (Throwable $e) {
+            $this->bills->markProcessingFailed($account, $bill->id(), $now);
+            throw new AppException('EXTRACTION_FAILED', 'Failed to parse APSPDCL export: ' . $e->getMessage(), 422);
+        }
+
+        $totalRows = count($records);
+        $primaryIdx = 0;
+
+        // --- Primary bill (records[0] = most recent row in the export) ---
+        $latest = $records[$primaryIdx];
+        $values = $latest['values'];
+        $validations = $latest['validations'];
+        $flags = $latest['quality_flags'];
+        $assessment = $latest['assessment'];
+        $documentConfidence = '1.0000';
+
+        // Augment source_metadata_json with provenance back to this upload.
+        $values = self::augmentMetadata($values, $bill->id(), $primaryIdx, $totalRows);
+
+        $confidences = [];
+        foreach ($values as $field => $val) {
+            if ($val !== null && BillField::isPersistable($field)) {
+                $confidences[$field] = '1.0000';
+            }
+        }
+
+        $draft = BillExtractionDraft::create(
+            $bill->id(),
+            'apspdcl_export',
+            'apspdcl-html-xls-parser-v1',
+            $now,
+            $assessment,
+            $latest['assessment_reason'],
+            $documentConfidence,
+            $values,
+            $confidences,
+            $now
+        );
+
+        // --- Historical monthly rows (records[1..n]) ---
+        // Each row result is captured in $importSummary.historical so the
+        // caller can surface exactly what happened — no silent swallowing.
+        $historicalResults = [];
+
+        for ($k = 1; $k < $totalRows; $k++) {
+            $olderRec = $records[$k];
+            $oValues = $olderRec['values'];
+            $oStart = $oValues[BillField::BILLING_PERIOD_START] ?? null;
+            $oEnd = $oValues[BillField::BILLING_PERIOD_END] ?? null;
+
+            if ($oStart === null || $oEnd === null) {
+                $historicalResults[] = [
+                    'row_index' => $k,
+                    'period_start' => null,
+                    'period_end' => null,
+                    'bill_id' => null,
+                    'result' => 'skipped',
+                    'reason' => 'missing_billing_period',
+                ];
+                continue;
+            }
+
+            // Duplicate guard: skip if this billing period already exists.
+            $alreadyExists = false;
+            $existingBillId = null;
+            try {
+                foreach ($this->bills->listForAccount($account) as $eb) {
+                    if ($eb->value(BillField::BILLING_PERIOD_START) === $oStart
+                        && $eb->value(BillField::BILLING_PERIOD_END) === $oEnd) {
+                        $alreadyExists = true;
+                        $existingBillId = $eb->id();
+                        break;
+                    }
+                }
+            } catch (Throwable) {
+                // If the existence check itself fails, fall through to the
+                // creation attempt; a DB unique constraint will catch true
+                // duplicates there.
+            }
+
+            if ($alreadyExists) {
+                $historicalResults[] = [
+                    'row_index' => $k,
+                    'period_start' => $oStart,
+                    'period_end' => $oEnd,
+                    'bill_id' => $existingBillId,
+                    'result' => 'skipped',
+                    'reason' => 'already_exists',
+                ];
+                continue;
+            }
+
+            // Augment provenance for this historical row.
+            $oValues = self::augmentMetadata($oValues, $bill->id(), $k, $totalRows);
+
+            try {
+                $olderBill = $this->bills->create($account, $oStart, $oEnd, $now);
+                $olderBill = $this->bills->markProcessing($account, $olderBill->id(), $now);
+
+                $oConfidences = [];
+                foreach ($oValues as $f => $v) {
+                    if ($v !== null && BillField::isPersistable($f)) {
+                        $oConfidences[$f] = '1.0000';
+                    }
+                }
+
+                $oDraft = BillExtractionDraft::create(
+                    $olderBill->id(),
+                    'apspdcl_export',
+                    'apspdcl-html-xls-parser-v1',
+                    $now,
+                    $olderRec['assessment'],
+                    $olderRec['assessment_reason'],
+                    '1.0000',
+                    $oValues,
+                    $oConfidences,
+                    $now
+                );
+
+                $persistedOlder = $this->bills->recordExtraction(
+                    $account,
+                    $olderBill->id(),
+                    $oDraft,
+                    $olderRec['validations'],
+                    $olderRec['quality_flags'],
+                    $now
+                );
+
+                $historicalResults[] = [
+                    'row_index' => $k,
+                    'period_start' => $oStart,
+                    'period_end' => $oEnd,
+                    'bill_id' => $olderBill->id(),
+                    'result' => 'created',
+                    'status' => $persistedOlder->status(),
+                ];
+            } catch (AppException $ae) {
+                $historicalResults[] = [
+                    'row_index' => $k,
+                    'period_start' => $oStart,
+                    'period_end' => $oEnd,
+                    'bill_id' => null,
+                    'result' => 'failed',
+                    'reason' => $ae->errorCode(),
+                ];
+            } catch (Throwable) {
+                $historicalResults[] = [
+                    'row_index' => $k,
+                    'period_start' => $oStart,
+                    'period_end' => $oEnd,
+                    'bill_id' => null,
+                    'result' => 'failed',
+                    'reason' => 'PERSISTENCE_FAILED',
+                ];
+            }
+        }
+
+        $newlyImported = 1; // +1 for primary bill
+        $alreadyExisting = 0;
+        $rejectedRows = 0;
+        foreach ($historicalResults as $hr) {
+            if ($hr['result'] === 'created') {
+                $newlyImported++;
+            } elseif ($hr['result'] === 'skipped') {
+                $alreadyExisting++;
+            } elseif ($hr['result'] === 'failed') {
+                $rejectedRows++;
+            }
+        }
+
+        $solarActiveCount = 0;
+        $preSolarCount = 0;
+        foreach ($records as $r) {
+            $app = $r['raw_metadata']['solar_applicability'] ?? null;
+            if ($app === 'SOLAR_ACTIVE') {
+                $solarActiveCount++;
+            } elseif ($app === 'BEFORE_SOLAR_INSTALLATION') {
+                $preSolarCount++;
+            }
+        }
+
+        $oldestRec = $records[$totalRows - 1] ?? null;
+        $newestRec = $records[0] ?? null;
+        $coverageStart = $oldestRec['values'][BillField::BILLING_PERIOD_START] ?? null;
+        $coverageEnd = $newestRec['values'][BillField::BILLING_PERIOD_END] ?? null;
+
+        $importSummary = [
+            'total_rows' => $totalRows,
+            'total_detected' => $totalRows,
+            'newly_imported' => $newlyImported,
+            'already_existing' => $alreadyExisting,
+            'duplicates_skipped' => $alreadyExisting,
+            'rejected_rows' => $rejectedRows,
+            'coverage_range' => [
+                'start' => $coverageStart,
+                'end' => $coverageEnd,
+            ],
+            'solar_coverage' => [
+                'solar_active_periods' => $solarActiveCount,
+                'pre_solar_periods' => $preSolarCount,
+            ],
+            'primary_row_index' => $primaryIdx,
+            'historical' => $historicalResults,
+        ];
+
+        // Persist the primary bill extraction.
+        try {
+            $updated = $this->bills->recordExtraction($account, $bill->id(), $draft, $validations, $flags, $now);
+        } catch (AppException $e) {
+            throw $e;
+        } catch (Throwable) {
+            throw new AppException(
+                'PERSISTENCE_FAILED',
+                'The extraction could not be stored; the bill remains queued for processing.',
+                500
+            );
+        }
+
+        // Best-effort temporary cleanup.
+        try {
+            if ($this->storage->delete($temp->storageKey())) {
+                $this->tempDocs->markDeleted($temp->id(), $now->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'));
+            }
+        } catch (Throwable) {
+            // Deliberately non-fatal: B2 expiry cleanup is the durable backstop.
+        }
+
+        return [
+            'bill' => $updated,
+            'assessment' => $assessment,
+            'document_confidence' => $documentConfidence,
+            'validations' => $validations,
+            'quality_flags' => $flags,
+            'import_summary' => $importSummary,
+        ];
+    }
+
+    // ------------------------------------------------------------------
+    // Mistral OCR path (image / PDF)
+    // ------------------------------------------------------------------
+
+    /**
+     * @return array{
+     *     bill: Bill,
+     *     assessment: string,
+     *     document_confidence: string|null,
+     *     validations: list<BillValidation>,
+     *     quality_flags: list<BillQualityFlag>,
+     *     import_summary: null
+     * }
+     */
+    private function processMistral(
+        Account $account,
+        Bill $bill,
+        BillTempDocument $temp,
+        string $path,
+        DateTimeImmutable $now
+    ): array {
+        // Provider call — through the ratified Mistral client.
         try {
             $validated = MistralOcrClient::validateLocalDocument($path);
 
@@ -121,24 +429,47 @@ final class BillProcessingService
                 MistralOcrClient::BILL_ANNOTATION_PROMPT
             );
         } catch (MistralOcrException $e) {
-            // Recoverable by design: nothing was persisted, the bill is
-            // still PROCESSING and the document is still available.
-            // (The exception's own message surface is already sanitized
-            // — category + HTTP status + bounded ASCII excerpt only.)
+            $this->bills->markProcessingFailed($account, $bill->id(), $now);
+            $reasonCode = match ($e->category()) {
+                MistralOcrException::RATE_LIMIT => 'EXTRACTION_RATE_LIMITED',
+                MistralOcrException::NETWORK => 'EXTRACTION_TIMEOUT',
+                MistralOcrException::AUTHENTICATION => 'EXTRACTION_AUTHENTICATION_ERROR',
+                MistralOcrException::CONFIGURATION => 'EXTRACTION_CONFIGURATION_ERROR',
+                MistralOcrException::INVALID_REQUEST => 'UNSUPPORTED_DOCUMENT',
+                default => 'EXTRACTION_PROVIDER_ERROR',
+            };
+            try {
+                \App\Support\Logger::default()->error('mistral.ocr.failed', [
+                    'bill_id' => $bill->id(),
+                    'category' => $e->category(),
+                    'reason' => $reasonCode,
+                    'http_status' => $e->status(),
+                    'mistral_code' => $e->mistralCode(),
+                ]);
+            } catch (\Throwable) {
+            }
             throw new AppException(
                 'EXTRACTION_FAILED',
-                'The bill document could not be processed right now (' . $e->category() . '); the bill remains queued for processing.',
-                502
+                'SPMS could not finish reading this bill (' . $e->category() . '). Please retry or upload another copy.',
+                502,
+                [
+                    'category' => $e->category(),
+                    'reason' => $reasonCode,
+                    'status' => $e->status(),
+                    'provider_code' => $e->mistralCode(),
+                ]
             );
         }
 
-        // 5. Normalize + validate deterministically (absent/undecodable
-        //    annotation becomes an honest UNCERTAIN record).
+        // Normalize + validate deterministically (absent/undecodable
+        // annotation becomes an honest UNCERTAIN record).
         $annotation = is_array($result['annotation'] ?? null) ? $result['annotation'] : null;
 
         $normalized = BillAnnotationNormalizer::normalize($annotation);
         $validations = BillAnnotationNormalizer::validations($annotation);
         $flags = BillAnnotationNormalizer::qualityFlags($normalized, $validations);
+        $assessment = $normalized['assessment'];
+        $documentConfidence = $normalized['document_confidence'];
 
         $draft = BillExtractionDraft::create(
             $bill->id(),
@@ -153,20 +484,22 @@ final class BillProcessingService
             $now
         );
 
-        // 6. Persistence + lifecycle through the ratified B1 service.
+        // Persistence + lifecycle through the ratified B1 service.
         try {
             $updated = $this->bills->recordExtraction($account, $bill->id(), $draft, $validations, $flags, $now);
         } catch (AppException $e) {
+            $this->bills->markProcessingFailed($account, $bill->id(), $now);
             throw $e;
         } catch (Throwable) {
+            $this->bills->markProcessingFailed($account, $bill->id(), $now);
             throw new AppException(
                 'PERSISTENCE_FAILED',
-                'The extraction could not be stored; the bill remains queued for processing.',
+                'The extraction could not be stored; the bill was marked failed.',
                 500
             );
         }
 
-        // 7. Immediate, best-effort temporary cleanup (B2 lifecycle).
+        // Best-effort temporary cleanup.
         try {
             if ($this->storage->delete($temp->storageKey())) {
                 $this->tempDocs->markDeleted($temp->id(), $now->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'));
@@ -178,10 +511,51 @@ final class BillProcessingService
 
         return [
             'bill' => $updated,
-            'assessment' => $normalized['assessment'],
-            'document_confidence' => $normalized['document_confidence'],
+            'assessment' => $assessment,
+            'document_confidence' => $documentConfidence,
             'validations' => $validations,
             'quality_flags' => $flags,
+            'import_summary' => null,
         ];
+    }
+
+    // ------------------------------------------------------------------
+    // Shared helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Augment source_metadata_json with provenance fields linking this record
+     * back to the original XLS upload's bill_id and its position in the export.
+     * Handles the 4000-character TEXT column limit conservatively.
+     *
+     * @param array<string, string|null> $values
+     * @return array<string, string|null>
+     */
+    private static function augmentMetadata(
+        array $values,
+        string $sourceBillId,
+        int $rowIndex,
+        int $totalRows
+    ): array {
+        $meta = json_decode($values[BillField::SOURCE_METADATA_JSON] ?? '{}', true);
+        if (!is_array($meta)) {
+            $meta = [];
+        }
+
+        $meta['source_bill_id'] = $sourceBillId;
+        $meta['import_row_index'] = $rowIndex;
+        $meta['import_total_rows'] = $totalRows;
+
+        $encoded = json_encode($meta, JSON_THROW_ON_ERROR);
+
+        if (mb_strlen($encoded) > 4000) {
+            // Remove the least critical provenance field to fit.
+            unset($meta['import_total_rows']);
+            $encoded = json_encode($meta, JSON_THROW_ON_ERROR);
+        }
+
+        $values[BillField::SOURCE_METADATA_JSON] = $encoded;
+
+        return $values;
     }
 }

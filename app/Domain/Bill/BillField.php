@@ -33,9 +33,11 @@ use InvalidArgumentException;
  */
 final class BillField
 {
-    // Period
+    // Period and issue dates
     public const BILLING_PERIOD_START = 'billing_period_start';
     public const BILLING_PERIOD_END = 'billing_period_end';
+    public const BILL_DATE = 'bill_date';
+    public const DUE_DATE = 'due_date';
 
     // Energy / meter evidence (signed)
     public const ENERGY = [
@@ -46,6 +48,9 @@ final class BillField
         'present_solar_reading',
         'solar_units_kwh',
         'net_units_kwh',
+        'opening_kvah',
+        'closing_kvah',
+        'consumption_kvah',
     ];
 
     // Money — conceptually distinct, stored separately (§6)
@@ -62,12 +67,27 @@ final class BillField
 
     public const LOAD = ['contracted_load'];
 
-    public const DATES = [self::BILLING_PERIOD_START, self::BILLING_PERIOD_END];
+    public const DATES = [
+        self::BILLING_PERIOD_START,
+        self::BILLING_PERIOD_END,
+        self::BILL_DATE,
+        self::DUE_DATE,
+    ];
 
     /** D-071 — electricity service/USC identity (bill ownership anchor). */
     public const SERVICE_NUMBER = 'service_number';
 
-    public const TEXT = ['utility_provider', 'tariff_category', 'meter_type', self::SERVICE_NUMBER];
+    public const SOURCE = 'source';
+    public const SOURCE_METADATA_JSON = 'source_metadata_json';
+
+    public const TEXT = [
+        self::SOURCE,
+        'utility_provider',
+        'tariff_category',
+        'meter_type',
+        self::SERVICE_NUMBER,
+        self::SOURCE_METADATA_JSON,
+    ];
 
     public const ALL = [
         ...self::DATES,
@@ -78,12 +98,14 @@ final class BillField
     ];
 
     private const MAX_TEXT_LENGTH = [
+        'source' => 32,
         'utility_provider' => 120,
         'tariff_category' => 60,
         'meter_type' => 60,
         // D-071: the draft snapshot carries the extracted (text-cleaned)
         // value; bills.household registration stores the canonical form.
         'service_number' => 32,
+        'source_metadata_json' => 4000,
     ];
 
     public const KIND_DATE = 'date';

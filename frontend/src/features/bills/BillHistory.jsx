@@ -1,110 +1,269 @@
-import { CircleDollarSign, History, Sun, Zap } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { ChevronLeft, ChevronRight, History } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { TONE_CLASS } from '../../lib/semantics'
 import { formatMoney } from '../../lib/money'
-import { BILL_STATUS, NOT_AVAILABLE, formatEnergy, formatPeriod } from './presentation'
+import {
+    BILL_SOURCE,
+    BILL_STATUS,
+    NOT_AVAILABLE,
+    formatEnergy,
+    formatPeriod,
+    formatBillingMonthYear,
+    sortBillsChronologically,
+} from './presentation'
 import { cn } from '../../lib/utils'
 
 /**
- * BillHistory (B4 §17) — the workspace's submission list, built only
- * from what GET /api/v1/bills actually provides (period, headline
- * numbers, lifecycle status). Unverified drafts are listed as uploads
- * awaiting review; they are never labeled "history" in the verified
- * sense, and the verified section states honestly that nothing is
- * verified yet until the backend says otherwise.
+ * BillHistory (B4 §17) — chronological billing-period history table.
+ *
+ * Implements:
+ * - Canonical ordering: newest to oldest
+ * - Month-first primary identifier (e.g. "Sep 2026")
+ * - Secondary metadata: actual period range + statement serial
+ * - Truthful status semantics: exact counts of recorded, verified, extracted, and awaiting review
+ * - Subtle selected row styling
+ * - Compact pagination
  */
-export function BillHistory({ bills, selectedId, onSelect, onUpload }) {
-    const verified = bills.filter((bill) => bill.status === 'VERIFIED')
+export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}, onUpload = () => {}, pageSize = 8 }) {
+    const [page, setPage] = useState(1)
+    const [showAll, setShowAll] = useState(false)
+
+    const statementBills = useMemo(() => {
+        return (bills || []).filter(
+            (bill) =>
+                !['PROCESSING_FAILED', 'NOT_A_BILL', 'UNREADABLE', 'UNCERTAIN', 'UPLOADED', 'PROCESSING'].includes(bill.status) &&
+                Boolean(bill.billing_period_start && bill.billing_period_end)
+        )
+    }, [bills])
+
+    const sortedBills = useMemo(() => sortBillsChronologically(statementBills), [statementBills])
+
+    const verified = sortedBills.filter((bill) => bill.status === 'VERIFIED')
+    const extracted = sortedBills.filter((bill) => bill.status === 'EXTRACTED')
+    const needsReview = sortedBills.filter((bill) => bill.status === 'NEEDS_REVIEW')
+    const totalBills = sortedBills.length
+
+    const totalPages = Math.max(1, Math.ceil(totalBills / pageSize))
+    const currentPage = Math.min(page, totalPages)
+    const displayedBills = showAll
+        ? sortedBills
+        : sortedBills.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
+    // Truthful status description
+    let statusDescription = 'No verified bills yet. Historical billing archive.'
+    if (totalBills > 0) {
+        if (verified.length > 0) {
+            statusDescription = `${totalBills} recorded · ${verified.length} verified · ${extracted.length} extracted · ${needsReview.length} awaiting review`
+        } else {
+            statusDescription = `No verified bills yet. ${totalBills} recorded · ${extracted.length} extracted · ${needsReview.length} awaiting review`
+        }
+    }
 
     return (
-        <Card aria-labelledby="history-title">
-            <CardHeader>
-                <CardTitle id="history-title" className="flex items-center gap-2 text-base">
-                    <History className="size-4 text-secondary" aria-hidden="true" />
-                    Bill history
-                </CardTitle>
-                <CardDescription>
-                    {verified.length > 0
-                        ? `${verified.length} verified ${verified.length === 1 ? 'bill' : 'bills'} feed your household analysis.`
-                        : 'No verified bills yet. Once you review and verify a bill, it will appear here.'}
+        <Card aria-labelledby="history-title" className="overflow-hidden shadow-2xs">
+            <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <CardTitle id="history-title" className="flex items-center gap-2 text-base font-semibold text-heading">
+                        <History className="size-4 text-secondary" aria-hidden="true" />
+                        Billing history
+                    </CardTitle>
+                    {totalBills > 0 && (
+                        <span className="rounded-full border border-border bg-surface-alt px-2.5 py-0.5 text-xs font-medium text-muted">
+                            {totalBills} {totalBills === 1 ? 'statement' : 'statements'} recorded
+                        </span>
+                    )}
+                </div>
+                <CardDescription className="text-xs">
+                    {statusDescription}
                 </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-2">
+            <CardContent className="p-0">
                 {bills.length === 0 ? (
-                    <div className="flex flex-col items-center gap-3 py-4 text-center">
+                    <div className="flex flex-col items-center gap-3 px-6 py-8 text-center">
                         <p className="text-sm text-muted">No bills uploaded yet.</p>
                         <Button type="button" onClick={onUpload}>
                             Upload bill
                         </Button>
                     </div>
+                ) : totalBills === 0 ? (
+                    <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-sm text-muted">
+                        No recognized statements yet.
+                    </div>
                 ) : (
-                    <ul className="flex flex-col gap-2">
-                        {bills.map((bill) => {
-                            const status = BILL_STATUS[bill.status] ?? { label: bill.status, tone: 'muted' }
-                            const isSelected = bill.bill_id === selectedId
+                    <div className="flex flex-col">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm" role="table">
+                                <thead className="border-b border-border bg-surface-alt text-xs font-semibold text-muted">
+                                    <tr>
+                                        <th scope="col" className="px-4 py-2.5">Billing period</th>
+                                        <th scope="col" className="px-3 py-2.5 text-right">Consumption</th>
+                                        <th scope="col" className="px-3 py-2.5 text-right">Solar</th>
+                                        <th scope="col" className="px-3 py-2.5 text-right">Net</th>
+                                        <th scope="col" className="px-3 py-2.5 text-right">Bill amount</th>
+                                        <th scope="col" className="px-4 py-2.5 text-right">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-border">
+                                    {displayedBills.map((bill) => {
+                                        const status = BILL_STATUS[bill.status] ?? { label: bill.status, tone: 'muted' }
+                                        const sourceMeta = BILL_SOURCE[bill.source] ?? BILL_SOURCE.ELECTRICITY_BILL
+                                        const isSelected = bill.bill_id === selectedId
+                                        const isPreSolar = bill.solar_applicability === 'BEFORE_SOLAR_INSTALLATION'
+                                        const monthLabel = formatBillingMonthYear(
+                                            bill.billing_period_start,
+                                            bill.billing_period_end,
+                                            bill.bill_date
+                                        )
+                                        const periodRange = formatPeriod(bill.billing_period_start, bill.billing_period_end)
 
-                            return (
-                                <li key={bill.bill_id}>
-                                    <button
-                                        type="button"
-                                        onClick={() => onSelect(bill.bill_id)}
-                                        aria-current={isSelected ? 'true' : undefined}
-                                        className={cn(
-                                            'w-full rounded-md border px-3 py-2.5 text-left transition-colors duration-150',
-                                            isSelected
-                                                ? 'border-primary/50 bg-primary-soft/40'
-                                                : 'border-border bg-surface hover:bg-surface-alt',
-                                        )}
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <p className="truncate text-sm font-medium text-heading">
-                                                {formatPeriod(bill.billing_period_start, bill.billing_period_end) ??
-                                                    'Period not available'}
-                                            </p>
-                                            <span
+                                        return (
+                                            <tr
+                                                key={bill.bill_id}
+                                                tabIndex={0}
+                                                role="button"
+                                                aria-current={isSelected ? 'row' : undefined}
+                                                onClick={() => onSelect(bill.bill_id)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault()
+                                                        onSelect(bill.bill_id)
+                                                    }
+                                                }}
                                                 className={cn(
-                                                    'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold',
-                                                    TONE_CLASS[status.tone],
+                                                    'cursor-pointer transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                                                    isSelected
+                                                        ? 'bg-primary/8 ring-1 ring-inset ring-primary/25 font-medium text-heading'
+                                                        : 'hover:bg-surface-alt'
                                                 )}
                                             >
-                                                {status.label}
-                                            </span>
-                                        </div>
-                                        <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                                            <div className="flex items-center gap-1">
-                                                <dt className="sr-only">Consumption</dt>
-                                                <Zap className="size-3" aria-hidden="true" />
-                                                <dd>
+                                                {/* Column 1: Month-first primary label with secondary range + serial */}
+                                                <td className="px-4 py-3">
+                                                    <div className="flex flex-col gap-0.5">
+                                                        <span className="font-semibold text-heading">
+                                                            {monthLabel}
+                                                        </span>
+                                                        <div className="flex items-center gap-1.5 text-[11px] text-muted">
+                                                            {periodRange && <span>{periodRange}</span>}
+                                                            {bill.source_statement_serial && (
+                                                                <span>· #{bill.source_statement_serial}</span>
+                                                            )}
+                                                            <span className="text-muted/60">·</span>
+                                                            <span>{sourceMeta.label}</span>
+                                                        </div>
+                                                    </div>
+                                                </td>
+
+                                                {/* Consumption */}
+                                                <td className="px-3 py-3 text-right font-display text-sm">
                                                     {bill.consumption_kwh !== null
                                                         ? `${formatEnergy(bill.consumption_kwh)} kWh`
-                                                        : NOT_AVAILABLE}
-                                                </dd>
-                                            </div>
-                                            <div className="flex items-center gap-1">
-                                                <dt className="sr-only">Solar units</dt>
-                                                <Sun className="size-3" aria-hidden="true" />
-                                                <dd>
-                                                    {bill.solar_units_kwh !== null
-                                                        ? `${formatEnergy(bill.solar_units_kwh)} kWh`
-                                                        : NOT_AVAILABLE}
-                                                </dd>
-                                            </div>
-                                            <div className="flex items-center gap-1">
-                                                <dt className="sr-only">Bill amount</dt>
-                                                <CircleDollarSign className="size-3" aria-hidden="true" />
-                                                <dd>
+                                                        : <span className="text-muted">{NOT_AVAILABLE}</span>}
+                                                </td>
+
+                                                {/* Solar generation */}
+                                                <td className="px-3 py-3 text-right">
+                                                    {bill.solar_units_kwh !== null ? (
+                                                        <span className="font-display text-sm font-semibold text-primary">
+                                                            {formatEnergy(bill.solar_units_kwh)} kWh
+                                                        </span>
+                                                    ) : isPreSolar ? (
+                                                        <span className="inline-flex rounded-full bg-surface-alt px-1.5 py-0.5 text-[11px] text-muted">
+                                                            Pre-solar
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-muted">—</span>
+                                                    )}
+                                                </td>
+
+                                                {/* Net units */}
+                                                <td className="px-3 py-3 text-right font-display text-sm">
+                                                    {bill.net_units_kwh !== null ? (
+                                                        <span className={cn(
+                                                            Number(bill.net_units_kwh) < 0 ? 'text-primary font-semibold' : 'text-body'
+                                                        )}>
+                                                            {formatEnergy(bill.net_units_kwh, { signed: true })} kWh
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-muted">—</span>
+                                                    )}
+                                                </td>
+
+                                                {/* Bill amount */}
+                                                <td className="px-3 py-3 text-right font-display text-sm font-medium text-heading">
                                                     {bill.bill_amount !== null
                                                         ? formatMoney(bill.bill_amount)
-                                                        : NOT_AVAILABLE}
-                                                </dd>
-                                            </div>
-                                        </dl>
-                                    </button>
-                                </li>
-                            )
-                        })}
-                    </ul>
+                                                        : <span className="text-muted">{NOT_AVAILABLE}</span>}
+                                                </td>
+
+                                                {/* Exact Status */}
+                                                <td className="px-4 py-3 text-right">
+                                                    <span
+                                                        className={cn(
+                                                            'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap',
+                                                            TONE_CLASS[status.tone],
+                                                        )}
+                                                    >
+                                                        {status.label}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        )
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Pagination Footer */}
+                        {totalPages > 1 && (
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs text-muted">
+                                <div>
+                                    Showing {displayedBills.length} of {totalBills} statements
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setShowAll(!showAll)}
+                                        className="h-7 px-2 text-xs"
+                                    >
+                                        {showAll ? 'Show paginated' : 'Show all'}
+                                    </Button>
+                                    {!showAll && (
+                                        <div className="flex items-center gap-1">
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                disabled={currentPage <= 1}
+                                                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                                className="size-7 p-0"
+                                                aria-label="Previous history page"
+                                            >
+                                                <ChevronLeft className="size-3.5" aria-hidden="true" />
+                                            </Button>
+                                            <span className="px-2 text-xs font-medium text-heading">
+                                                {currentPage} / {totalPages}
+                                            </span>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                disabled={currentPage >= totalPages}
+                                                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                                                className="size-7 p-0"
+                                                aria-label="Next history page"
+                                            >
+                                                <ChevronRight className="size-3.5" aria-hidden="true" />
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 )}
             </CardContent>
         </Card>

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../services/api/client'
 import { loadServerSession } from '../../services/api/session'
-import { getBill, listBills, processBill, uploadBill } from '../../services/api/bills'
+import { getBill, listBills, processBill, uploadBill, verifyBill } from '../../services/api/bills'
 import { BillsWorkspace } from '../../features/bills/BillsWorkspace'
+import { sortBillsChronologically } from '../../features/bills/presentation'
 
 /**
  * BillsPage — the /bills container (B4).
@@ -27,9 +28,23 @@ export function BillsPage() {
     const [detailPhase, setDetailPhase] = useState('ready')
     const [pipelineStage, setPipelineStage] = useState(null)
     const [processFailure, setProcessFailure] = useState(null)
+    const [verifying, setVerifying] = useState(false)
+    const [importSummary, setImportSummary] = useState(null)
 
     const abortRef = useRef(null)
     const mountedRef = useRef(true)
+
+    const pollTimerRef = useRef(null)
+    const pollCountRef = useRef(0)
+    const MAX_POLL_ATTEMPTS = 30 // 60s at 2s interval
+
+    const stopPolling = useCallback(() => {
+        if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current)
+            pollTimerRef.current = null
+        }
+        pollCountRef.current = 0
+    }, [])
 
     useEffect(() => {
         mountedRef.current = true
@@ -38,8 +53,9 @@ export function BillsPage() {
         return () => {
             mountedRef.current = false
             abortRef.current?.abort()
+            stopPolling()
         }
-    }, [])
+    }, [stopPolling])
 
     const signal = () => abortRef.current?.signal
 
@@ -72,18 +88,97 @@ export function BillsPage() {
         [handleUnauthorized],
     )
 
-    /** Newest non-verified bill is the active one; otherwise the newest overall. */
+    /** Initial active bill: prefer actionable extracted/review bills, then verified, avoiding stale failed unless nothing else. */
     const pickActive = (rows) => {
-        const pending = rows.find((row) => row.status !== 'VERIFIED')
-        return (pending ?? rows[0])?.bill_id ?? null
+        const reviewable = rows.find((row) => row.status === 'EXTRACTED' || row.status === 'NEEDS_REVIEW')
+        if (reviewable) return reviewable.bill_id
+        const processing = rows.find((row) => row.status === 'PROCESSING')
+        if (processing) return processing.bill_id
+        const verified = rows.find((row) => row.status === 'VERIFIED')
+        if (verified) return verified.bill_id
+        return rows[0]?.bill_id ?? null
     }
+
+    // Terminal-state aware bounded polling for active processing bills
+    useEffect(() => {
+        const activeStatus = detail?.status
+        const activeId = detail?.bill_id
+
+        const isProcessingState = activeStatus === 'PROCESSING' || activeStatus === 'UPLOADED'
+
+        // If not in active processing or no bill, ensure timer is stopped
+        if (!isProcessingState || !activeId) {
+            stopPolling()
+            return
+        }
+
+        // Avoid starting duplicate polling loops for the same bill
+        if (pollTimerRef.current) {
+            return
+        }
+
+        pollCountRef.current = 0
+        pollTimerRef.current = setInterval(async () => {
+            if (!mountedRef.current) {
+                stopPolling()
+                return
+            }
+
+            pollCountRef.current += 1
+            if (pollCountRef.current > MAX_POLL_ATTEMPTS) {
+                stopPolling()
+                setProcessFailure({ retryable: true })
+                return
+            }
+
+            try {
+                const { data } = await getBill(activeId, signal())
+                if (!mountedRef.current) return
+
+                const fetchedBill = data?.bill
+                if (!fetchedBill || fetchedBill.bill_id !== activeId) return
+
+                const newStatus = fetchedBill.status
+                const isTerminal = [
+                    'EXTRACTED',
+                    'NEEDS_REVIEW',
+                    'VERIFIED',
+                    'NOT_A_BILL',
+                    'UNREADABLE',
+                    'UNCERTAIN',
+                    'PROCESSING_FAILED',
+                ].includes(newStatus)
+
+                if (isTerminal) {
+                    stopPolling()
+                    setDetail(fetchedBill)
+                    setPipelineStage(null)
+                    void listBills(signal()).then(({ data: listData }) => {
+                        if (mountedRef.current) {
+                            setBills(sortBillsChronologically(listData.bills ?? []))
+                        }
+                    })
+                }
+            } catch (err) {
+                if (isAbort(err) || !mountedRef.current) return
+                if (handleUnauthorized(err)) {
+                    stopPolling()
+                    return
+                }
+            }
+        }, 2000)
+
+        return () => {
+            stopPolling()
+        }
+    }, [detail?.bill_id, detail?.status, handleUnauthorized, stopPolling])
 
     const refreshList = useCallback(
         async (preferId = undefined) => {
             try {
                 const { data } = await listBills(signal())
                 if (!mountedRef.current) return null
-                const rows = data.bills ?? []
+                const rows = sortBillsChronologically(data.bills ?? [])
                 setBills(rows)
                 const target = preferId ?? pickActive(rows)
                 if (target) {
@@ -145,8 +240,14 @@ export function BillsPage() {
         async (billId) => {
             setPipelineStage('processing')
             setProcessFailure(null)
+            setImportSummary(null)
+            let processedSummary = null
             try {
-                await processBill(billId, signal())
+                const { data } = await processBill(billId, signal())
+                // APSPDCL XLS imports return import_summary with all monthly rows.
+                if (data?.import_summary) {
+                    processedSummary = data.import_summary
+                }
             } catch (err) {
                 if (!mountedRef.current || isAbort(err)) return
                 if (handleUnauthorized(err)) return
@@ -157,19 +258,26 @@ export function BillsPage() {
                     err instanceof ApiError &&
                     (err.code === 'EXTRACTION_FAILED' || err.code === 'PERSISTENCE_FAILED')
                 ) {
-                    setProcessFailure({ retryable: true })
+                    setProcessFailure({ retryable: true, reason: err.context?.reason ?? null })
                 } else if (err instanceof ApiError) {
                     // DOCUMENT_UNAVAILABLE (bill is now PROCESSING_FAILED
                     // server-side) and every stable error code: re-read.
                     if (!['DOCUMENT_UNAVAILABLE', 'NOT_FOUND'].includes(err.code)) {
-                        setProcessFailure({ retryable: true })
+                        setProcessFailure({ retryable: true, reason: err.context?.reason ?? null })
                     }
                 } else {
                     setProcessFailure({ retryable: true })
                 }
             }
             if (!mountedRef.current) return
-            await refreshList(billId)
+            if (processedSummary) {
+                // XLS import: refresh without preferred id so all new historical
+                // bills appear and pickActive selects the newest unverified one.
+                await refreshList()
+                setImportSummary(processedSummary)
+            } else {
+                await refreshList(billId)
+            }
             if (!mountedRef.current) return
             setPipelineStage(null)
         },
@@ -180,6 +288,7 @@ export function BillsPage() {
         async (file) => {
             setPipelineStage('uploading')
             setProcessFailure(null)
+            setImportSummary(null)
             try {
                 const { data } = await uploadBill(file, signal())
                 if (!mountedRef.current) return { uploaded: true }
@@ -212,10 +321,11 @@ export function BillsPage() {
     const handleSelectBill = useCallback(
         (billId) => {
             if (billId === selectedId) return
+            stopPolling()
             setProcessFailure(null)
             void openBill(billId)
         },
-        [openBill, selectedId],
+        [openBill, selectedId, stopPolling],
     )
 
     const handleRetryProcess = useCallback(() => {
@@ -230,6 +340,25 @@ export function BillsPage() {
         }
     }, [openBill, selectedId])
 
+    const handleVerify = useCallback(
+        async (billId, { acceptGap = false } = {}) => {
+            setVerifying(true)
+            try {
+                await verifyBill(billId, { acceptGap }, signal())
+                await refreshList(billId)
+            } catch (err) {
+                if (!mountedRef.current || isAbort(err)) return
+                if (handleUnauthorized(err)) return
+                await refreshList(billId)
+            } finally {
+                if (mountedRef.current) {
+                    setVerifying(false)
+                }
+            }
+        },
+        [handleUnauthorized, refreshList],
+    )
+
     return (
         <BillsWorkspace
             sessionPhase={sessionPhase}
@@ -239,11 +368,14 @@ export function BillsPage() {
             detailPhase={detailPhase}
             pipelineStage={pipelineStage}
             processFailure={processFailure}
+            importSummary={importSummary}
             onUpload={handleUpload}
             onSelectBill={handleSelectBill}
             onRetryProcess={handleRetryProcess}
             onRetryDetail={handleRetryDetail}
             onRetrySession={bootstrap}
+            onVerify={handleVerify}
+            verifying={verifying}
         />
     )
 }

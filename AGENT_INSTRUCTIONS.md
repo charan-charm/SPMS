@@ -30,6 +30,8 @@ Primary documentation:
 - docs/08_SECURITY_RULES.md
 - docs/09_DEVELOPMENT_PLAN.md
 - docs/10_DECISION_LOG.md
+- docs/11_FRONTEND_ARCHITECTURE.md
+- docs/12_FRONTEND_DESIGN_SYSTEM.md
 
 Personal implementation notes:
 
@@ -77,29 +79,47 @@ Commit stable milestones.
 
 The approved implementation stack is:
 
+Backend:
+
 - PHP 8.4 minimum
-- MySQL
+- MySQL (MariaDB-compatible development database)
 - PDO
 - Composer
 - Apache/XAMPP for development
-- HTML
-- CSS
-- Vanilla JavaScript
-- JavaScript fetch()
-- PHP JSON APIs
-- Chart.js through a shared SPMS chart layer
+- PHP REST JSON APIs
+
+Frontend (locked F0 direction — docs/11, docs/12):
+
+- React
+- Vite (frontend development/build tooling only)
+- Tailwind CSS
+- Motion
+- shadcn/ui where appropriate
+- Lucide Icons
+- Recharts initially (or another explicitly approved charting library)
+- React Router
+- Native fetch() through a centralized API client
+
+Architecture:
+
+React SPA
+→ centralized API client
+→ PHP REST API (/api/v1)
+→ application/domain/repository/integration layers
+→ MySQL / external providers
+
+Express is NOT permitted as the SPMS backend. Node.js is frontend
+development/build tooling only, never an application runtime for SPMS.
 
 Do NOT introduce:
 
-- React
 - Vue
 - Angular
 - Svelte
 - Node.js application servers
 - Express
-- Vite
-- unnecessary frontend frameworks
-- unnecessary backend frameworks
+- frontend or backend technologies outside the locked stack without
+  explicit owner approval
 
 Third-party PHP dependencies must be managed through Composer.
 
@@ -107,11 +127,15 @@ Third-party PHP dependencies must be managed through Composer.
 
 # 5. Architecture
 
-SPMS uses a lightweight modular MVC-like architecture.
+SPMS uses a lightweight modular MVC-like PHP backend behind a React SPA
+frontend (see docs/07_TECHNICAL_ARCHITECTURE.md and
+docs/11_FRONTEND_ARCHITECTURE.md).
 
-High-level flow:
+Backend flow:
 
-Browser
+Browser (React SPA)
+→ Central API client (fetch)
+→ REST API (/api/v1)
 → Front Controller
 → Router
 → Middleware
@@ -122,8 +146,7 @@ Browser
 → Service
 → Controller
 → JSON Response
-→ JavaScript
-→ UI
+→ React UI
 
 Core backend responsibilities:
 
@@ -182,7 +205,7 @@ Repositories and integrations must not depend on controllers.
 
 Controllers must not contain domain business logic.
 
-Frontend JavaScript must not become an alternative business-logic layer.
+React must not become an alternative business-logic layer.
 
 Avoid circular service dependencies.
 
@@ -216,6 +239,9 @@ config/
 database/
 ├── migrations/
 └── seeders/
+
+frontend/
+└── (React application — established at F1, see docs/11)
 
 public/
 ├── assets/
@@ -954,32 +980,53 @@ Minimize sensitive content in notifications.
 
 # 30. Frontend
 
-Frontend technology:
+Frontend technology (locked F0 direction — docs/11_FRONTEND_ARCHITECTURE.md,
+docs/12_FRONTEND_DESIGN_SYSTEM.md):
 
-- HTML
-- CSS
-- Vanilla JavaScript
-- fetch()
+- React
+- Vite (development/build tooling only)
+- Tailwind CSS constrained by the SPMS design system
+- Motion for purposeful animation
+- shadcn/ui where appropriate
+- Lucide Icons
+- Recharts initially
+- React Router for client-side navigation
+- native fetch() through a centralized API client
 
-JavaScript is responsible for:
+The frontend communicates with the PHP backend only through the
+REST JSON API (/api/v1/...) using the centralized API client.
 
-- interaction
+React is responsible for:
+
 - presentation
-- UI state
-- request handling
-- rendering
+- component/layout rendering
+- client-side UI state
+- interaction
+- API consumption
+- chart rendering
+- animation
+- accessibility behavior
 - presentation-only calculations
 
-JavaScript must NOT become authoritative for:
+React is an untrusted client and must NOT become authoritative for:
 
+- authentication truth
+- authorization
+- household/resource ownership
+- business rules
 - energy balance
 - cost calculations
 - prediction truth
 - recommendation truth
-- authorization
+- notification decisions
 - data quality
 - provenance
+- lifecycle state
 - operation completion
+
+The backend determines authentication, authorization, validation,
+ownership, analytical truth, quality, provenance, and operation
+status. Frontend route guards are navigation UX only.
 
 Backend confirmation determines authoritative state.
 
@@ -1024,19 +1071,18 @@ Do not invent unrelated visual systems.
 
 # 32. Charts
 
-Charts use:
-
-Chart.js
-
-through a shared SPMS chart layer.
+Charts use Recharts initially (or another explicitly approved charting
+library) through shared SPMS chart components, per the locked frontend
+direction (docs/11 §12, docs/12 §11–12).
 
 Pipeline:
 
 Authoritative analytical data
 → Analytics/Reporting
-→ graph-ready dataset
-→ shared SPMS chart layer
-→ Chart.js
+→ graph-ready semantic dataset
+→ React chart component
+→ shared SPMS chart components
+→ Recharts / approved chart library
 → UI
 
 Charts must preserve:
@@ -1413,7 +1459,10 @@ Do NOT:
 - silently retry forever
 - silently swallow failures
 - silently change locked architecture
-- introduce unnecessary frameworks
+- introduce frontend or backend technologies outside the locked stack
+  without explicit owner approval
+- use Express or any Node.js application server as the SPMS backend
+- move business logic, database access, or secrets into React
 - create duplicate documentation
 - commit secrets
 - commit unstable milestones

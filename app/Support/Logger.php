@@ -21,6 +21,7 @@ final class Logger
     private const SENSITIVE_FRAGMENTS = [
         'password',
         'passwd',
+        'pwd',
         'secret',
         'token',
         'credential',
@@ -33,6 +34,7 @@ final class Logger
         'access_key',
         'private_key',
         'x-amz',
+        'signature',
     ];
 
     /**
@@ -59,6 +61,33 @@ final class Logger
         }
 
         return false;
+    }
+
+    private static ?Logger $default = null;
+
+    public static function default(?string $basePath = null): self
+    {
+        if (self::$default !== null) {
+            return self::$default;
+        }
+
+        $dir = ($basePath ?? dirname(__DIR__, 2)) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'logs';
+        $level = 'debug';
+
+        try {
+            $level = Config::get('APP_LOG_LEVEL', 'debug') ?? 'debug';
+        } catch (\Throwable) {
+            // Config may not yet be initialized in some contexts.
+        }
+
+        self::$default = new self($dir, $level);
+
+        return self::$default;
+    }
+
+    public static function setDefault(?Logger $logger): void
+    {
+        self::$default = $logger;
     }
 
     private string $directory;
@@ -118,6 +147,12 @@ final class Logger
 
         @file_put_contents(
             $this->directory . DIRECTORY_SEPARATOR . 'app-' . gmdate('Y-m-d') . '.log',
+            $line . PHP_EOL,
+            FILE_APPEND | LOCK_EX
+        );
+
+        @file_put_contents(
+            $this->directory . DIRECTORY_SEPARATOR . 'app.log',
             $line . PHP_EOL,
             FILE_APPEND | LOCK_EX
         );

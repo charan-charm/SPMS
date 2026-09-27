@@ -307,6 +307,8 @@ final class BillDomainTest
                         QualityCode::SERVICE_NUMBER_MISMATCH,
                         QualityCode::SERVICE_NUMBER_MISSING,
                         QualityCode::HOUSEHOLD_SERVICE_NOT_CONFIGURED,
+                        QualityCode::INCOMPLETE_HISTORY,
+                        QualityCode::BILLING_GAP_PRECEDING,
                     ] as $code
                 ) {
                     Assert::true(QualityCode::isValid($code), $code);

@@ -23,8 +23,12 @@ final class ValidationStatus
 
     /** Reasons a check could not run; whitelisted so free text never persists. */
     public const REASON_MISSING_OPERANDS = 'MISSING_OPERANDS';
+    public const REASON_BEFORE_SOLAR_INSTALLATION = 'BEFORE_SOLAR_INSTALLATION';
 
-    public const REASONS = [self::REASON_MISSING_OPERANDS];
+    public const REASONS = [
+        self::REASON_MISSING_OPERANDS,
+        self::REASON_BEFORE_SOLAR_INSTALLATION,
+    ];
 
     public static function isValid(string $status): bool
     {
