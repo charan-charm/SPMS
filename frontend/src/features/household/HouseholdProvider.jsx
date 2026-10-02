@@ -4,6 +4,7 @@ import { householdApi } from '../../services/api/household'
 import { useAuth } from '../auth/useAuth'
 
 let householdBootstrapPromise = null
+let ensureDemoPromise = null
 
 export function HouseholdProvider({ children }) {
     const { isAuthenticated, status: authStatus } = useAuth()
@@ -19,6 +20,7 @@ export function HouseholdProvider({ children }) {
         }
 
         const promise = (async () => {
+            setStatus((prev) => (prev === 'loaded' ? 'loaded' : 'loading'))
             try {
                 const data = await householdApi.getHousehold()
                 setHousehold(data?.household ?? null)
@@ -79,14 +81,27 @@ export function HouseholdProvider({ children }) {
     }, [fetchHousehold])
 
     const ensureDemo = useCallback(async () => {
-        const result = await householdApi.ensureDemoHousehold()
-        if (result?.household) {
-            setHousehold(result.household)
-            setMembership(result.membership ?? null)
-            setReadiness(result.readiness ?? null)
-            setStatus('loaded')
+        if (ensureDemoPromise) {
+            return ensureDemoPromise
         }
-        return result
+
+        const promise = (async () => {
+            try {
+                const result = await householdApi.ensureDemoHousehold()
+                if (result?.household) {
+                    setHousehold(result.household)
+                    setMembership(result.membership ?? null)
+                    setReadiness(result.readiness ?? null)
+                    setStatus('loaded')
+                }
+                return result
+            } finally {
+                ensureDemoPromise = null
+            }
+        })()
+
+        ensureDemoPromise = promise
+        return promise
     }, [])
 
     const updateHousehold = useCallback(async (changes) => {

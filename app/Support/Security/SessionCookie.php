@@ -58,11 +58,29 @@ final class SessionCookie
      */
     public static function extractToken(?string $cookieHeader, ?string &$matchedName = null): ?string
     {
-        if ($cookieHeader === null || $cookieHeader === '') {
+        $tokens = self::extractTokens($cookieHeader);
+        if (empty($tokens)) {
             return null;
         }
 
+        $matchedName = array_key_first($tokens);
+        return $tokens[$matchedName];
+    }
+
+    /**
+     * Extract all matching session tokens from a Cookie request header.
+     *
+     * @param string|null $cookieHeader
+     * @return array<string, string> cookieName => token
+     */
+    public static function extractTokens(?string $cookieHeader): array
+    {
+        if ($cookieHeader === null || $cookieHeader === '') {
+            return [];
+        }
+
         $possibleNames = ['spms_session', 'spms_demo_session', 'spms_test_session'];
+        $tokens = [];
 
         foreach (explode(';', $cookieHeader) as $pair) {
             $parts = explode('=', trim($pair), 2);
@@ -71,14 +89,13 @@ final class SessionCookie
                 if (in_array($cookieName, $possibleNames, true)) {
                     $token = trim($parts[1]);
                     if ($token !== '') {
-                        $matchedName = $cookieName;
-                        return $token;
+                        $tokens[$cookieName] = $token;
                     }
                 }
             }
         }
 
-        return null;
+        return $tokens;
     }
 
     private static function build(string $rawToken, int $maxAge): string

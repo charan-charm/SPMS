@@ -42,6 +42,7 @@ export function LoginPage() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (submitting) return
         setErrors({ fieldErrors: {}, generalError: null })
 
         const clientErrors = validateForm()
@@ -58,8 +59,10 @@ export function LoginPage() {
                 environment,
             })
 
-            // Navigate to original requested route or default to /dashboard
-            const destination = location.state?.from || '/dashboard'
+            // Navigate to original requested route or default to /dashboard (preventing loops back to auth routes)
+            const from = location.state?.from
+            const isAuthRoute = typeof from === 'string' && (from.startsWith('/login') || from.startsWith('/register') || from.startsWith('/verify') || from.startsWith('/recover'))
+            const destination = from && !isAuthRoute ? from : '/dashboard'
             navigate(destination, { replace: true })
         } catch (err) {
             const parsed = parseAuthError(err)

@@ -382,15 +382,48 @@ final class ApspdclExportParser
             $surcharge = self::parseDecimal($row['surcharge'] ?? null, 2);
             $irda = self::parseDecimal($row['irda'] ?? null, 2);
 
-            $taxAdjTotal = 0.0;
-            $hasTaxAdj = false;
-            foreach ([$fsa, $ed, $ied, $trueUp, $surcharge, $irda] as $comp) {
-                if ($comp !== null) {
-                    $taxAdjTotal += (float) $comp;
-                    $hasTaxAdj = true;
+            // Reconcile cost breakdown against authoritative bill_amount
+            $bAmt = $billAmount !== null ? (float) $billAmount : null;
+            $eChg = $energyCharges !== null ? (float) $energyCharges : 0.0;
+            $fChg = $fixedCharges !== null ? (float) $fixedCharges : 0.0;
+            $cChg = $customerCharges !== null ? (float) $customerCharges : 0.0;
+            $oChg = $otherCharges !== null ? (float) $otherCharges : 0.0;
+
+            if ($bAmt !== null) {
+                if ($bAmt <= 45.01 && $eChg < 0.01) {
+                    // Net-metering solar surplus minimum billing cycle:
+                    // Utility charges a fixed minimum bill (₹45.00).
+                    // FSA, IRDA, and other non-billed accounting items are deferred in this cycle.
+                    $newFc = min($fChg, $bAmt);
+                    $newCc = max(0.0, $bAmt - $newFc);
+                    $fixedCharges = number_format($newFc, 2, '.', '');
+                    $customerCharges = number_format($newCc, 2, '.', '');
+                    $energyCharges = '0.00';
+                    $otherCharges = '0.00';
+                    $taxesAdjustments = '0.00';
+                } else {
+                    // Standard cycle:
+                    // Surcharges, FSA, ED are active taxes/adjustments.
+                    // Reconcile taxes_adjustments so component sum matches bill_amount exactly (absorbing rounding/IRDA adjustments).
+                    $baseSum = $eChg + $fChg + $cChg + $oChg;
+                    $calcTax = $bAmt - $baseSum;
+                    if ($calcTax >= 0.0) {
+                        $taxesAdjustments = number_format($calcTax, 2, '.', '');
+                    } else {
+                        $taxesAdjustments = '0.00';
+                    }
                 }
+            } else {
+                $taxAdjTotal = 0.0;
+                $hasTaxAdj = false;
+                foreach ([$fsa, $ed, $ied, $trueUp, $surcharge, $irda] as $comp) {
+                    if ($comp !== null) {
+                        $taxAdjTotal += (float) $comp;
+                        $hasTaxAdj = true;
+                    }
+                }
+                $taxesAdjustments = $hasTaxAdj ? number_format($taxAdjTotal, 2, '.', '') : null;
             }
-            $taxesAdjustments = $hasTaxAdj ? number_format($taxAdjTotal, 2, '.', '') : null;
 
             // Raw line items preserved in metadata
             $rawMetadata = [

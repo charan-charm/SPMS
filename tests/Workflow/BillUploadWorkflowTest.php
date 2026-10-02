@@ -218,9 +218,9 @@ final class BillUploadWorkflowTest
                 );
                 $statement->execute([]);
                 Assert::same(
-                    6 + count(\App\Domain\Bill\BillField::ALL),
+                    6 + count(\App\Domain\Bill\BillField::ALL) + 2,
                     (int) $statement->fetchColumn(),
-                    'bills carries exactly identity + the whitelist (§24: no schema creep)'
+                    'bills carries exactly identity + the whitelist (§24: no schema creep) + dedup_active_period + fingerprint'
                 );
             }),
 

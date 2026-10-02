@@ -6,6 +6,7 @@ namespace App\Domain\Forecast;
 
 use App\Domain\Energy\EnergyBalanceService;
 use App\Domain\Energy\EnergyCostService;
+use App\Domain\Forecast\ML\MLForecastService;
 use App\Domain\Forecast\Contracts\WeatherProviderInterface;
 use App\Integrations\Weather\FakeWeatherProvider;
 use App\Integrations\Weather\OpenMeteoGeocodingClient;
@@ -25,8 +26,8 @@ use InvalidArgumentException;
  * F3 — Forecasting Domain Service (docs/01 §13-15, docs/02 §2, docs/04 §16, docs/10 D-040, D-042).
  *
  * Primary coordinator for backend-authoritative solar and household electricity forecasting:
- * - Generates solar generation forecasts via SolarForecastModel.
- * - Generates consumption forecasts via ConsumptionForecastModel.
+ * - Generates solar generation forecasts via ML/Deterministic model ladder.
+ * - Generates consumption forecasts via ML/Deterministic model ladder.
  * - Produces aligned time-series projections.
  * - Evaluates projected energy balance via F4 (EnergyBalanceService) under PREDICTED/POTENTIAL semantics.
  * - Evaluates projected cost impact via F5 (EnergyCostService) with mandatory range factors.
@@ -37,6 +38,7 @@ final class ForecastService
 {
     private SolarForecastModel $solarModel;
     private ConsumptionForecastModel $consumptionModel;
+    private MLForecastService $mlService;
     private EnergyBalanceService $energyBalanceService;
     private EnergyCostService $energyCostService;
     private ForecastRepository $forecastRepository;
@@ -56,7 +58,8 @@ final class ForecastService
         ?EnergyBalanceService $energyBalanceService = null,
         ?EnergyCostService $energyCostService = null,
         ?HouseholdRepository $households = null,
-        ?OpenMeteoGeocodingClient $geocoding = null
+        ?OpenMeteoGeocodingClient $geocoding = null,
+        ?MLForecastService $mlService = null
     ) {
         $this->solarReadings = $solarReadings ?? new SolarReadingRepository();
         $this->bills = $bills ?? new BillRepository();
@@ -88,6 +91,13 @@ final class ForecastService
             $this->bills
         );
         $this->consumptionModel = new ConsumptionForecastModel($this->bills, $this->solarReadings);
+        $this->mlService = $mlService ?? new MLForecastService(
+            $this->solarReadings,
+            $this->weather,
+            $this->bills,
+            $this->households,
+            $this->geocoding
+        );
     }
 
     /**
@@ -142,13 +152,26 @@ final class ForecastService
 
         $solarConn = $this->solarConnections->findByHouseholdId($householdId);
 
-        // 1. Generate Solar Forecast
-        $solarSnapshot = $this->solarModel->generate($householdId, $validHorizon, $refTime, $solarConn);
+        // 1. Generate Solar Forecast via ML Service (with automatic baseline comparison & fallback)
+        $solarResult = $this->mlService->generateSolarForecast(
+            $householdId,
+            $validHorizon,
+            $refTime,
+            $solarConn,
+            $this->solarModel
+        );
+        $solarSnapshot = $solarResult['snapshot'];
 
-        // 2. Generate Consumption Forecast
-        $consumptionSnapshot = $this->consumptionModel->generate($householdId, $validHorizon, $refTime);
+        // 2. Generate Consumption Forecast via ML Service (with automatic baseline comparison & fallback)
+        $consumptionResult = $this->mlService->generateConsumptionForecast(
+            $householdId,
+            $validHorizon,
+            $refTime,
+            $this->consumptionModel
+        );
+        $consumptionSnapshot = $consumptionResult['snapshot'];
 
-        // 3. F4 Integration: Evaluate Projected Energy Balance
+        // 3. F4 Integration: Evaluate Projected Energy Balance (F4 remains sole authority for balance classification)
         $energyBalance = $this->evaluateEnergyBalance($solarSnapshot, $consumptionSnapshot, $householdId);
 
         // 4. F5 Integration: Evaluate Projected Energy Cost
@@ -160,10 +183,19 @@ final class ForecastService
             $consumptionSnapshot->timeSeriesPoints()
         );
 
-        // 6. Aggregate All Limitations
+        // 6. Aggregate All Limitations including structured fallback reasons
+        $fallbackLimitations = [];
+        if ($solarResult['fallback_reason'] !== null) {
+            $fallbackLimitations[] = 'Solar forecasting: ' . $solarResult['fallback_reason'];
+        }
+        if ($consumptionResult['fallback_reason'] !== null && $consumptionResult['status'] !== 'FORECAST_UNAVAILABLE') {
+            $fallbackLimitations[] = 'Consumption forecasting: ' . $consumptionResult['fallback_reason'];
+        }
+
         $allLimitations = array_values(array_unique(array_merge(
             $solarSnapshot->limitations(),
-            $consumptionSnapshot->limitations()
+            $consumptionSnapshot->limitations(),
+            $fallbackLimitations
         )));
 
         // 7. Combined Confidence (worst-of rule)
@@ -172,6 +204,13 @@ final class ForecastService
             $consumptionSnapshot->confidence()
         );
 
+        // 8. Overall forecast source resolution
+        $solarSource = $solarResult['forecast_source'];
+        $consumptionSource = $consumptionResult['forecast_source'];
+        $forecastSource = ($solarSource === 'ML' && $consumptionSource === 'ML')
+            ? 'ML'
+            : (($solarSource === 'ML' || $consumptionSource === 'ML') ? 'HYBRID_ML' : 'DETERMINISTIC');
+
         $household = $this->households->findById($householdId);
         $householdTz = $household?->timezone() ?? 'Asia/Kolkata';
 
@@ -179,6 +218,7 @@ final class ForecastService
             'household_id' => $householdId,
             'horizon' => $validHorizon,
             'period' => $solarSnapshot->period(),
+            'forecast_source' => $forecastSource,
             'combined_confidence' => $combinedConfidence,
             'solar_forecast' => $solarSnapshot->toArray(),
             'consumption_forecast' => $consumptionSnapshot->toArray(),
@@ -187,6 +227,27 @@ final class ForecastService
             'time_series' => $mergedTimeSeries,
             'limitations' => $allLimitations,
             'weather' => $solarSnapshot->provenance()['weather'] ?? null,
+            'ml_provenance' => [
+                'forecast_source' => $forecastSource,
+                'solar' => [
+                    'source' => $solarSource,
+                    'status' => $solarResult['status'],
+                    'fallback_reason' => $solarResult['fallback_reason'],
+                    'model' => $solarSnapshot->provenance()['model_name'] ?? $solarSnapshot->provenance()['model_version'] ?? 'DETERMINISTIC',
+                    'mae' => $solarResult['evaluation']['mae'] ?? null,
+                    'rmse' => $solarResult['evaluation']['rmse'] ?? null,
+                    'baseline_mae' => $solarResult['evaluation']['baseline_mae'] ?? null,
+                ],
+                'consumption' => [
+                    'source' => $consumptionSource,
+                    'status' => $consumptionResult['status'],
+                    'fallback_reason' => $consumptionResult['fallback_reason'],
+                    'model' => $consumptionSnapshot->provenance()['model_name'] ?? $consumptionSnapshot->provenance()['model_version'] ?? 'DETERMINISTIC',
+                    'mae' => $consumptionResult['evaluation']['mae'] ?? null,
+                    'rmse' => $consumptionResult['evaluation']['rmse'] ?? null,
+                    'baseline_mae' => $consumptionResult['evaluation']['baseline_mae'] ?? null,
+                ],
+            ],
             'data_nature' => ($solarSnapshot->dataNature() === ForecastSnapshot::NATURE_SIMULATED || $consumptionSnapshot->dataNature() === ForecastSnapshot::NATURE_SIMULATED)
                 ? ForecastSnapshot::NATURE_SIMULATED
                 : ForecastSnapshot::NATURE_PREDICTED,
@@ -195,7 +256,7 @@ final class ForecastService
             'generated_at' => $refTime->format('Y-m-d\TH:i:s\Z'),
         ];
 
-        // 8. Persist to repository
+        // 9. Persist to repository
         $this->forecastRepository->save([
             'id' => self::uuid(),
             'household_id' => $householdId,
@@ -215,8 +276,13 @@ final class ForecastService
             'points_json' => json_encode($payload, JSON_THROW_ON_ERROR),
             'limitations_json' => json_encode($allLimitations, JSON_THROW_ON_ERROR),
             'provenance_json' => json_encode([
+                'forecast_source' => $forecastSource,
                 'solar' => $solarSnapshot->provenance(),
                 'consumption' => $consumptionSnapshot->provenance(),
+                'solar_status' => $solarResult['status'],
+                'consumption_status' => $consumptionResult['status'],
+                'solar_fallback_reason' => $solarResult['fallback_reason'],
+                'consumption_fallback_reason' => $consumptionResult['fallback_reason'],
             ], JSON_THROW_ON_ERROR),
             'created_at' => $refTime->format('Y-m-d H:i:s'),
         ]);

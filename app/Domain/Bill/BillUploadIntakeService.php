@@ -6,6 +6,7 @@ namespace App\Domain\Bill;
 
 use App\Domain\Account\Account;
 use App\Domain\Household\HouseholdService;
+use App\Repositories\BillRepository;
 use App\Repositories\BillTempDocumentRepository;
 use App\Services\Files\BillStorageException;
 use App\Services\Files\BillTemporaryStorageInterface;
@@ -42,7 +43,8 @@ final class BillUploadIntakeService
     public function __construct(
         private readonly BillTempDocumentRepository $tempDocs = new BillTempDocumentRepository(),
         private readonly BillTemporaryStorageInterface $storage = new LocalPrivateBillStorage(),
-        private readonly HouseholdService $households = new HouseholdService()
+        private readonly HouseholdService $households = new HouseholdService(),
+        private readonly BillRepository $bills = new BillRepository()
     ) {
     }
 
@@ -61,8 +63,37 @@ final class BillUploadIntakeService
             );
         }
 
+        $fingerprint = $upload->fingerprint();
+
+        // Level 1 — Exact File Duplicate Detection BEFORE external OCR/storage
+        $existing = $this->bills->findRecordedByFingerprint($householdId, $fingerprint);
+        if ($existing !== null) {
+            $start = $existing->value(BillField::BILLING_PERIOD_START);
+            $end = $existing->value(BillField::BILLING_PERIOD_END);
+            $monthLabel = null;
+            if ($end !== null) {
+                $monthLabel = date('F Y', strtotime($end));
+            }
+
+            throw new AppException(
+                'DUPLICATE_BILL_FILE',
+                $monthLabel !== null
+                    ? "{$monthLabel} bill is already recorded for your household."
+                    : 'This bill file is already recorded for your household.',
+                409,
+                [
+                    'duplicate_type' => 'FILE',
+                    'existing_bill_id' => $existing->id(),
+                    'billing_period_start' => $start,
+                    'billing_period_end' => $end,
+                    'month_label' => $monthLabel,
+                    'status' => $existing->status(),
+                ]
+            );
+        }
+
         try {
-            $bill = Bill::create($householdId, null, null, $now);
+            $bill = Bill::create($householdId, null, null, $now, $fingerprint);
             $temp = BillTempDocument::create(
                 $bill->id(),
                 $upload->mimeType(),

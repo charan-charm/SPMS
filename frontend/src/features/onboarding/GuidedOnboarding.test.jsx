@@ -152,6 +152,12 @@ describe('F11 Guided Onboarding Flow', () => {
         )
 
         expect(screen.getByText(/guided setup — step 2 of 5/i)).toBeInTheDocument()
+        expect(
+            screen.getByText(/add your electricity consumer id to help verify uploaded bills and keep billing records linked to your household/i),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/matches uploaded electricity bills to your household and prevents duplicate or foreign statements/i),
+        ).toBeInTheDocument()
 
         // Skip to Step 3
         const skipBtn = screen.getByRole('button', { name: /skip for now/i })
@@ -160,6 +166,9 @@ describe('F11 Guided Onboarding Flow', () => {
         await waitFor(() => {
             expect(screen.getByText(/guided setup — step 3 of 5/i)).toBeInTheDocument()
             expect(screen.getByRole('heading', { name: /goodwe solar inverter connection/i })).toBeInTheDocument()
+            expect(
+                screen.getByText(/connect your goodwe inverter to bring live solar generation data into spms and support solar forecasting/i),
+            ).toBeInTheDocument()
         })
     })
 
@@ -179,6 +188,9 @@ describe('F11 Guided Onboarding Flow', () => {
         )
 
         expect(screen.getByText(/goodwe connection can be completed later/i)).toBeInTheDocument()
+        expect(
+            screen.getByText(/connect your goodwe inverter to bring live solar generation data into spms and support solar forecasting/i),
+        ).toBeInTheDocument()
         expect(screen.getByTestId('solar-connect-form')).toBeInTheDocument()
 
         // Skip Step 3 to advance to Step 4

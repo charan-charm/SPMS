@@ -180,6 +180,42 @@ body {
 }
 
 /*
+ * Global input focus reset — eliminates the browser-default blue outline
+ * that appears on focused inputs/textareas/selects in Chrome and Firefox.
+ *
+ * Strategy: suppress the UA outline unconditionally, then re-apply it as
+ * a green SPMS-primary ring on :focus-visible only (keyboard nav).
+ * Mouse/pointer focus gets the border colour change from component classes.
+ */
+input,
+textarea,
+select,
+button {
+    outline: none;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+    outline: none;
+}
+
+/* Keyboard-navigation focus indicator: visible, on-brand green ring */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline: 2px solid var(--spms-primary);
+    outline-offset: 1px;
+}
+
+/* Buttons keep focus-visible handled by component classes (focus-visible:outline-focus) */
+button:focus-visible {
+    outline: 2px solid var(--spms-primary);
+    outline-offset: 2px;
+}
+
+
+/*
  * Decorative leaf watermark (owner-requested visual refinement) —
  * presentation-only opacity/visibility control for LeafBackdrop. Uses
  * the existing theme tokens; no design-token values are changed.
@@ -431,6 +467,36 @@ body {
 
     to {
         transform: translateX(0);
+    }
+}
+
+@keyframes spms-fade-out {
+    from {
+        opacity: 1;
+    }
+
+    to {
+        opacity: 0;
+    }
+}
+
+@keyframes spms-slide-in-right {
+    from {
+        transform: translateX(100%);
+    }
+
+    to {
+        transform: translateX(0);
+    }
+}
+
+@keyframes spms-slide-out-right {
+    from {
+        transform: translateX(0);
+    }
+
+    to {
+        transform: translateX(100%);
     }
 }
 

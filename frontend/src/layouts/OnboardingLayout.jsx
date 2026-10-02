@@ -43,7 +43,7 @@ export function OnboardingLayout() {
             <LeafBackdrop variant="onboarding" />
 
             {/* Centered content shell — matching AuthLayout rhythm with comfortable breathing room */}
-            <div className="relative z-10 w-full max-w-lg">
+            <div className="relative z-10 w-full max-w-lg sm:max-w-xl">
                 <header className="mb-6 flex items-center justify-between">
                     <Link to="/" aria-label="SPMS home" className="inline-flex">
                         <BrandMark variant="full" height={32} />

@@ -297,6 +297,92 @@ final class EnvironmentIsolationTest
                     Database::switchTo('test');
                 }
             }),
+
+            TestResult::check('Coexisting REAL and DEMO cookies: AuthMiddleware prioritizes and resolves DEMO session for demo requests', function (): void {
+                $testEmail = 'iso_multi_cookie_' . bin2hex(random_bytes(4)) . '@test.spms.local';
+                $password = 'Password123!Safe';
+                $testIp = '10.88.99.100';
+
+                Database::switchTo('demo');
+                $pdoDemo = new PDO('mysql:host=127.0.0.1;dbname=spms_demo', 'root', '');
+                try {
+                    $demoService = new AccountService();
+                    $demoService->register($testEmail, $password, $testIp);
+                    $repo = new AccountRepository();
+                    $account = $repo->findByEmail($testEmail);
+                    $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+                    $active = $account->withStatus(Account::STATUS_ACTIVE, $now->format('Y-m-d H:i:s'), $now);
+                    $repo->updateStatus($active);
+
+                    $sessionService = new SessionService();
+                    $sessionData = $sessionService->start($active->id());
+                    $demoToken = $sessionData['raw_token'];
+                    $csrfToken = $sessionData['csrf_token'];
+
+                    // 1. Simulate browser with stale REAL cookie followed by valid DEMO cookie on /api/v1/household/demo/ensure
+                    $reqDemoEndpoint = \App\Support\Request::create(
+                        method: 'POST',
+                        path: '/api/v1/household/demo/ensure',
+                        headers: [
+                            'cookie' => 'spms_session=stale_real_cookie_12345; spms_demo_session=' . $demoToken,
+                            'x-spms-csrf' => $csrfToken,
+                        ],
+                        ipAddress: $testIp
+                    );
+
+                    $processed = \App\Security\AuthMiddleware::process($reqDemoEndpoint);
+                    Assert::true($processed->authContext()?->isAuthenticated(), 'DEMO request with coexisting cookies must authenticate');
+                    Assert::same($active->id(), $processed->authContext()->account()->id());
+                    Assert::same('demo', Database::currentProfile());
+
+                    // 2. Simulate browser with stale REAL cookie followed by valid DEMO cookie with X-SPMS-Environment: DEMO
+                    $reqWithHeader = \App\Support\Request::create(
+                        method: 'GET',
+                        path: '/api/v1/household',
+                        headers: [
+                            'cookie' => 'spms_session=stale_real_cookie_12345; spms_demo_session=' . $demoToken,
+                            'x-spms-environment' => 'DEMO',
+                        ],
+                        ipAddress: $testIp
+                    );
+
+                    $processedHeader = \App\Security\AuthMiddleware::process($reqWithHeader);
+                    Assert::true($processedHeader->authContext()?->isAuthenticated(), 'Request with DEMO header and coexisting cookies must authenticate');
+                    Assert::same($active->id(), $processedHeader->authContext()->account()->id());
+                    Assert::same('demo', Database::currentProfile());
+
+                    // 3. Fallback: if no DEMO indicator is present, but REAL cookie is invalid while DEMO cookie is valid, DEMO session resolves
+                    $reqFallback = \App\Support\Request::create(
+                        method: 'GET',
+                        path: '/api/v1/auth/session',
+                        headers: [
+                            'cookie' => 'spms_session=stale_real_cookie_12345; spms_demo_session=' . $demoToken,
+                        ],
+                        ipAddress: $testIp
+                    );
+
+                    $processedFallback = \App\Security\AuthMiddleware::process($reqFallback);
+                    Assert::true($processedFallback->authContext()?->isAuthenticated(), 'Fallback to valid DEMO cookie when REAL cookie fails');
+                    Assert::same($active->id(), $processedFallback->authContext()->account()->id());
+                    Assert::same('demo', Database::currentProfile());
+
+                    // 4. Unauthenticated request without valid tokens stays anonymous
+                    $reqAnon = \App\Support\Request::create(
+                        method: 'POST',
+                        path: '/api/v1/household/demo/ensure',
+                        headers: [
+                            'cookie' => 'spms_session=invalid1; spms_demo_session=invalid2',
+                        ],
+                        ipAddress: $testIp
+                    );
+                    $processedAnon = \App\Security\AuthMiddleware::process($reqAnon);
+                    Assert::false($processedAnon->authContext()?->isAuthenticated(), 'Invalid cookies must stay anonymous');
+
+                } finally {
+                    $pdoDemo->prepare('DELETE FROM accounts WHERE email = :email')->execute(['email' => $testEmail]);
+                    Database::switchTo('test');
+                }
+            }),
         ];
     }
 }

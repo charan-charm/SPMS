@@ -32,7 +32,7 @@ const STEPS = [
     { id: 5, title: 'Finish', short: 'Finish', icon: CheckCircle2 },
 ]
 
-export function GuidedOnboarding({ onComplete }) {
+export function GuidedOnboarding({ onComplete, isInspection = false }) {
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
     const { household, hasHousehold, createHousehold, updateHousehold, readiness, refreshHousehold } = useHousehold()
@@ -42,16 +42,16 @@ export function GuidedOnboarding({ onComplete }) {
     const validInitialStep = !isNaN(initialStepParam) && initialStepParam >= 1 && initialStepParam <= 5 ? initialStepParam : 1
     const [currentStep, setCurrentStep] = useState(validInitialStep)
 
-    // Step 1: Household form fields
-    const [label, setLabel] = useState(household?.label || '')
-    const [locationLabel, setLocationLabel] = useState(household?.location_label || '')
-    const [timezone, setTimezone] = useState(household?.timezone || 'Asia/Kolkata')
+    // Step 1: Household form fields (clean blank start in inspection mode)
+    const [label, setLabel] = useState(isInspection ? '' : (household?.label || ''))
+    const [locationLabel, setLocationLabel] = useState(isInspection ? '' : (household?.location_label || ''))
+    const [timezone, setTimezone] = useState(isInspection ? 'Asia/Kolkata' : (household?.timezone || 'Asia/Kolkata'))
 
     // Step 2: Service number
-    const [serviceNumber, setServiceNumber] = useState(household?.service_number || '')
+    const [serviceNumber, setServiceNumber] = useState(isInspection ? '' : (household?.service_number || ''))
 
     // Step 3: Solar status
-    const [solarConnected, setSolarConnected] = useState(readiness?.solar === 'CONNECTED')
+    const [solarConnected, setSolarConnected] = useState(!isInspection && readiness?.solar === 'CONNECTED')
     const [solarInverterSn, setSolarInverterSn] = useState(null)
 
     // Step 4: Bills status
@@ -69,7 +69,7 @@ export function GuidedOnboarding({ onComplete }) {
     // Check solar status on mount or step 3
     useEffect(() => {
         let mounted = true
-        if (hasHousehold) {
+        if (hasHousehold && !isInspection) {
             solarApi.getStatus().then((res) => {
                 if (!mounted) return
                 if (res?.connected) {
@@ -81,12 +81,12 @@ export function GuidedOnboarding({ onComplete }) {
         return () => {
             mounted = false
         }
-    }, [hasHousehold, currentStep])
+    }, [hasHousehold, currentStep, isInspection])
 
     // Check bills count on mount or step 4
     useEffect(() => {
         let mounted = true
-        if (hasHousehold) {
+        if (hasHousehold && !isInspection) {
             listBills().then((res) => {
                 if (!mounted) return
                 if (Array.isArray(res?.data?.bills)) {
@@ -97,14 +97,21 @@ export function GuidedOnboarding({ onComplete }) {
         return () => {
             mounted = false
         }
-    }, [hasHousehold, currentStep])
+    }, [hasHousehold, currentStep, isInspection])
 
     const goToStep = useCallback((stepNumber) => {
         setErrors({})
         setGeneralError(null)
         setCurrentStep(stepNumber)
-        setSearchParams({ step: String(stepNumber), continue: 'true' })
-    }, [setSearchParams])
+        const params = new URLSearchParams(searchParams)
+        params.set('step', String(stepNumber))
+        if (isInspection) {
+            params.set('preview', 'demo')
+        } else {
+            params.set('continue', 'true')
+        }
+        setSearchParams(params)
+    }, [setSearchParams, searchParams, isInspection])
 
     // --- STEP 1: Save Household Details ---
     const handleStep1Submit = async (e) => {
@@ -116,6 +123,12 @@ export function GuidedOnboarding({ onComplete }) {
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors)
+            return
+        }
+
+        // In inspection mode, advance locally without mutating database
+        if (isInspection) {
+            goToStep(2)
             return
         }
 
@@ -153,6 +166,12 @@ export function GuidedOnboarding({ onComplete }) {
             return
         }
 
+        // In inspection mode, advance locally without mutating database
+        if (isInspection) {
+            goToStep(3)
+            return
+        }
+
         setIsSubmitting(true)
         setGeneralError(null)
 
@@ -178,7 +197,9 @@ export function GuidedOnboarding({ onComplete }) {
         if (connection?.inverter_sn) {
             setSolarInverterSn(connection.inverter_sn)
         }
-        refreshHousehold().catch(() => {})
+        if (!isInspection) {
+            refreshHousehold().catch(() => {})
+        }
         goToStep(4)
     }
 
@@ -223,13 +244,38 @@ export function GuidedOnboarding({ onComplete }) {
 
     return (
         <div className="w-full space-y-6">
+            {/* DEMO / TEST Inspection Mode Banner */}
+            {isInspection && (
+                <div
+                    role="status"
+                    className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-xl border border-chart-demo/40 bg-chart-demo/10 px-4 py-3 text-xs text-chart-demo shadow-sm"
+                >
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-chart-demo/50 bg-chart-demo/20 px-2.5 py-0.5 font-semibold text-[10px] uppercase tracking-wider">
+                            DEMO / TEST MODE
+                        </span>
+                        <span className="font-semibold text-heading">Onboarding Inspection Preview</span>
+                        <span className="text-muted hidden md:inline">
+                            — Walking through the fresh 5-step setup flow. Real accounts and households are unaffected.
+                        </span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleExitToDashboard}
+                        className="text-[11px] font-medium text-chart-demo hover:underline cursor-pointer shrink-0"
+                    >
+                        Exit to Dashboard
+                    </button>
+                </div>
+            )}
+
             {/* 5-Step Guided Stepper Header */}
             <div className="rounded-xl border border-border bg-surface p-4 shadow-1">
                 <div className="mb-3 flex items-center justify-between text-xs">
                     <span className="font-semibold uppercase tracking-wider text-muted">
                         Guided Setup — Step {currentStep} of {STEPS.length}
                     </span>
-                    {hasHousehold && (
+                    {(hasHousehold || isInspection) && (
                         <button
                             type="button"
                             onClick={handleExitToDashboard}
@@ -246,7 +292,7 @@ export function GuidedOnboarding({ onComplete }) {
                         const Icon = step.icon
                         const isCompleted = step.id < currentStep
                         const isCurrent = step.id === currentStep
-                        const isUnlocked = isCompleted || isCurrent || hasHousehold
+                        const isUnlocked = isInspection || isCompleted || isCurrent || hasHousehold
 
                         return (
                             <button
@@ -441,7 +487,7 @@ export function GuidedOnboarding({ onComplete }) {
                             Electricity Utility Service
                         </CardTitle>
                         <CardDescription className="text-sm text-muted">
-                            Provide your utility consumer identification to enable automatic statement verification and billing gap audits.
+                            Add your electricity consumer ID to help verify uploaded bills and keep billing records linked to your household.
                         </CardDescription>
                     </CardHeader>
 
@@ -463,7 +509,7 @@ export function GuidedOnboarding({ onComplete }) {
                                     disabled={isSubmitting}
                                 />
                                 <p className="text-[11px] text-muted">
-                                    Found on your APSPDCL electricity bill. Used to cross-match and verify your uploaded bills.
+                                    Found on your APSPDCL electricity bill. Used to match uploaded electricity bills to your household.
                                 </p>
                                 {errors.service_number && (
                                     <p role="alert" className="text-xs text-danger">{errors.service_number}</p>
@@ -476,7 +522,7 @@ export function GuidedOnboarding({ onComplete }) {
                                     <span>Why is this needed?</span>
                                 </div>
                                 <p className="text-[11px] leading-relaxed">
-                                    SPMS audits tariffs against the official APSPDCL rate schedule. Linking your consumer ID ensures that extracted bills belong exclusively to your residence and prevents duplicate or foreign bill uploads.
+                                    Adding your consumer ID matches uploaded electricity bills to your household and prevents duplicate or foreign statements, supporting accurate tariff evaluation and billing analysis.
                                 </p>
                             </div>
                         </CardContent>
@@ -534,7 +580,7 @@ export function GuidedOnboarding({ onComplete }) {
                             GoodWe Solar Inverter Connection
                         </CardTitle>
                         <CardDescription className="text-sm text-muted">
-                            Link your GoodWe inverter to stream live daylight generation and power automated solar forecasting.
+                            Connect your GoodWe inverter to bring live solar generation data into SPMS and support solar forecasting.
                         </CardDescription>
                     </CardHeader>
 

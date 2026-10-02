@@ -179,12 +179,16 @@ final class BillVerificationApiTest
                 $billService = new BillService();
                 $billService->verify($fixture['account'], $bill1->id(), self::now(), false);
 
-                // Second bill covering the EXACT SAME period
-                $billDup = self::createBillWithDraft($fixture['household_id'], '2024-01-01', '2024-01-31', '10002000300');
+                // Second bill covering a different period initially
+                $billDup = self::createBillWithDraft($fixture['household_id'], '2024-02-01', '2024-02-28', '10002000300');
 
+                // Attempting to change billDup to the exact same period as bill1 is rejected with 409
                 try {
-                    $req = AuthTesting::authed(Request::create('POST', '/api/v1/bills/' . $billDup->id() . '/verify', body: ['accept_gap' => true]), $fixture['account']);
-                    self::controller()->verify($req);
+                    $req = AuthTesting::authed(Request::create('PATCH', '/api/v1/bills/' . $billDup->id(), body: [
+                        'billing_period_start' => '2024-01-01',
+                        'billing_period_end' => '2024-01-31',
+                    ]), $fixture['account']);
+                    self::controller()->update($req);
                     Assert::true(false, 'Expected 409 DUPLICATE_BILL_PERIOD');
                 } catch (AppException $e) {
                     Assert::same('DUPLICATE_BILL_PERIOD', $e->errorCode());

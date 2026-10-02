@@ -372,14 +372,16 @@ export function EnergyCostPage() {
 
     return (
         <div className="mx-auto flex max-w-6xl flex-col gap-6">
-            <div>
-                <h1 className="font-display text-2xl font-semibold text-heading">Cost</h1>
-                <p className="mt-1 text-sm text-muted">
-                    Understand the estimated cost impact of your predicted energy position. Historical
-                    verified cost stays strictly separate and is unavailable until verified bill records
-                    exist. The backend computes every number; a potential deficit is never a measured
-                    grid import.
-                </p>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h1 className="font-display text-2xl font-semibold text-heading">Cost</h1>
+                    <p className="mt-1 text-sm text-muted">
+                        Understand the estimated cost impact of your predicted energy position. Historical
+                        verified cost stays strictly separate and is unavailable until verified bill records
+                        exist. The backend computes every number; a potential deficit is never a measured
+                        grid import.
+                    </p>
+                </div>
             </div>
 
             {phase === 'loading' && <LoadingState label="Loading cost analysis" />}

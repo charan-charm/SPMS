@@ -216,17 +216,19 @@ export function SolarPage() {
         <div className="max-w-5xl mx-auto space-y-6 px-4 py-8">
             {/* ── Page Header ────────────────────────────────────────────── */}
             <div>
-                <div className="flex items-start gap-3">
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 mt-0.5">
-                        <Sun className="size-5" />
-                    </div>
-                    <div>
-                        <h1 className="font-display text-2xl font-bold text-heading tracking-tight leading-tight">
-                            Solar Telemetry
-                        </h1>
-                        <p className="text-sm text-muted mt-1 leading-snug">
-                            High-precision GoodWe inverter integration and live rooftop generation.
-                        </p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex items-start gap-3">
+                        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 mt-0.5">
+                            <Sun className="size-5" />
+                        </div>
+                        <div>
+                            <h1 className="font-display text-2xl font-bold text-heading tracking-tight leading-tight">
+                                Solar Telemetry
+                            </h1>
+                            <p className="text-sm text-muted mt-1 leading-snug">
+                                High-precision GoodWe inverter integration and live rooftop generation.
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>

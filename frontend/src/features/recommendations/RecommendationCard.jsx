@@ -46,7 +46,7 @@ const TYPE_ICON = {
     DATA_LIMITATION: AlertCircle,
 }
 
-export function RecommendationCard({ recommendation, onDismiss, isDismissing = false }) {
+export function RecommendationCard({ recommendation, onDismiss, isDismissing = false, compact = false }) {
     const [expanded, setExpanded] = useState(false)
     const detailsId = useId()
 
@@ -79,6 +79,168 @@ export function RecommendationCard({ recommendation, onDismiss, isDismissing = f
     const energyKwh = impact?.energy_kwh ?? impact?.kwh ?? null
 
     const isSecondary = type === 'EVENING_DEFICIT_PREPARATION' || type === 'AVOID_DEFICIT_WINDOW'
+
+    if (compact) {
+        return (
+            <Card className={cn(
+                'relative overflow-hidden transition-all duration-200 border-border hover:border-primary/40',
+                isSecondary && 'bg-surface/60 hover:border-amber-500/30'
+            )}>
+                <CardContent className="p-4 sm:p-5 flex flex-col gap-3">
+                    {/* Header: Icon + Title + Priority/Confidence Badges + Dismiss */}
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-2.5 min-w-0">
+                            <div className={cn(
+                                'mt-0.5 rounded-lg border p-1.5 shrink-0',
+                                isSecondary
+                                    ? 'border-amber-500/20 bg-amber-500/10 text-amber-500'
+                                    : 'border-primary/20 bg-primary-soft text-primary'
+                            )}>
+                                <Icon className="size-4" aria-hidden="true" />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                    <h3 className="text-sm font-semibold text-heading truncate sm:text-base">
+                                        {title}
+                                    </h3>
+                                    {isSecondary && (
+                                        <span className="rounded bg-surface-alt px-1.5 py-0.5 text-[10px] font-medium text-muted uppercase">
+                                            Secondary
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+                                    <span className={cn('rounded-full border px-2 py-0.5 font-medium uppercase text-[10px]', priorityClass)}>
+                                        {priority} PRIORITY
+                                    </span>
+                                    {confidence && (
+                                        <span className={cn('rounded-full border px-2 py-0.5 font-semibold uppercase text-[10px]', CONFIDENCE_BADGE[confidence] ?? CONFIDENCE_BADGE.LOW)}>
+                                            {confidence} CONFIDENCE
+                                        </span>
+                                    )}
+                                    {data_nature && <DataNatureBadge nature={data_nature} />}
+                                    {timing_window && (
+                                        <span className="flex items-center gap-1 font-medium text-muted">
+                                            <Clock className="size-3 text-primary" aria-hidden="true" />
+                                            {timing_window}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {is_actionable && onDismiss && (
+                            <Button
+                                variant="tertiary"
+                                size="sm"
+                                onClick={() => onDismiss(id)}
+                                disabled={isDismissing}
+                                className="text-xs text-muted hover:text-danger shrink-0"
+                                aria-label={`Dismiss recommendation: ${title}`}
+                            >
+                                <X className="size-3.5 mr-1" aria-hidden="true" />
+                                <span>{isDismissing ? 'Dismissing...' : 'Dismiss'}</span>
+                            </Button>
+                        )}
+                    </div>
+
+                    {/* Short actionable summary */}
+                    <div className={cn(
+                        'rounded-lg border p-3 text-xs sm:text-sm',
+                        isSecondary
+                            ? 'border-amber-500/20 bg-amber-500/5 text-body'
+                            : 'border-primary/20 bg-primary-soft/50 text-primary-active'
+                    )}>
+                        <p className="flex items-start gap-2 font-medium">
+                            <CheckCircle2 className={cn(
+                                'mt-0.5 size-4 shrink-0',
+                                isSecondary ? 'text-amber-500' : 'text-primary'
+                            )} aria-hidden="true" />
+                            <span>{action}</span>
+                        </p>
+                    </div>
+
+                    {/* Potential opportunity note */}
+                    {energyKwh != null && (
+                        <div className="flex items-center justify-between text-xs text-muted px-1">
+                            <span>Potential solar self-consumption opportunity:</span>
+                            <span className="font-semibold text-heading">≈{Number(energyKwh).toFixed(1)} kWh</span>
+                        </div>
+                    )}
+
+                    {/* Expandable Reasoning / Technical Evidence */}
+                    <div className="border-t border-border/60 pt-2">
+                        <button
+                            type="button"
+                            onClick={() => setExpanded((prev) => !prev)}
+                            aria-expanded={expanded}
+                            aria-controls={detailsId}
+                            className="flex w-full cursor-pointer items-center justify-between text-xs font-medium text-muted hover:text-heading focus:outline-none"
+                        >
+                            <span className="flex items-center gap-1.5">
+                                <Database className="size-3.5 text-primary" aria-hidden="true" />
+                                {expanded ? 'Hide evidence & reasoning' : 'Why this recommendation? · View evidence & reasoning'}
+                            </span>
+                            <ChevronDown
+                                className={cn('size-4 text-muted transition-transform duration-200', expanded && 'rotate-180')}
+                                aria-hidden="true"
+                            />
+                        </button>
+
+                        <div
+                            id={detailsId}
+                            className={cn(
+                                'mt-2 space-y-2.5 rounded-md border border-border/80 bg-surface-alt p-3 text-xs',
+                                !expanded && 'hidden'
+                            )}
+                        >
+                            {/* Plain-English Explanation / Rationale */}
+                            {reason && (
+                                <div className="space-y-1">
+                                    <p className="font-semibold text-heading">Reasoning</p>
+                                    <p className="text-body leading-relaxed">{reason}</p>
+                                </div>
+                            )}
+
+                            {/* Rule ID & Timestamps */}
+                            <div className="grid gap-2 sm:grid-cols-2 text-muted">
+                                <div>
+                                    <span className="font-semibold text-heading">Rule ID: </span>
+                                    <span className="font-mono">{type}</span>
+                                </div>
+                                {recommendation.valid_until && (
+                                    <div>
+                                        <span className="font-semibold text-heading">Valid Until: </span>
+                                        <span>{recommendation.valid_until}</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Summary if distinct from reason */}
+                            {summary && summary !== reason && (
+                                <div className="rounded border border-border bg-surface p-2 text-muted">
+                                    <span className="font-semibold text-heading">Context Summary: </span>
+                                    <span>{summary}</span>
+                                </div>
+                            )}
+
+                            {/* Limitations if present */}
+                            {limitations && limitations.length > 0 && (
+                                <div className="space-y-1">
+                                    <p className="font-semibold text-heading">Noted Limitations</p>
+                                    <ul className="list-disc list-inside space-y-0.5 text-muted">
+                                        {limitations.map((lim, idx) => (
+                                            <li key={idx}>{lim}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        )
+    }
 
     return (
         <Card className={cn(

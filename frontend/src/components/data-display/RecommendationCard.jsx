@@ -44,10 +44,11 @@ export function RecommendationCard({
     confidence = null,
     timing = null,
     why = null,
+    defaultWhyOpen = false,
     onFeedback = null,
     className,
 }) {
-    const [whyOpen, setWhyOpen] = useState(false)
+    const [whyOpen, setWhyOpen] = useState(defaultWhyOpen)
 
     return (
         <Card className={cn('flex flex-col gap-3', className)}>

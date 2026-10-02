@@ -71,12 +71,14 @@ export function InsightsPage() {
                         Deterministic observations derived by the backend from your energy evidence. For actionable household suggestions, see Recommendations.
                     </p>
                 </div>
-                <Link to="/recommendations">
-                    <Button variant="secondary" size="sm" className="flex items-center gap-1.5">
-                        <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
-                        <span>View Recommendations</span>
-                    </Button>
-                </Link>
+                <div className="flex items-center gap-2">
+                    <Link to="/recommendations">
+                        <Button variant="secondary" size="sm" className="flex items-center gap-1.5">
+                            <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+                            <span>View Recommendations</span>
+                        </Button>
+                    </Link>
+                </div>
             </div>
 
             {phase === 'loading' && <LoadingState label="Loading insights" />}

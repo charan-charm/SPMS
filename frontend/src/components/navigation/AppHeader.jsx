@@ -1,5 +1,5 @@
 import { useLocation, Link, useNavigate } from 'react-router'
-import { CircleDashed, Menu, LogOut, Moon, AlertTriangle, Clock, WifiOff } from 'lucide-react'
+import { CircleDashed, Menu, LogOut, Moon, AlertTriangle, Clock, WifiOff, Sparkles } from 'lucide-react'
 import { BrandMark } from './BrandMark'
 import { ThemeSwitch } from './ThemeSwitch'
 import { findNavItem } from '../../app/navigation'
@@ -178,9 +178,19 @@ export function AppHeader({ onOpenNavigation }) {
                         {current ? current.name : 'SPMS'}
                     </p>
                     {isDemo && (
-                        <span className="rounded-full border border-chart-demo/50 bg-chart-demo/10 px-2.5 py-0.5 font-body text-xs font-semibold text-chart-demo">
-                            DEMO — Simulated Demonstration Data
-                        </span>
+                        <div className="flex items-center gap-2">
+                            <span className="rounded-full border border-chart-demo/50 bg-chart-demo/10 px-2.5 py-0.5 font-body text-xs font-semibold text-chart-demo">
+                                DEMO — Simulated Demonstration Data
+                            </span>
+                            <Link
+                                to="/onboarding?preview=demo"
+                                className="hidden sm:inline-flex items-center gap-1 rounded-full border border-chart-demo/40 bg-surface px-2.5 py-0.5 text-[11px] font-medium text-chart-demo hover:bg-chart-demo/15 transition-colors"
+                                title="Inspect 5-step onboarding flow in DEMO sandbox"
+                            >
+                                <Sparkles className="size-3" aria-hidden="true" />
+                                <span>Preview Onboarding</span>
+                            </Link>
+                        </div>
                     )}
                 </div>
 
@@ -214,6 +224,20 @@ export function AppHeader({ onOpenNavigation }) {
                                 <p className="truncate font-semibold text-heading">{account?.email || 'Signed in user'}</p>
                                 <p className="capitalize text-muted">{account?.role ? `${account.role.toLowerCase()} account` : 'Authenticated'}</p>
                             </div>
+                            {isDemo && (
+                                <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem asChild>
+                                        <Link
+                                            to="/onboarding?preview=demo"
+                                            className="cursor-pointer text-chart-demo focus:bg-chart-demo/10 focus:text-chart-demo flex items-center"
+                                        >
+                                            <Sparkles className="mr-2 size-4" aria-hidden="true" />
+                                            Onboarding Preview — DEMO
+                                        </Link>
+                                    </DropdownMenuItem>
+                                </>
+                            )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                                 onClick={handleLogout}

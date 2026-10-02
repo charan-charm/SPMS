@@ -157,7 +157,7 @@ export function ForecastsPage() {
                     </p>
                 </div>
 
-                {/* Controls: Horizon Tabs + Refresh Button */}
+                {/* Controls: Horizon Tabs + Refresh + SolarAI Button */}
                 <div className="flex flex-wrap items-center gap-2.5">
                     {/* Horizon Tabs */}
                     <div className="flex rounded-xl border border-border/70 bg-surface/90 p-1 backdrop-blur-sm">
@@ -403,6 +403,8 @@ export function ForecastsPage() {
                 limitations={limitations}
                 provenance={forecastData?.provenance || {}}
                 combinedConfidence={forecastData?.combined_confidence || 'MODERATE'}
+                forecastSource={forecastData?.forecast_source || 'DETERMINISTIC'}
+                mlProvenance={forecastData?.ml_provenance || null}
             />
         </div>
     )

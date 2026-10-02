@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -178,6 +179,94 @@ describe('SPMS O3 Onboarding Flow', () => {
             expect(screen.getByLabelText(/household name/i)).toBeInTheDocument()
             expect(screen.queryByText(/demo — simulated demonstration data/i)).not.toBeInTheDocument()
         })
+
+        it('resolves existing DEMO1/prepared household successfully without calling ensureDemo or hanging', async () => {
+            const ensureDemo = vi.fn()
+            const onComplete = vi.fn()
+
+            render(
+                <HouseholdContext.Provider
+                    value={{
+                        household: { id: '10c06071-ebfe-4eb8-819a-4b1cb4fad0a1', label: 'Solar Surplus Residence' },
+                        hasHousehold: true,
+                        isLoading: false,
+                        ensureDemo,
+                    }}
+                >
+                    <DemoOnboardingNotice onComplete={onComplete} />
+                </HouseholdContext.Provider>,
+            )
+
+            expect(screen.getByText(/demo — simulated demonstration data/i)).toBeInTheDocument()
+            expect(screen.getByText(/preparing demonstration environment/i)).toBeInTheDocument()
+
+            // Since household already exists, ensureDemo is NOT called unnecessarily
+            expect(ensureDemo).not.toHaveBeenCalled()
+
+            // Smoothly resolves and completes
+            await waitFor(() => {
+                expect(onComplete).toHaveBeenCalled()
+            }, { timeout: 2000 })
+        })
+
+        it('resolves successfully even when wrapped in React StrictMode (no unmount/remount deadlock)', async () => {
+            const ensureDemo = vi.fn().mockResolvedValueOnce({
+                household: { id: 'hh-demo', label: 'Demonstration Residence' },
+            })
+            const onComplete = vi.fn()
+
+            render(
+                <StrictMode>
+                    <HouseholdContext.Provider value={{ ensureDemo, hasHousehold: false, isLoading: false }}>
+                        <DemoOnboardingNotice onComplete={onComplete} />
+                    </HouseholdContext.Provider>
+                </StrictMode>,
+            )
+
+            await waitFor(() => {
+                expect(onComplete).toHaveBeenCalled()
+            }, { timeout: 2000 })
+        })
+
+        it('shows clear error state with Retry action on provisioning failure and recovers when retried', async () => {
+            const user = userEvent.setup()
+            const ensureDemo = vi
+                .fn()
+                .mockRejectedValueOnce(new Error('Network error provisioning demo household'))
+                .mockResolvedValueOnce({
+                    household: { id: 'hh-demo-retry', label: 'Demonstration Residence' },
+                })
+            const onComplete = vi.fn()
+
+            render(
+                <HouseholdContext.Provider value={{ ensureDemo, hasHousehold: false, isLoading: false }}>
+                    <DemoOnboardingNotice onComplete={onComplete} />
+                </HouseholdContext.Provider>,
+            )
+
+            // Spinner stops and clear error state is displayed with Retry button
+            await waitFor(() => {
+                expect(screen.getByText(/workspace provisioning failed/i)).toBeInTheDocument()
+                expect(screen.getByText(/network error provisioning demo household/i)).toBeInTheDocument()
+                expect(screen.getByRole('button', { name: /retry setup/i })).toBeInTheDocument()
+            })
+
+            // onComplete is NOT called while in error state
+            expect(onComplete).not.toHaveBeenCalled()
+
+            // User clicks Retry button
+            await user.click(screen.getByRole('button', { name: /retry setup/i }))
+
+            // Second ensureDemo call is triggered
+            await waitFor(() => {
+                expect(ensureDemo).toHaveBeenCalledTimes(2)
+            })
+
+            // Now successfully completes and transitions
+            await waitFor(() => {
+                expect(onComplete).toHaveBeenCalled()
+            }, { timeout: 2000 })
+        })
     })
 
     describe('Route Guarding & Redirection', () => {
@@ -250,6 +339,146 @@ describe('SPMS O3 Onboarding Flow', () => {
             )
 
             expect(screen.queryByText('DEMO — Simulated Demonstration Data')).not.toBeInTheDocument()
+        })
+
+        it('displays Preview Onboarding link in AppHeader exclusively for DEMO_TEST accounts', () => {
+            const demoAccount = { id: 'acc-demo', email: 'demo@spms.local', mode: 'DEMO_TEST' }
+            const realAccount = { id: 'acc-real', email: 'real@spms.local', mode: 'REAL' }
+
+            const { rerender } = render(
+                <ThemeProvider>
+                    <AuthContext.Provider value={{ account: demoAccount, logout: vi.fn() }}>
+                        <MemoryRouter>
+                            <AppHeader />
+                        </MemoryRouter>
+                    </AuthContext.Provider>
+                </ThemeProvider>,
+            )
+
+            expect(screen.getByRole('link', { name: /preview onboarding/i })).toBeInTheDocument()
+
+            rerender(
+                <ThemeProvider>
+                    <AuthContext.Provider value={{ account: realAccount, logout: vi.fn() }}>
+                        <MemoryRouter>
+                            <AppHeader />
+                        </MemoryRouter>
+                    </AuthContext.Provider>
+                </ThemeProvider>,
+            )
+
+            expect(screen.queryByRole('link', { name: /preview onboarding/i })).not.toBeInTheDocument()
+        })
+    })
+
+    describe('DEMO Onboarding Inspection Sandbox (Development / Demo Only)', () => {
+        it('allows DEMO accounts to open onboarding inspection via ?preview=demo with clean inputs and sandbox banner', () => {
+            const demoAccount = { id: 'acc-demo', email: 'demo@demo.spms.local', mode: 'DEMO_TEST' }
+
+            render(
+                <AuthContext.Provider value={{ account: demoAccount }}>
+                    <HouseholdContext.Provider
+                        value={{
+                            household: { label: 'Existing Demo Residence', location_label: 'Hyderabad', timezone: 'Asia/Kolkata' },
+                            hasHousehold: true,
+                            isLoading: false,
+                        }}
+                    >
+                        <MemoryRouter initialEntries={['/onboarding?preview=demo']}>
+                            <OnboardingPage />
+                        </MemoryRouter>
+                    </HouseholdContext.Provider>
+                </AuthContext.Provider>,
+            )
+
+            // Banner is visible
+            expect(screen.getByText(/onboarding inspection preview/i)).toBeInTheDocument()
+            // Form inputs start fresh and clean, not pre-populated from existing household
+            const nameInput = screen.getByLabelText(/household name/i)
+            expect(nameInput).toHaveValue('')
+        })
+
+        it('strictly redirects REAL accounts with existing household away from /onboarding even with ?preview=demo', () => {
+            const realAccount = { id: 'acc-real', email: 'real@example.com', mode: 'REAL' }
+
+            render(
+                <AuthContext.Provider value={{ status: 'authenticated', account: realAccount }}>
+                    <HouseholdContext.Provider value={{ hasHousehold: true, isLoading: false, status: 'loaded' }}>
+                        <MemoryRouter initialEntries={['/onboarding?preview=demo']}>
+                            <Routes>
+                                <Route element={<ProtectedRoute />}>
+                                    <Route path="/onboarding" element={<OnboardingPage />} />
+                                </Route>
+                                <Route path="/dashboard" element={<LocationDisplay />} />
+                            </Routes>
+                        </MemoryRouter>
+                    </HouseholdContext.Provider>
+                </AuthContext.Provider>,
+            )
+
+            expect(screen.getByTestId('location')).toHaveTextContent('/dashboard')
+            expect(screen.queryByText(/onboarding inspection preview/i)).not.toBeInTheDocument()
+        })
+
+        it('allows REAL accounts WITHOUT household to reach onboarding and perform real setup', () => {
+            const realAccount = { id: 'acc-real', email: 'real@example.com', mode: 'REAL' }
+
+            render(
+                <AuthContext.Provider value={{ status: 'authenticated', account: realAccount }}>
+                    <HouseholdContext.Provider value={{ hasHousehold: false, isLoading: false, status: 'loaded' }}>
+                        <MemoryRouter initialEntries={['/onboarding']}>
+                            <Routes>
+                                <Route element={<ProtectedRoute />}>
+                                    <Route path="/onboarding" element={<OnboardingPage />} />
+                                </Route>
+                                <Route path="/dashboard" element={<LocationDisplay />} />
+                            </Routes>
+                        </MemoryRouter>
+                    </HouseholdContext.Provider>
+                </AuthContext.Provider>,
+            )
+
+            expect(screen.getByLabelText(/household name/i)).toBeInTheDocument()
+            expect(screen.queryByText(/onboarding inspection preview/i)).not.toBeInTheDocument()
+        })
+
+        it('does NOT mutate the server household when submitting steps in inspection mode', async () => {
+            const user = userEvent.setup()
+            const demoAccount = { id: 'acc-demo', email: 'demo@demo.spms.local', mode: 'DEMO_TEST' }
+            const createHousehold = vi.fn()
+            const updateHousehold = vi.fn()
+
+            render(
+                <AuthContext.Provider value={{ account: demoAccount }}>
+                    <HouseholdContext.Provider
+                        value={{
+                            household: { label: 'Existing Residence' },
+                            hasHousehold: true,
+                            isLoading: false,
+                            createHousehold,
+                            updateHousehold,
+                        }}
+                    >
+                        <MemoryRouter initialEntries={['/onboarding?preview=demo']}>
+                            <OnboardingPage />
+                        </MemoryRouter>
+                    </HouseholdContext.Provider>
+                </AuthContext.Provider>,
+            )
+
+            // Fill Step 1
+            await user.type(screen.getByLabelText(/household name/i), 'Inspected Household')
+            await user.type(screen.getByLabelText(/location \/ city/i), 'Test City')
+            await user.click(screen.getByRole('button', { name: /continue to electricity service/i }))
+
+            // Neither createHousehold nor updateHousehold should have been called
+            expect(createHousehold).not.toHaveBeenCalled()
+            expect(updateHousehold).not.toHaveBeenCalled()
+
+            // Advanced to Step 2 locally
+            await waitFor(() => {
+                expect(screen.getByLabelText(/electricity service number/i)).toBeInTheDocument()
+            })
         })
     })
 

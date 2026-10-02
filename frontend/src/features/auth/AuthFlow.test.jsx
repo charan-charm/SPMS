@@ -319,6 +319,26 @@ describe('SPMS O2 Authentication Flow', () => {
                 expect(screen.getByText(/if your account exists and is pending verification/i)).toBeInTheDocument()
             })
         })
+
+        it('auto-submits when 6-digit code and email are provided in URL query parameters', async () => {
+            authApi.verifyEmail.mockResolvedValueOnce({
+                account: { id: 'acc-1', email: 'link@example.com', status: 'ACTIVE', email_verified: true },
+            })
+
+            render(
+                <MemoryRouter initialEntries={['/verify?code=987654&email=link@example.com']}>
+                    <VerifyPage />
+                </MemoryRouter>,
+            )
+
+            await waitFor(() => {
+                expect(authApi.verifyEmail).toHaveBeenCalledWith({
+                    code: '987654',
+                    email: 'link@example.com',
+                })
+                expect(screen.getByText(/email verified!/i)).toBeInTheDocument()
+            })
+        })
     })
 
     describe('Login page', () => {
@@ -553,6 +573,31 @@ describe('SPMS O2 Authentication Flow', () => {
             render(
                 <AuthProvider>
                     <MemoryRouter initialEntries={['/login']}>
+                        <Routes>
+                            <Route element={<PublicAuthRoute />}>
+                                <Route path="/login" element={<div>Login Form</div>} />
+                            </Route>
+                            <Route path="/dashboard" element={<LocationDisplay />} />
+                        </Routes>
+                    </MemoryRouter>
+                </AuthProvider>,
+            )
+
+            await waitFor(() => {
+                expect(screen.queryByText(/login form/i)).not.toBeInTheDocument()
+                expect(screen.getByTestId('location')).toHaveTextContent('/dashboard')
+            })
+        })
+
+        it('PublicAuthRoute redirects to /dashboard when state.from points to an auth route to prevent redirect loops', async () => {
+            sessionModule.loadServerSession.mockResolvedValueOnce({
+                authenticated: true,
+                account: { id: 'acc-1', email: 'owner@example.com' },
+            })
+
+            render(
+                <AuthProvider>
+                    <MemoryRouter initialEntries={[{ pathname: '/login', state: { from: '/login' } }]}>
                         <Routes>
                             <Route element={<PublicAuthRoute />}>
                                 <Route path="/login" element={<div>Login Form</div>} />

@@ -49,17 +49,17 @@ function LegendLine({ color, dashed = false, width = 24 }) {
 }
 
 const LEGEND = [
-    { swatch: <LegendLine color="var(--spms-chart-solar)" />, label: 'Solar — actual' },
-    { swatch: <LegendLine color="var(--spms-chart-usage)" />, label: 'Consumption — actual' },
-    { swatch: <LegendLine color="var(--spms-chart-solar)" dashed />, label: 'Solar — forecast' },
-    { swatch: <LegendLine color="var(--spms-chart-usage)" dashed />, label: 'Consumption — forecast' },
+    { swatch: <LegendLine color="var(--spms-chart-solar)" />, label: 'Solar — example' },
+    { swatch: <LegendLine color="var(--spms-chart-usage)" />, label: 'Consumption — example' },
+    { swatch: <LegendLine color="var(--spms-chart-solar)" dashed />, label: 'Solar — forecast (example)' },
+    { swatch: <LegendLine color="var(--spms-chart-usage)" dashed />, label: 'Consumption — forecast (example)' },
     {
         swatch: <span aria-hidden="true" className="size-2.5 shrink-0 rounded-sm bg-chart-surplus/60" />,
-        label: 'Potential surplus',
+        label: 'Potential surplus (illustrative)',
     },
     {
         swatch: <span aria-hidden="true" className="size-2.5 shrink-0 rounded-sm bg-chart-deficit/50" />,
-        label: 'Potential deficit',
+        label: 'Potential deficit (illustrative)',
     },
 ]
 

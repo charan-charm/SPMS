@@ -28,6 +28,7 @@ export function BillsPage() {
     const [detailPhase, setDetailPhase] = useState('ready')
     const [pipelineStage, setPipelineStage] = useState(null)
     const [processFailure, setProcessFailure] = useState(null)
+    const [duplicateNotice, setDuplicateNotice] = useState(null)
     const [verifying, setVerifying] = useState(false)
     const [importSummary, setImportSummary] = useState(null)
 
@@ -256,6 +257,24 @@ export function BillsPage() {
                     // held. Read the state the server actually has.
                 } else if (
                     err instanceof ApiError &&
+                    (err.code === 'DUPLICATE_BILL_PERIOD' || err.code === 'DUPLICATE_BILL_FILE')
+                ) {
+                    const existingBillId = err.context?.existing_bill_id || null
+                    const monthLabel = err.context?.month_label || null
+                    setDuplicateNotice({
+                        type: err.context?.duplicate_type || 'PERIOD',
+                        title: monthLabel ? `${monthLabel} bill already exists` : 'Bill already exists',
+                        message: monthLabel
+                            ? `${monthLabel} is already recorded for your household.`
+                            : (err.message || 'A bill for this period is already recorded for your household.'),
+                        existingBillId,
+                        monthLabel,
+                    })
+                    if (existingBillId) {
+                        await refreshList(existingBillId)
+                    }
+                } else if (
+                    err instanceof ApiError &&
                     (err.code === 'EXTRACTION_FAILED' || err.code === 'PERSISTENCE_FAILED')
                 ) {
                     setProcessFailure({ retryable: true, reason: err.context?.reason ?? null })
@@ -289,6 +308,7 @@ export function BillsPage() {
             setPipelineStage('uploading')
             setProcessFailure(null)
             setImportSummary(null)
+            setDuplicateNotice(null)
             try {
                 const { data } = await uploadBill(file, signal())
                 if (!mountedRef.current) return { uploaded: true }
@@ -312,6 +332,26 @@ export function BillsPage() {
 
                     return { uploaded: false, error: 'Your session refreshed — please try the upload once more.' }
                 }
+                if (
+                    err instanceof ApiError &&
+                    (err.code === 'DUPLICATE_BILL_FILE' || err.code === 'DUPLICATE_BILL_PERIOD')
+                ) {
+                    const existingBillId = err.context?.existing_bill_id || null
+                    const monthLabel = err.context?.month_label || null
+                    setDuplicateNotice({
+                        type: err.context?.duplicate_type || 'FILE',
+                        title: monthLabel ? `${monthLabel} bill already uploaded` : 'Bill already uploaded',
+                        message: monthLabel
+                            ? `${monthLabel} is already recorded for your household.`
+                            : (err.message || 'This bill file is already recorded for your household.'),
+                        existingBillId,
+                        monthLabel,
+                    })
+                    if (existingBillId) {
+                        await refreshList(existingBillId)
+                    }
+                    return { uploaded: false, duplicate: true }
+                }
                 return { uploaded: false, error: uploadProblemMessage(err) }
             }
         },
@@ -323,6 +363,7 @@ export function BillsPage() {
             if (billId === selectedId) return
             stopPolling()
             setProcessFailure(null)
+            setDuplicateNotice(null)
             void openBill(billId)
         },
         [openBill, selectedId, stopPolling],
@@ -368,6 +409,8 @@ export function BillsPage() {
             detailPhase={detailPhase}
             pipelineStage={pipelineStage}
             processFailure={processFailure}
+            duplicateNotice={duplicateNotice}
+            onDismissDuplicateNotice={() => setDuplicateNotice(null)}
             importSummary={importSummary}
             onUpload={handleUpload}
             onSelectBill={handleSelectBill}

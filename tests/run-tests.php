@@ -112,6 +112,8 @@ $suites = [
         Tests\Unit\ApspdclExportParserTest::class,
         Tests\Unit\BillingPeriodSequenceValidatorTest::class,
         Tests\Unit\RecommendationDomainTest::class,
+        Tests\Unit\MLForecastingTest::class,
+        Tests\Unit\AssistantSafetyAndIsolationTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
@@ -139,6 +141,7 @@ $suites = [
         Tests\API\NotificationApiTest::class,
         Tests\API\AnalyticsApiTest::class,
         Tests\API\OnboardingApiTest::class,
+        Tests\API\AssistantApiTest::class,
     ],
     'Security' => [
         Tests\Security\SafeErrorsTest::class,
@@ -156,6 +159,7 @@ $suites = [
         Tests\Workflow\BillUploadWorkflowTest::class,
         Tests\Workflow\BillExtractionWorkflowTest::class,
         Tests\Workflow\BillProcessingFailureAndRetryRegressionTest::class,
+        Tests\Workflow\BillDuplicateAndRoutingRegressionTest::class,
         Tests\Workflow\BillReadWorkflowTest::class,
         Tests\Workflow\SolarConnectionWorkflowTest::class,
         Tests\Workflow\DemoScenarioWorkflowTest::class,

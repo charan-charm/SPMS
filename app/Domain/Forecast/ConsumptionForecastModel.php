@@ -106,6 +106,8 @@ final class ConsumptionForecastModel
                 dataNature: ForecastSnapshot::NATURE_ESTIMATED,
                 dataQuality: ForecastSnapshot::QUALITY_UNVERIFIED,
                 provenance: [
+                    'forecast_source' => 'DETERMINISTIC',
+                    'model_name' => 'CONSUMPTION_DETERMINISTIC_BASELINE',
                     'model_version' => self::MODEL_VERSION,
                     'generated_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
                     'sources' => ['insufficient_evidence'],
@@ -257,6 +259,8 @@ final class ConsumptionForecastModel
             dataNature: $dataNature,
             dataQuality: $dataQuality,
             provenance: [
+                'forecast_source' => 'DETERMINISTIC',
+                'model_name' => 'CONSUMPTION_DETERMINISTIC_BASELINE',
                 'model_version' => self::MODEL_VERSION,
                 'generated_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
                 'sources' => $sources,

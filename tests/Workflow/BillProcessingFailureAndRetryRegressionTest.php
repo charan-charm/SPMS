@@ -419,7 +419,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             Assert::same($ctx['bill'], $list[0]->id());
         });
 
-        // 10. genuine recognized duplicate billing period still follows existing deduplication rules
+        // 10. genuine recognized duplicate billing period is rejected with 409 DUPLICATE_BILL_PERIOD
         $tests[] = TestResult::check('10. genuine recognized duplicate billing period follows deduplication rules', function (): void {
             $fixture = AuthTesting::householdFixture('reg-10-' . bin2hex(random_bytes(4)), self::FIXTURE_SERVICE);
             $service = new BillService();
@@ -431,20 +431,20 @@ final class BillProcessingFailureAndRetryRegressionTest
             $b1 = $service->markProcessing($fixture['account'], $b1->id(), self::now());
             $b1 = $service->recordExtraction($fixture['account'], $b1->id(), BillExtractionDraft::create(
                 $b1->id(), 'm', 'm', self::now(), DocumentAssessment::VALID, null, '0.99',
-                [BillField::BILLING_PERIOD_START => '2026-08-01', BillField::BILLING_PERIOD_END => '2026-08-01', BillField::SERVICE_NUMBER => self::FIXTURE_SERVICE, 'consumption_kwh' => '120.000']
+                [BillField::BILLING_PERIOD_START => '2026-08-01', BillField::BILLING_PERIOD_END => '2026-09-01', BillField::SERVICE_NUMBER => self::FIXTURE_SERVICE, 'consumption_kwh' => '120.000']
             ), [], [], self::now());
 
-            // Bill 2: second unverified for same period
-            $b2 = $service->create($fixture['account'], '2026-08-01', '2026-09-01', self::now());
-            self::trackBill($b2->id());
-            $b2 = $service->markProcessing($fixture['account'], $b2->id(), self::now());
-            $b2 = $service->recordExtraction($fixture['account'], $b2->id(), BillExtractionDraft::create(
-                $b2->id(), 'm', 'm', self::now(), DocumentAssessment::VALID, null, '0.99',
-                [BillField::BILLING_PERIOD_START => '2026-08-01', BillField::BILLING_PERIOD_END => '2026-08-01', BillField::SERVICE_NUMBER => self::FIXTURE_SERVICE, 'consumption_kwh' => '120.000']
-            ), [], [], self::now());
+            // Bill 2: second unverified for same period must be rejected with 409
+            try {
+                $service->create($fixture['account'], '2026-08-01', '2026-09-01', self::now());
+                Assert::true(false, 'duplicate period creation must be rejected');
+            } catch (\App\Support\AppException $e) {
+                Assert::same('DUPLICATE_BILL_PERIOD', $e->errorCode());
+                Assert::same(409, $e->httpStatus());
+            }
 
             $list = $repo->listForHousehold($fixture['household_id']);
-            Assert::same(1, count($list), 'two unverified compatible duplicate period bills deduplicate to one statement');
+            Assert::same(1, count($list), 'exactly one canonical statement exists for the period');
         });
 
         // 11. existing APSPDCL XLS multi-row import remains unchanged

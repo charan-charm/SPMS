@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react'
+import { useMemo, useState, useRef, useEffect } from 'react'
+import { ChevronLeft, ChevronRight, Calendar, ChevronDown, Check } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import {
     formatBillingMonthYear,
@@ -21,6 +21,29 @@ import { cn } from '../../lib/utils'
  * - Horizontally scrollable period strip (Sep 2026 | Aug 2026 | Jul 2026 ...) with active highlight
  */
 export function StatementNavigator({ bills = [], selectedId = null, onSelect = () => {} }) {
+    const [dropdownOpen, setDropdownOpen] = useState(false)
+    const dropdownRef = useRef(null)
+
+    useEffect(() => {
+        if (!dropdownOpen) return
+        const handleClickOutside = (e) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+                setDropdownOpen(false)
+            }
+        }
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') {
+                setDropdownOpen(false)
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside)
+        document.addEventListener('keydown', handleKeyDown)
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside)
+            document.removeEventListener('keydown', handleKeyDown)
+        }
+    }, [dropdownOpen])
+
     // 1. Statements in navigator must be recognized bills with valid billing periods
     const statementBills = useMemo(() => {
         return (bills || []).filter(
@@ -138,13 +161,15 @@ export function StatementNavigator({ bills = [], selectedId = null, onSelect = (
                         <span className="text-muted/60" aria-hidden="true">→</span>
                     </div>
 
-                    <div className="relative">
+                    <div className="relative" ref={dropdownRef}>
+                        {/* Accessible select retained for testing and screen readers */}
                         <select
                             id="statement-period-select"
                             aria-label="Select billing statement by month"
                             value={representativeBill?.bill_id ?? ''}
                             onChange={(e) => onSelect(e.target.value)}
-                            className="appearance-none rounded-lg border border-border bg-surface-alt py-1.5 pl-3 pr-8 font-display text-sm font-semibold text-heading shadow-2xs transition-colors hover:bg-surface focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
+                            className="sr-only"
+                            tabIndex={-1}
                         >
                             {periods.map((p) => {
                                 const serialText = p.representativeBill.source_statement_serial
@@ -157,9 +182,118 @@ export function StatementNavigator({ bills = [], selectedId = null, onSelect = (
                                 )
                             })}
                         </select>
-                        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-muted text-xs">
-                            ▼
-                        </span>
+
+                        {/* Custom SPMS-styled interactive dropdown trigger */}
+                        <button
+                            type="button"
+                            id="statement-period-dropdown-trigger"
+                            aria-haspopup="listbox"
+                            aria-expanded={dropdownOpen}
+                            aria-label={`Current statement: ${currentPeriod?.label ?? 'Select period'}. Click to browse other months.`}
+                            onClick={() => setDropdownOpen((prev) => !prev)}
+                            className={cn(
+                                'flex items-center gap-2 rounded-lg border border-border bg-surface-alt px-3 py-1.5',
+                                'text-sm font-semibold text-heading shadow-2xs transition-all cursor-pointer',
+                                'hover:border-border-strong hover:bg-surface focus:outline-none focus:ring-2 focus:ring-primary/20',
+                                dropdownOpen && 'border-primary ring-2 ring-primary/20 bg-surface'
+                            )}
+                        >
+                            <span className="font-display font-semibold">
+                                {currentPeriod?.label ?? 'Select statement'}
+                            </span>
+
+                            {representativeBill?.status === 'VERIFIED' && (
+                                <span className="rounded-full bg-primary/10 px-1.5 py-0.2 text-[10px] font-semibold text-primary">
+                                    Verified
+                                </span>
+                            )}
+
+                            {representativeBill?.solar_applicability === 'BEFORE_SOLAR_INSTALLATION' && (
+                                <span className="rounded-full bg-surface px-1.5 py-0.2 text-[10px] font-medium text-muted border border-border/80">
+                                    Pre-solar
+                                </span>
+                            )}
+
+                            {representativeBill?.source_statement_serial && (
+                                <span className="rounded bg-surface px-1.5 py-0.2 font-mono text-[10px] font-medium text-muted border border-border/80">
+                                    #{representativeBill.source_statement_serial}
+                                </span>
+                            )}
+
+                            <ChevronDown
+                                className={cn(
+                                    'size-3.5 text-muted transition-transform duration-150',
+                                    dropdownOpen && 'rotate-180 text-heading'
+                                )}
+                                aria-hidden="true"
+                            />
+                        </button>
+
+                        {/* Custom SPMS-styled scrollable popover menu */}
+                        {dropdownOpen && (
+                            <div
+                                role="listbox"
+                                aria-label="Available billing statements"
+                                className="absolute left-0 top-full z-50 mt-1.5 w-72 sm:w-80 rounded-xl border border-border bg-surface p-1.5 shadow-lg ring-1 ring-black/5 animate-in fade-in-0 zoom-in-95 duration-100"
+                            >
+                                <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted border-b border-border/50 flex items-center justify-between">
+                                    <span>Billing statements</span>
+                                    <span className="font-mono text-[10px] font-normal">{periods.length} months</span>
+                                </div>
+                                <div className="max-h-72 overflow-y-auto divide-y divide-border/30 scrollbar-thin py-1">
+                                    {periods.map((p, idx) => {
+                                        const isSelected = idx === activePeriodIndex
+                                        const bill = p.representativeBill
+                                        const isPreSolar = bill.solar_applicability === 'BEFORE_SOLAR_INSTALLATION'
+
+                                        return (
+                                            <button
+                                                key={p.key}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={isSelected}
+                                                onClick={() => {
+                                                    onSelect(bill.bill_id)
+                                                    setDropdownOpen(false)
+                                                }}
+                                                className={cn(
+                                                    'w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-left text-xs transition-colors cursor-pointer',
+                                                    isSelected
+                                                        ? 'bg-primary/10 text-primary font-semibold'
+                                                        : 'text-body hover:bg-surface-alt hover:text-heading'
+                                                )}
+                                            >
+                                                <div className="flex flex-col min-w-0">
+                                                    <span className={cn('font-display text-sm font-semibold truncate', isSelected ? 'text-primary' : 'text-heading')}>
+                                                        {p.label}
+                                                    </span>
+                                                    <span className="text-[11px] text-muted truncate">
+                                                        {p.periodRange}
+                                                        {bill.source_statement_serial ? ` · #${bill.source_statement_serial}` : ''}
+                                                    </span>
+                                                </div>
+
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    {bill.status === 'VERIFIED' && (
+                                                        <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                                                            Verified
+                                                        </span>
+                                                    )}
+                                                    {isPreSolar && (
+                                                        <span className="rounded-full border border-border bg-surface-alt px-1.5 py-0.5 text-[10px] text-muted">
+                                                            Pre-solar
+                                                        </span>
+                                                    )}
+                                                    {isSelected && (
+                                                        <Check className="size-3.5 text-primary shrink-0" aria-hidden="true" />
+                                                    )}
+                                                </div>
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Secondary metadata: 1 Aug 2026 – 1 Sep 2026 · Statement #1 */}

@@ -53,6 +53,7 @@ export function RegisterPage() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (submitting) return
         setErrors({ fieldErrors: {}, generalError: null })
 
         const clientErrors = validateForm()

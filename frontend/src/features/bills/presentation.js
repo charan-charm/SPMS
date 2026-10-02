@@ -392,6 +392,41 @@ export function formatEnergy(raw, { signed = false } = {}) {
 }
 
 /**
+ * Format net energy balance into clear human directional language:
+ * - Net units < 0 (or solar > consumption): "X kWh surplus"
+ * - Net units > 0 (or consumption > solar): "X kWh deficit"
+ * - Net units == 0: "0 kWh balanced"
+ */
+export function formatEnergyBalance(rawNetUnits, { solarUnits = null, consumption = null } = {}) {
+    let net = rawNetUnits !== null && rawNetUnits !== undefined && rawNetUnits !== ''
+        ? Number(rawNetUnits)
+        : null
+
+    if (net === null || !Number.isFinite(net)) {
+        if (solarUnits !== null && consumption !== null) {
+            const s = Number(solarUnits)
+            const c = Number(consumption)
+            if (Number.isFinite(s) && Number.isFinite(c)) {
+                net = c - s
+            }
+        }
+    }
+
+    if (net === null || !Number.isFinite(net)) {
+        return NOT_AVAILABLE
+    }
+
+    const absVal = Math.abs(net).toLocaleString(undefined, { maximumFractionDigits: 1 })
+    if (net < -0.05) {
+        return `${absVal} kWh surplus`
+    }
+    if (net > 0.05) {
+        return `${absVal} kWh deficit`
+    }
+    return '0 kWh balanced'
+}
+
+/**
  * Masks electricity service number preserving only the final 4 digits.
  * Example: 8623310010998 -> ••••••••0998
  */

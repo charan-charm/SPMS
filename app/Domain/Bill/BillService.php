@@ -64,6 +64,26 @@ final class BillService
     ): Bill {
         $householdId = $this->requireHousehold($account);
 
+        if ($billingPeriodStart !== null && $billingPeriodEnd !== null) {
+            $existing = $this->bills->findActiveByPeriod($householdId, $billingPeriodStart, $billingPeriodEnd);
+            if ($existing !== null) {
+                $monthLabel = date('F Y', strtotime($billingPeriodEnd));
+                throw new AppException(
+                    'DUPLICATE_BILL_PERIOD',
+                    "A bill for {$billingPeriodStart} to {$billingPeriodEnd} is already recorded for this household.",
+                    409,
+                    [
+                        'duplicate_type' => 'PERIOD',
+                        'existing_bill_id' => $existing->id(),
+                        'billing_period_start' => $billingPeriodStart,
+                        'billing_period_end' => $billingPeriodEnd,
+                        'month_label' => $monthLabel,
+                        'status' => $existing->status(),
+                    ]
+                );
+            }
+        }
+
         try {
             $bill = Bill::create($householdId, $billingPeriodStart, $billingPeriodEnd, $now);
         } catch (InvalidArgumentException $e) {
@@ -229,6 +249,28 @@ final class BillService
                 || $conflicted
                 || $flags !== [];
 
+            $start = $values[BillField::BILLING_PERIOD_START] ?? null;
+            $end = $values[BillField::BILLING_PERIOD_END] ?? null;
+            if ($start !== null && $end !== null) {
+                $existing = $this->bills->findActiveByPeriod($householdId, $start, $end, excludeBillId: $bill->id());
+                if ($existing !== null) {
+                    $monthLabel = date('F Y', strtotime($end));
+                    throw new AppException(
+                        'DUPLICATE_BILL_PERIOD',
+                        "A bill for {$start} to {$end} is already recorded for this household.",
+                        409,
+                        [
+                            'duplicate_type' => 'PERIOD',
+                            'existing_bill_id' => $existing->id(),
+                            'billing_period_start' => $start,
+                            'billing_period_end' => $end,
+                            'month_label' => $monthLabel,
+                            'status' => $existing->status(),
+                        ]
+                    );
+                }
+            }
+
             try {
                 $updated = $bill
                     ->withValues($values, $now)
@@ -352,6 +394,24 @@ final class BillService
 
         if ($values === []) {
             throw new AppException('VALIDATION_ERROR', 'At least one corrected field is required.', 422);
+        }
+
+        $newStart = array_key_exists(BillField::BILLING_PERIOD_START, $values)
+            ? $values[BillField::BILLING_PERIOD_START]
+            : $bill->value(BillField::BILLING_PERIOD_START);
+        $newEnd = array_key_exists(BillField::BILLING_PERIOD_END, $values)
+            ? $values[BillField::BILLING_PERIOD_END]
+            : $bill->value(BillField::BILLING_PERIOD_END);
+
+        if ($newStart !== null && $newEnd !== null) {
+            $existing = $this->bills->findActiveByPeriod($householdId, $newStart, $newEnd, excludeBillId: $bill->id());
+            if ($existing !== null) {
+                throw new AppException(
+                    'DUPLICATE_BILL_PERIOD',
+                    "A bill for {$newStart} to {$newEnd} is already recorded for this household.",
+                    409
+                );
+            }
         }
 
         try {

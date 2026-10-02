@@ -55,7 +55,7 @@ final class BillRepository
         $columns = array_merge(
             ['id', 'household_id', 'status'],
             BillField::ALL,
-            ['verified_at', 'created_at', 'updated_at']
+            ['verified_at', 'created_at', 'updated_at', 'fingerprint']
         );
 
         $statement = $this->connection()->prepare(
@@ -64,6 +64,42 @@ final class BillRepository
         );
 
         $statement->execute($this->only($row, $columns));
+    }
+
+    /**
+     * Find an existing recorded bill for this household with matching content fingerprint.
+     * Checks authoritative/active states (VERIFIED, VALIDATED, DRAFT, PROCESSING) to detect
+     * exact file duplicates BEFORE invoking OCR/AI extraction. Scoped strictly to the household.
+     */
+    public function findRecordedByFingerprint(string $householdId, string $fingerprint): ?Bill
+    {
+        $statement = $this->connection()->prepare(
+            'SELECT * FROM bills
+             WHERE household_id = :household_id
+               AND fingerprint = :fingerprint
+               AND status NOT IN (:failed_status, :not_a_bill, :unreadable, :uncertain)
+             ORDER BY CASE 
+                 WHEN status = :verified THEN 1 
+                 WHEN status = :extracted THEN 2 
+                 WHEN status = :needs_review THEN 3 
+                 ELSE 4 
+             END, created_at DESC
+             LIMIT 1'
+        );
+        $statement->execute([
+            'household_id' => $householdId,
+            'fingerprint' => $fingerprint,
+            'failed_status' => BillStatus::PROCESSING_FAILED,
+            'not_a_bill' => BillStatus::NOT_A_BILL,
+            'unreadable' => BillStatus::UNREADABLE,
+            'uncertain' => BillStatus::UNCERTAIN,
+            'verified' => BillStatus::VERIFIED,
+            'extracted' => BillStatus::EXTRACTED,
+            'needs_review' => BillStatus::NEEDS_REVIEW,
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : Bill::fromStorageRow($row);
     }
 
     /**
@@ -78,6 +114,44 @@ final class BillRepository
         );
         $statement->execute(['bill_id' => $billId, 'household_id' => $householdId]);
 
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : Bill::fromStorageRow($row);
+    }
+
+    /**
+     * Find an existing active bill for the given household and exact billing period.
+     * Excludes terminal failure states. Used to enforce billing period uniqueness per household.
+     */
+    public function findActiveByPeriod(
+        string $householdId,
+        string $startDate,
+        string $endDate,
+        ?string $excludeBillId = null
+    ): ?Bill {
+        $sql = 'SELECT * FROM bills
+                WHERE household_id = :household_id
+                  AND billing_period_start = :start_date
+                  AND billing_period_end = :end_date
+                  AND status NOT IN (:failed_status, :not_a_bill, :unreadable, :uncertain)';
+        $params = [
+            'household_id' => $householdId,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'failed_status' => BillStatus::PROCESSING_FAILED,
+            'not_a_bill' => BillStatus::NOT_A_BILL,
+            'unreadable' => BillStatus::UNREADABLE,
+            'uncertain' => BillStatus::UNCERTAIN,
+        ];
+        if ($excludeBillId !== null) {
+            $sql .= ' AND id != :exclude_id';
+            $params['exclude_id'] = $excludeBillId;
+        }
+        $sql .= ' ORDER BY CASE WHEN status = :verified THEN 1 ELSE 2 END, created_at DESC LIMIT 1';
+        $params['verified'] = BillStatus::VERIFIED;
+
+        $statement = $this->connection()->prepare($sql);
+        $statement->execute($params);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
 
         return $row === false ? null : Bill::fromStorageRow($row);
@@ -212,7 +286,7 @@ final class BillRepository
         $assignments = array_merge(
             ['status'],
             BillField::ALL,
-            ['verified_at', 'updated_at']
+            ['verified_at', 'updated_at', 'fingerprint']
         );
 
         $setList = implode(', ', array_map(static fn (string $c): string => $c . ' = :' . $c, $assignments));

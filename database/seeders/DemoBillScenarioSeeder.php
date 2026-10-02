@@ -181,16 +181,18 @@ final class DemoBillScenarioSeeder
         $main = $makeAccount('demo.main', 'Demo Main');
         $makeHousehold($main, 'Demo household — full scenarios', '1000-2000-300');
 
-        // DEMO-01: normal valid bill, service MATCH, meter/solar/net all PASS.
+        // DEMO-01: normal valid bill, service MATCH, meter/solar/net all PASS (Aug 2026).
         $scenarios['DEMO-01 normal valid (service match, all PASS)'] = $runBill($main, $baseBill());
 
-        // DEMO-02: net conflict — +177 extracted, expected -177 (test-02 shape).
+        // DEMO-02: net conflict — +177 extracted, expected -177 (Jul 2026, test-02 shape).
         $scenarios['DEMO-02 net conflict (+177 vs expected -177)'] = $runBill($main, $baseBill([
+            'billing_period' => ['start' => '2026-07-01', 'end' => '2026-08-01', 'confidence' => 0.95],
             'solar' => array_merge($baseBill()['solar'], ['net_units_kwh' => 177]),
         ]));
 
-        // DEMO-03: missing solar evidence — solar/net NOT_CHECKED.
+        // DEMO-03: missing solar evidence — solar/net NOT_CHECKED (Jun 2026).
         $scenarios['DEMO-03 missing solar (NOT_CHECKED)'] = $runBill($main, $baseBill([
+            'billing_period' => ['start' => '2026-06-01', 'end' => '2026-07-01', 'confidence' => 0.95],
             'solar' => ['previous_solar_reading' => null, 'present_solar_reading' => null, 'solar_units_kwh' => null, 'net_units_kwh' => null, 'confidence' => null],
             'context' => ['utility_provider' => 'DEMO GRID UTILITY LTD', 'tariff_category' => 'DOMESTIC (A)', 'meter_type' => 'ANALOG', 'contracted_load' => '1', 'service_number' => '1000-2000-300', 'confidence' => 0.9],
         ]));
@@ -200,10 +202,11 @@ final class DemoBillScenarioSeeder
             ['document_assessment' => ['status' => 'NOT_A_BILL', 'reason' => 'brand logo, not an electricity bill', 'confidence' => 0.98]] + $emptySections
         ));
 
-        // DEMO-05: service mismatch — the bill carries ANOTHER demo household's number.
+        // DEMO-05: service mismatch — the bill carries ANOTHER demo household's number (May 2026).
         $other = $makeAccount('demo.other', 'Demo Other');
         $makeHousehold($other, 'Demo household — foreign service number owner', '555-666-777');
         $scenarios['DEMO-05 service mismatch (foreign number)'] = $runBill($main, $baseBill([
+            'billing_period' => ['start' => '2026-05-01', 'end' => '2026-06-01', 'confidence' => 0.95],
             'context' => ['utility_provider' => 'DEMO GRID UTILITY LTD', 'tariff_category' => 'DOMESTIC (A)', 'meter_type' => 'SMART SOLAR', 'contracted_load' => '3', 'service_number' => '555 666 777', 'confidence' => 0.95],
         ]));
 

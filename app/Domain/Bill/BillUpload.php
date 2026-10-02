@@ -251,6 +251,21 @@ final class BillUpload
         return $contents;
     }
 
+    /**
+     * Compute the SHA-256 fingerprint directly from the temporary file.
+     * Memory-safe streaming without buffering full contents into PHP memory.
+     */
+    public function fingerprint(): string
+    {
+        $hash = @hash_file('sha256', $this->sourcePath);
+
+        if ($hash === false || strlen($hash) !== 64) {
+            throw self::rejected('UPLOAD_FAILED', 'The uploaded file could not be fingerprinted on the server.', 500);
+        }
+
+        return $hash;
+    }
+
     private static function rejected(string $code, string $message, int $status = 422): AppException
     {
         return new AppException($code, $message, $status);

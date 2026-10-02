@@ -385,7 +385,7 @@ final class BillDomainTest
                 Assert::same('DEMO GRID', $restored->value('utility_provider'));
 
                 // toStorageRow exposes only whitelisted + structural columns
-                $expectedKeys = array_merge(BillField::ALL, ['id', 'household_id', 'status', 'verified_at', 'created_at', 'updated_at']);
+                $expectedKeys = array_merge(BillField::ALL, ['id', 'household_id', 'status', 'fingerprint', 'verified_at', 'created_at', 'updated_at']);
                 sort($expectedKeys);
                 $actualKeys = array_keys($row);
                 sort($actualKeys);

@@ -27,6 +27,7 @@ use App\Controllers\RecommendationController;
 use App\Controllers\ReportController;
 use App\Controllers\AnalyticsController;
 use App\Controllers\NotificationController;
+use App\Controllers\AssistantController;
 use App\Repositories\HealthRepository;
 use App\Security\AuthMiddleware;
 use App\Services\HealthService;
@@ -308,6 +309,12 @@ final class App
         $router->add('GET', '/api/v1/notifications', [NotificationController::class, 'index']);
         $router->add('POST', '/api/v1/notifications/read-all', [NotificationController::class, 'markAllRead']);
         $router->add('POST', '/api/v1/notifications/{id}/read', [NotificationController::class, 'markRead']);
+
+        // F8 — AI Energy Assistant (Restricted context-aware assistant).
+        // Authenticated + CSRF (mutations) + household-scoped.
+        $router->add('POST', '/api/v1/assistant', [AssistantController::class, 'ask']);
+        $router->add('GET', '/api/v1/assistant', [AssistantController::class, 'history']);
+        $router->add('DELETE', '/api/v1/assistant', [AssistantController::class, 'clear']);
 
         // Public web pages
         $router->add('GET', '/', [PageController::class, 'landing']);

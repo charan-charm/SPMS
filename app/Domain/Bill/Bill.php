@@ -40,7 +40,8 @@ final class Bill
         array $values,
         private readonly ?string $verifiedAt,
         private readonly string $createdAt,
-        private readonly string $updatedAt
+        private readonly string $updatedAt,
+        private readonly ?string $fingerprint = null
     ) {
         $normalized = [];
         foreach (BillField::ALL as $field) {
@@ -63,7 +64,8 @@ final class Bill
         string $householdId,
         ?string $billingPeriodStart,
         ?string $billingPeriodEnd,
-        DateTimeImmutable $now
+        DateTimeImmutable $now,
+        ?string $fingerprint = null
     ): self {
         if ($householdId === '' || mb_strlen($householdId) > 36) {
             throw new InvalidArgumentException('household id is invalid.');
@@ -81,7 +83,8 @@ final class Bill
             ],
             verifiedAt: null,
             createdAt: $stamp,
-            updatedAt: $stamp
+            updatedAt: $stamp,
+            fingerprint: $fingerprint
         );
     }
 
@@ -101,7 +104,8 @@ final class Bill
             values: $values,
             verifiedAt: $row['verified_at'] !== null ? (string) $row['verified_at'] : null,
             createdAt: (string) $row['created_at'],
-            updatedAt: (string) $row['updated_at']
+            updatedAt: (string) $row['updated_at'],
+            fingerprint: isset($row['fingerprint']) && $row['fingerprint'] !== null ? (string) $row['fingerprint'] : null
         );
     }
 
@@ -125,7 +129,8 @@ final class Bill
             $this->values,
             $this->verifiedAt,
             $this->createdAt,
-            self::stamp($now)
+            self::stamp($now),
+            $this->fingerprint
         );
     }
 
@@ -145,7 +150,8 @@ final class Bill
             $this->values,
             self::stamp($now),
             $this->createdAt,
-            self::stamp($now)
+            self::stamp($now),
+            $this->fingerprint
         );
     }
 
@@ -176,8 +182,28 @@ final class Bill
             $merged,
             $this->verifiedAt,
             $this->createdAt,
-            self::stamp($now)
+            self::stamp($now),
+            $this->fingerprint
         );
+    }
+
+    public function withFingerprint(string $fingerprint, DateTimeImmutable $now): self
+    {
+        return new self(
+            $this->id,
+            $this->householdId,
+            $this->status,
+            $this->values,
+            $this->verifiedAt,
+            $this->createdAt,
+            self::stamp($now),
+            $fingerprint
+        );
+    }
+
+    public function fingerprint(): ?string
+    {
+        return $this->fingerprint;
     }
 
     public function id(): string
@@ -231,6 +257,53 @@ final class Bill
     }
 
     /**
+     * Parse source_metadata_json if present. Returns empty array if missing or malformed.
+     *
+     * @return array<string, mixed>
+     */
+    public function sourceMetadata(): array
+    {
+        $raw = $this->value(BillField::SOURCE_METADATA_JSON);
+        if ($raw === null || trim($raw) === '') {
+            return [];
+        }
+
+        try {
+            $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+            return is_array($decoded) ? $decoded : [];
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Resolved solar applicability for this bill: 'SOLAR_ACTIVE', 'BEFORE_SOLAR_INSTALLATION', or null.
+     */
+    public function solarApplicability(): ?string
+    {
+        $meta = $this->sourceMetadata();
+        if (isset($meta['solar_applicability']) && is_string($meta['solar_applicability'])) {
+            return $meta['solar_applicability'];
+        }
+
+        // If solar readings/units are explicitly present and > 0, solar was active
+        $solarUnits = $this->value(BillField::SOLAR_UNITS_KWH);
+        if ($solarUnits !== null && (float) $solarUnits > 0) {
+            return 'SOLAR_ACTIVE';
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether this billing period occurred before the solar installation was commissioned.
+     */
+    public function isPreSolar(): bool
+    {
+        return $this->solarApplicability() === 'BEFORE_SOLAR_INSTALLATION';
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function toStorageRow(): array
@@ -242,6 +315,7 @@ final class Bill
             'verified_at' => $this->verifiedAt,
             'created_at' => $this->createdAt,
             'updated_at' => $this->updatedAt,
+            'fingerprint' => $this->fingerprint,
         ]);
     }
 

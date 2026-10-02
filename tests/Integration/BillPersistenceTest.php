@@ -622,7 +622,7 @@ final class BillPersistenceTest
                 self::$createdBills = [];
             }),
 
-            TestResult::check('duplicate same-period import is idempotent and yields one canonical statement (CASE 1)', function (): void {
+            TestResult::check('duplicate same-period import is rejected with 409 DUPLICATE_BILL_PERIOD (CASE 1)', function (): void {
                 [$account, $householdId] = self::fixture();
                 $service = self::service();
                 $repo = self::repo();
@@ -635,21 +635,38 @@ final class BillPersistenceTest
                     [], [], self::now()
                 );
 
-                $bill2 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
+                // Direct creation with duplicate period is rejected with 409
+                try {
+                    $service->create($account, '2026-08-01', '2026-09-01', self::now());
+                    Assert::true(false, 'duplicate period create must be rejected');
+                } catch (\App\Support\AppException $e) {
+                    Assert::same('DUPLICATE_BILL_PERIOD', $e->errorCode());
+                    Assert::same(409, $e->httpStatus());
+                }
+
+                // Extraction with duplicate period is also rejected with 409
+                $bill2 = self::track($service->create($account, null, null, self::now()));
                 $bill2 = $service->markProcessing($account, $bill2->id(), self::now());
-                $bill2 = $service->recordExtraction(
-                    $account, $bill2->id(),
-                    BillExtractionDraft::create($bill2->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', self::canonicalValues()),
-                    [], [], self::now()
-                );
+                try {
+                    $service->recordExtraction(
+                        $account, $bill2->id(),
+                        BillExtractionDraft::create($bill2->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', self::canonicalValues()),
+                        [], [], self::now()
+                    );
+                    Assert::true(false, 'duplicate period extraction must be rejected');
+                } catch (\App\Support\AppException $e) {
+                    Assert::same('DUPLICATE_BILL_PERIOD', $e->errorCode());
+                    Assert::same(409, $e->httpStatus());
+                    $service->markProcessingFailed($account, $bill2->id(), self::now());
+                }
 
                 $list = $repo->listForHousehold($householdId);
-                Assert::same(1, count($list), 'two unverified compatible bills for same period deduplicate to one canonical statement');
+                Assert::same(1, count($list), 'only the canonical first statement exists');
                 Assert::same('2026-08-01', $list[0]->value('billing_period_start'));
                 Assert::same('2026-09-01', $list[0]->value('billing_period_end'));
             }),
 
-            TestResult::check('verified same-period record remains authoritative over unverified (CASE 2)', function (): void {
+            TestResult::check('verified same-period record blocks duplicate and remains authoritative (CASE 2)', function (): void {
                 [$account, $householdId] = self::fixture();
                 $service = self::service();
                 $repo = self::repo();
@@ -664,14 +681,14 @@ final class BillPersistenceTest
                 );
                 $bill1 = $service->verify($account, $bill1->id(), self::now());
 
-                // Bill 2 is newly extracted for the same period
-                $bill2 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
-                $bill2 = $service->markProcessing($account, $bill2->id(), self::now());
-                $bill2 = $service->recordExtraction(
-                    $account, $bill2->id(),
-                    BillExtractionDraft::create($bill2->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', self::canonicalValues()),
-                    [], [], self::now()
-                );
+                // Bill 2 attempts creation for same period -> rejected
+                try {
+                    $service->create($account, '2026-08-01', '2026-09-01', self::now());
+                    Assert::true(false, 'duplicate period against verified record must be rejected');
+                } catch (\App\Support\AppException $e) {
+                    Assert::same('DUPLICATE_BILL_PERIOD', $e->errorCode());
+                    Assert::same(409, $e->httpStatus());
+                }
 
                 $list = $repo->listForHousehold($householdId);
                 Assert::same(1, count($list), 'verified record takes precedence as the single canonical statement');
@@ -691,7 +708,7 @@ final class BillPersistenceTest
                 Assert::same(2, count($list), 'different billing periods must stay distinct');
             }),
 
-            TestResult::check('conflicting same-period records preserve conflict rather than silently overwriting (CASE 4)', function (): void {
+            TestResult::check('duplicate same-period with conflicting values is rejected (CASE 4)', function (): void {
                 [$account, $householdId] = self::fixture();
                 $service = self::service();
                 $repo = self::repo();
@@ -706,18 +723,17 @@ final class BillPersistenceTest
                     [], [], self::now()
                 );
 
-                $vals2 = self::canonicalValues();
-                $vals2['consumption_kwh'] = '200.000'; // conflicting
-                $bill2 = self::track($service->create($account, '2026-08-01', '2026-09-01', self::now()));
-                $bill2 = $service->markProcessing($account, $bill2->id(), self::now());
-                $bill2 = $service->recordExtraction(
-                    $account, $bill2->id(),
-                    BillExtractionDraft::create($bill2->id(), 'prov', 'm', self::now(), DocumentAssessment::VALID, null, '0.95', $vals2),
-                    [], [], self::now()
-                );
+                // Attempting second bill for the same period with conflicting values must be rejected
+                try {
+                    $service->create($account, '2026-08-01', '2026-09-01', self::now());
+                    Assert::true(false, 'conflicting duplicate period must be rejected');
+                } catch (\App\Support\AppException $e) {
+                    Assert::same('DUPLICATE_BILL_PERIOD', $e->errorCode());
+                    Assert::same(409, $e->httpStatus());
+                }
 
                 $list = $repo->listForHousehold($householdId);
-                Assert::same(2, count($list), 'conflicting unverified statements are not silently merged');
+                Assert::same(1, count($list), 'existing statement preserved, duplicate rejected');
             }),
 
             TestResult::check('reapStaleProcessing reaps stuck PROCESSING bills to PROCESSING_FAILED after bounded timeout', function (): void {

@@ -62,30 +62,32 @@ export function PublicHeader() {
                     : 'border-transparent bg-background/60 backdrop-blur-sm',
             )}
         >
-            {/* O1 refinement: the public header hugs the viewport edges
-                (≈20px mobile → 32px desktop) instead of sitting inside a
-                centered max-width column — logo left, actions right,
-                navigation balanced between them. */}
-            <div className="flex h-16 w-full items-center justify-between gap-4 px-5 sm:px-6 lg:px-8">
-                <Link to="/" aria-label="SPMS home" className="inline-flex shrink-0">
+            {/* Header bar: logo on left, actions on right, with navigation truly centered relative to the viewport */}
+            <div className="relative flex h-16 w-full items-center justify-between gap-4 px-5 sm:px-6 lg:px-8">
+                <Link to="/" aria-label="SPMS home" className="relative z-10 inline-flex shrink-0">
                     <BrandMark variant="full" height={34} />
                 </Link>
 
                 {isLanding && (
-                    <nav aria-label="Landing sections" className="hidden items-center gap-1 lg:flex">
-                        {LANDING_NAV.map((item) => (
-                            <a
-                                key={item.id}
-                                href={`#${item.id}`}
-                                className="rounded-md px-3 py-2 text-sm font-medium text-body transition-colors hover:bg-surface-alt hover:text-heading"
-                            >
-                                {item.label}
-                            </a>
-                        ))}
+                    <nav
+                        aria-label="Landing sections"
+                        className="pointer-events-none absolute inset-x-0 hidden items-center justify-center lg:flex"
+                    >
+                        <div className="pointer-events-auto flex items-center gap-1">
+                            {LANDING_NAV.map((item) => (
+                                <a
+                                    key={item.id}
+                                    href={`#${item.id}`}
+                                    className="whitespace-nowrap rounded-md px-2.5 xl:px-3 py-1.5 text-sm font-medium text-body transition-colors hover:bg-surface-alt hover:text-heading"
+                                >
+                                    {item.label}
+                                </a>
+                            ))}
+                        </div>
                     </nav>
                 )}
 
-                <div className="flex items-center gap-2">
+                <div className="relative z-10 flex items-center gap-2">
                     <ThemeSwitch />
                     <div className="hidden items-center gap-2 sm:flex">
                         <Button variant="tertiary" asChild>

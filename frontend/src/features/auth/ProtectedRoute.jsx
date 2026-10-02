@@ -14,7 +14,7 @@ import { LoadingState } from '../../components/feedback/LoadingState'
  * - Authenticated with valid household context: renders child route via <Outlet />.
  */
 export function ProtectedRoute({ children, requireHousehold = false }) {
-    const { status } = useAuth()
+    const { status, account } = useAuth()
     const { isLoading: householdLoading, hasHousehold, status: householdStatus } = useHousehold()
     const location = useLocation()
 
@@ -46,10 +46,19 @@ export function ProtectedRoute({ children, requireHousehold = false }) {
         }
     }
 
-    // Redirect away from /onboarding if household already exists, unless actively in guided setup or resuming
+    // Redirect away from /onboarding if household already exists:
+    // - REAL accounts with active household are strictly redirected to /dashboard (no /onboarding access)
+    // - DEMO accounts in inspection mode (?preview=demo) are allowed to view the walkthrough
+    // - DEMO accounts without inspection enter DEMO provisioning notice which resolves idempotently
+    const isDemo = account?.mode === 'DEMO_TEST' || account?.environment === 'DEMO'
     const searchParams = new URLSearchParams(location.search)
-    const isContinuing = searchParams.has('continue') || searchParams.has('step') || searchParams.has('resume')
-    if (location.pathname === '/onboarding' && hasHousehold && !householdLoading && !isContinuing) {
+    const isInspection = isDemo && (
+        searchParams.get('preview') === 'demo' ||
+        searchParams.get('preview') === 'true' ||
+        searchParams.get('inspect') === 'true'
+    )
+
+    if (location.pathname === '/onboarding' && hasHousehold && !householdLoading && !isInspection && !isDemo) {
         return <Navigate to="/dashboard" replace />
     }
 

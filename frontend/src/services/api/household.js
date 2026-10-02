@@ -46,7 +46,9 @@ export const householdApi = {
      * @returns {Promise<{ authenticated: boolean, account: object, household: object, membership: object, readiness: object }>}
      */
     async ensureDemoHousehold() {
-        const { data } = await apiClient.post('/household/demo/ensure')
+        const { data } = await apiClient.post('/household/demo/ensure', undefined, {
+            headers: { 'X-SPMS-Environment': 'DEMO' },
+        })
         return data
     },
 

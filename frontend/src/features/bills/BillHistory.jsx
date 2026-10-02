@@ -9,9 +9,11 @@ import {
     BILL_STATUS,
     NOT_AVAILABLE,
     formatEnergy,
+    formatEnergyBalance,
     formatPeriod,
     formatBillingMonthYear,
     sortBillsChronologically,
+    getBillDocumentSource,
 } from './presentation'
 import { cn } from '../../lib/utils'
 
@@ -99,9 +101,10 @@ export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}
                                     <tr>
                                         <th scope="col" className="px-4 py-2.5">Billing period</th>
                                         <th scope="col" className="px-3 py-2.5 text-right">Consumption</th>
-                                        <th scope="col" className="px-3 py-2.5 text-right">Solar</th>
-                                        <th scope="col" className="px-3 py-2.5 text-right">Net</th>
+                                        <th scope="col" className="px-3 py-2.5 text-right">Solar credited</th>
+                                        <th scope="col" className="px-3 py-2.5 text-right">Energy balance</th>
                                         <th scope="col" className="px-3 py-2.5 text-right">Bill amount</th>
+                                        <th scope="col" className="px-3 py-2.5 text-left">Source</th>
                                         <th scope="col" className="px-4 py-2.5 text-right">Status</th>
                                     </tr>
                                 </thead>
@@ -109,6 +112,8 @@ export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}
                                     {displayedBills.map((bill) => {
                                         const status = BILL_STATUS[bill.status] ?? { label: bill.status, tone: 'muted' }
                                         const sourceMeta = BILL_SOURCE[bill.source] ?? BILL_SOURCE.ELECTRICITY_BILL
+                                        const docSource = getBillDocumentSource(bill)
+                                        const DocIcon = docSource.icon
                                         const isSelected = bill.bill_id === selectedId
                                         const isPreSolar = bill.solar_applicability === 'BEFORE_SOLAR_INSTALLATION'
                                         const monthLabel = formatBillingMonthYear(
@@ -147,7 +152,7 @@ export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}
                                                         <div className="flex items-center gap-1.5 text-[11px] text-muted">
                                                             {periodRange && <span>{periodRange}</span>}
                                                             {bill.source_statement_serial && (
-                                                                <span>· #{bill.source_statement_serial}</span>
+                                                                  <span>· #{bill.source_statement_serial}</span>
                                                             )}
                                                             <span className="text-muted/60">·</span>
                                                             <span>{sourceMeta.label}</span>
@@ -177,13 +182,16 @@ export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}
                                                     )}
                                                 </td>
 
-                                                {/* Net units */}
+                                                {/* Energy balance */}
                                                 <td className="px-3 py-3 text-right font-display text-sm">
                                                     {bill.net_units_kwh !== null ? (
                                                         <span className={cn(
                                                             Number(bill.net_units_kwh) < 0 ? 'text-primary font-semibold' : 'text-body'
                                                         )}>
-                                                            {formatEnergy(bill.net_units_kwh, { signed: true })} kWh
+                                                            {formatEnergyBalance(bill.net_units_kwh, {
+                                                                solarUnits: bill.solar_units_kwh,
+                                                                consumption: bill.consumption_kwh,
+                                                            })}
                                                         </span>
                                                     ) : (
                                                         <span className="text-muted">—</span>
@@ -195,6 +203,14 @@ export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}
                                                     {bill.bill_amount !== null
                                                         ? formatMoney(bill.bill_amount)
                                                         : <span className="text-muted">{NOT_AVAILABLE}</span>}
+                                                </td>
+
+                                                {/* Source */}
+                                                <td className="px-3 py-3 text-left">
+                                                    <span className="inline-flex items-center gap-1 text-xs text-muted">
+                                                        <DocIcon className="size-3 text-secondary shrink-0" aria-hidden="true" />
+                                                        <span className="truncate max-w-[120px]">{docSource.badge}</span>
+                                                    </span>
                                                 </td>
 
                                                 {/* Exact Status */}

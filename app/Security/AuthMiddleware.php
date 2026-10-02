@@ -69,49 +69,91 @@ final class AuthMiddleware
 
     private function resolve(Request $request): AuthContext
     {
-        $matchedCookieName = null;
-        $rawToken = SessionCookie::extractToken($request->header('cookie'), $matchedCookieName);
+        $tokens = SessionCookie::extractTokens($request->header('cookie'));
 
-        if ($rawToken === null) {
+        if (empty($tokens)) {
             $this->applyUnauthenticatedEnvironmentHint($request);
             return AuthContext::anonymous();
         }
 
-        $targetProfile = match ($matchedCookieName) {
-            'spms_demo_session' => 'demo',
-            'spms_test_session' => 'test',
-            default => 'real',
-        };
+        $orderedTokens = $this->prioritizeTokens($tokens, $request);
+        $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
-        if ($targetProfile === 'test' && PHP_SAPI !== 'cli' && getenv('SPMS_DATA_ENVIRONMENT') !== 'test') {
-            $this->applyUnauthenticatedEnvironmentHint($request);
-            return AuthContext::anonymous();
-        }
+        foreach ($orderedTokens as $cookieName => $rawToken) {
+            $targetProfile = match ($cookieName) {
+                'spms_demo_session' => 'demo',
+                'spms_test_session' => 'test',
+                default => 'real',
+            };
 
-        \App\Support\Database::switchTo($targetProfile);
-        $session = $this->sessionService->resolve($rawToken, new DateTimeImmutable('now', new \DateTimeZone('UTC')));
-
-        if ($session !== null) {
-            $account = $this->accounts->findById((string) $session['account_id']);
-
-            if ($account === null || !$account->canAuthenticate()) {
-                $this->sessions->revoke((string) $session['id'], gmdate('Y-m-d H:i:s'));
-                $this->events->record(
-                    SecurityEventRepository::SESSION_REVOKED,
-                    null,
-                    $session['account_id'],
-                    ['session_id' => $session['id'], 'reason' => 'ACCOUNT_STATE'],
-                    null
-                );
-
-                return AuthContext::anonymous();
+            if ($targetProfile === 'test' && PHP_SAPI !== 'cli' && getenv('SPMS_DATA_ENVIRONMENT') !== 'test') {
+                continue;
             }
 
-            return AuthContext::authenticated($account, $session);
+            \App\Support\Database::switchTo($targetProfile);
+            $session = $this->sessionService->resolve($rawToken, $now);
+
+            if ($session !== null) {
+                $account = $this->accounts->findById((string) $session['account_id']);
+
+                if ($account === null || !$account->canAuthenticate()) {
+                    $this->sessions->revoke((string) $session['id'], gmdate('Y-m-d H:i:s'));
+                    $this->events->record(
+                        SecurityEventRepository::SESSION_REVOKED,
+                        null,
+                        $session['account_id'],
+                        ['session_id' => $session['id'], 'reason' => 'ACCOUNT_STATE'],
+                        null
+                    );
+                    continue;
+                }
+
+                return AuthContext::authenticated($account, $session);
+            }
         }
 
         $this->applyUnauthenticatedEnvironmentHint($request);
         return AuthContext::anonymous();
+    }
+
+    /**
+     * @param array<string, string> $tokens
+     * @return array<string, string>
+     */
+    private function prioritizeTokens(array $tokens, Request $request): array
+    {
+        $hint = null;
+        if (str_contains($request->path(), '/demo/')) {
+            $hint = 'demo';
+        } else {
+            $rawHint = $request->header('x-spms-environment')
+                ?? $request->header('x-spms-environment-hint')
+                ?? $request->bodyParam('environment')
+                ?? $this->cookieValue($request, 'spms_env');
+
+            if (is_string($rawHint) && trim($rawHint) !== '') {
+                $hint = strtolower(trim($rawHint));
+            }
+        }
+
+        $preferred = match ($hint) {
+            'demo' => 'spms_demo_session',
+            'test' => 'spms_test_session',
+            'real' => 'spms_session',
+            default => null,
+        };
+
+        if ($preferred !== null && isset($tokens[$preferred])) {
+            $ordered = [$preferred => $tokens[$preferred]];
+            foreach ($tokens as $name => $tok) {
+                if ($name !== $preferred) {
+                    $ordered[$name] = $tok;
+                }
+            }
+            return $ordered;
+        }
+
+        return $tokens;
     }
 
     private function applyUnauthenticatedEnvironmentHint(Request $request): void

@@ -1,10 +1,11 @@
-import { Gauge, Zap, Sun, CircleDollarSign, Cable, Hash } from 'lucide-react'
+import { Gauge, Zap, Sun, CircleDollarSign, Cable, Hash, Sliders, CheckCircle2 } from 'lucide-react'
 import { ProvenanceBadge } from './ProvenanceBadge'
 import {
     NOT_AVAILABLE,
     FIELD_LABEL,
     formatFieldValue,
     formatEnergy,
+    formatEnergyBalance,
     formatPeriod,
     formatDate,
     maskServiceNumber,
@@ -215,10 +216,10 @@ export function BillInformationSections({ detail }) {
                         </p>
                     </div>
 
-                    {/* Solar generation */}
+                    {/* Solar units credited */}
                     <div className="rounded-xl border border-border bg-surface-alt/60 p-4">
                         <p className="text-xs font-semibold uppercase tracking-wider text-muted">
-                            Solar generation
+                            Solar units credited
                         </p>
                         <p className="mt-1 font-display text-2xl font-bold text-primary">
                             {isPreSolar ? (
@@ -236,7 +237,7 @@ export function BillInformationSections({ detail }) {
                         </p>
                     </div>
 
-                    {/* Net units */}
+                    {/* Energy balance */}
                     <div className={cn(
                         'rounded-xl border p-4',
                         isSolarSurplus
@@ -244,24 +245,29 @@ export function BillInformationSections({ detail }) {
                             : 'border-border bg-surface-alt/60'
                     )}>
                         <p className="text-xs font-semibold uppercase tracking-wider text-muted">
-                            Net units
+                            Energy balance
                         </p>
                         <p className={cn(
                             'mt-1 font-display text-2xl font-bold',
                             isSolarSurplus ? 'text-primary' : 'text-heading'
                         )}>
                             {values.net_units_kwh !== null ? (
-                                `${formatEnergy(values.net_units_kwh, { signed: true })} kWh`
+                                formatEnergyBalance(values.net_units_kwh, {
+                                    solarUnits: values.solar_units_kwh,
+                                    consumption: values.consumption_kwh,
+                                })
                             ) : (
                                 <span className="text-muted">—</span>
                             )}
                         </p>
                         <p className="mt-1 text-[11px] text-muted">
                             {isSolarSurplus
-                                ? 'Net solar surplus (exported to grid)'
+                                ? 'Solar units exceeded household grid consumption'
                                 : isGridImport
-                                ? 'Net grid consumption billed'
-                                : 'Balanced grid exchange'}
+                                ? 'Household grid consumption exceeded solar units'
+                                : values.net_units_kwh !== null
+                                ? 'Solar units matched household grid consumption'
+                                : 'No energy balance calculated'}
                         </p>
                     </div>
                 </div>
@@ -420,6 +426,18 @@ export function BillInformationSections({ detail }) {
                         <FieldRow field="total_due" value={values.total_due} provenance={provenance} />
                     )}
                 </dl>
+
+                {values.bill_amount !== null && (
+                    <div className="mt-2 rounded-lg border border-border/60 bg-surface-alt/30 px-3 py-2 text-xs text-muted flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 font-medium text-body">
+                            <CheckCircle2 className="size-3.5 text-primary shrink-0" aria-hidden="true" />
+                            <span>Charges reconcile with bill amount</span>
+                        </span>
+                        <span className="font-mono text-[11px] text-muted">
+                            Total: ₹{values.bill_amount}
+                        </span>
+                    </div>
+                )}
             </section>
 
             <hr className="border-border/70" />
@@ -445,6 +463,82 @@ export function BillInformationSections({ detail }) {
                     )}
                 </dl>
             </section>
+
+            <hr className="border-border/70" />
+
+            {/* 6. TECHNICAL & EXTRACTION DETAILS */}
+            <details className="group rounded-xl border border-border bg-surface-alt/20 p-4 transition-all">
+                <summary className="flex items-center justify-between font-semibold text-sm text-heading cursor-pointer list-none select-none">
+                    <div className="flex items-center gap-2">
+                        <Sliders className="size-4 text-secondary" aria-hidden="true" />
+                        <span>Technical & extraction details</span>
+                    </div>
+                    <span className="text-xs text-muted font-normal group-open:hidden">Show details ▼</span>
+                    <span className="text-xs text-muted font-normal hidden group-open:inline">Hide details ▲</span>
+                </summary>
+
+                <div className="mt-4 flex flex-col gap-4 border-t border-border/60 pt-3">
+                    <dl className="grid gap-x-8 sm:grid-cols-2 text-xs">
+                        {sourceStatementSerial && (
+                            <div className="flex justify-between py-1 border-b border-border/40">
+                                <dt className="text-muted">Statement serial</dt>
+                                <dd className="font-mono font-medium text-heading">Statement #{sourceStatementSerial}</dd>
+                            </div>
+                        )}
+                        {detail.extraction?.extracted_at && (
+                            <div className="flex justify-between py-1 border-b border-border/40">
+                                <dt className="text-muted">Extracted at</dt>
+                                <dd className="font-mono text-muted">{detail.extraction.extracted_at}</dd>
+                            </div>
+                        )}
+                        {detail.extraction?.extraction_model && (
+                            <div className="flex justify-between py-1 border-b border-border/40">
+                                <dt className="text-muted">Extraction engine</dt>
+                                <dd className="font-mono text-muted">{detail.extraction.extraction_model}</dd>
+                            </div>
+                        )}
+                        {values.consumption_kwh !== null && values.solar_units_kwh !== null && values.net_units_kwh !== null && (
+                            <div className="flex justify-between py-1 border-b border-border/40 sm:col-span-2">
+                                <dt className="text-muted">Balance calculation (raw)</dt>
+                                <dd className="font-mono text-muted">
+                                    Balance = Consumption − Solar = {formatEnergy(values.consumption_kwh)} − {formatEnergy(values.solar_units_kwh)} = {formatEnergy(values.net_units_kwh, { signed: true })} kWh
+                                </dd>
+                            </div>
+                        )}
+                        {values.source_metadata_json && (() => {
+                            try {
+                                const meta = typeof values.source_metadata_json === 'string'
+                                    ? JSON.parse(values.source_metadata_json)
+                                    : values.source_metadata_json
+                                return (
+                                    <>
+                                        {meta.fsa && (
+                                            <div className="flex justify-between py-1 border-b border-border/40">
+                                                <dt className="text-muted">Fuel Surcharge Adj. (FSA)</dt>
+                                                <dd className="font-mono text-heading">₹{meta.fsa}</dd>
+                                            </div>
+                                        )}
+                                        {meta.irda && (
+                                            <div className="flex justify-between py-1 border-b border-border/40">
+                                                <dt className="text-muted">IRDA charges</dt>
+                                                <dd className="font-mono text-heading">₹{meta.irda}</dd>
+                                            </div>
+                                        )}
+                                        {meta.ed && (
+                                            <div className="flex justify-between py-1 border-b border-border/40">
+                                                <dt className="text-muted">Electricity Duty (ED)</dt>
+                                                <dd className="font-mono text-heading">₹{meta.ed}</dd>
+                                            </div>
+                                        )}
+                                    </>
+                                )
+                            } catch {
+                                return null
+                            }
+                        })()}
+                    </dl>
+                </div>
+            </details>
         </div>
     )
 }

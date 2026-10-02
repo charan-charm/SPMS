@@ -244,13 +244,15 @@ export function EnergyBalancePage() {
 
     return (
         <div className="mx-auto flex max-w-6xl flex-col gap-6">
-            <div>
-                <h1 className="font-display text-2xl font-semibold text-heading">Energy</h1>
-                <p className="mt-1 text-sm text-muted">
-                    Compare solar generation with household consumption to understand your
-                    potential energy situation. The backend classifies the balance; a potential
-                    surplus or deficit is never a confirmed grid export or import.
-                </p>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h1 className="font-display text-2xl font-semibold text-heading">Energy</h1>
+                    <p className="mt-1 text-sm text-muted">
+                        Compare solar generation with household consumption to understand your
+                        potential energy situation. The backend classifies the balance; a potential
+                        surplus or deficit is never a confirmed grid export or import.
+                    </p>
+                </div>
             </div>
 
             {phase === 'loading' && <LoadingState label="Loading energy balance" />}

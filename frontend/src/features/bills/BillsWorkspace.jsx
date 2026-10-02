@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { motion } from 'motion/react'
-import { Plus } from 'lucide-react'
+import { FileCheck, Plus } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { EmptyState } from '../../components/feedback/EmptyState'
 import { ErrorState } from '../../components/feedback/ErrorState'
@@ -31,6 +31,8 @@ export function BillsWorkspace({
     detailPhase = 'ready',
     pipelineStage = null,
     processFailure = null,
+    duplicateNotice = null,
+    onDismissDuplicateNotice = () => {},
     importSummary = null,
     accountMode = 'REAL',
     onUpload = async () => ({}),
@@ -92,7 +94,7 @@ export function BillsWorkspace({
         )
     }
 
-    const showUploadPanel = uploadOpen || (sortedBills.length === 0 && !processFailure)
+    const showUploadPanel = uploadOpen || (sortedBills.length === 0 && !processFailure && !duplicateNotice)
     const activeDetail = detail
 
     return (
@@ -100,16 +102,21 @@ export function BillsWorkspace({
             {/* Header */}
             <div className="flex flex-wrap items-end justify-between gap-4">
                 <PageHeading demo={accountMode === 'DEMO_TEST'} />
-                <Button
-                    type="button"
-                    onClick={() => setUploadOpen(true)}
-                    disabled={pipelineStage !== null}
-                    aria-controls={showUploadPanel ? 'bill-upload-panel' : undefined}
-                    aria-expanded={showUploadPanel}
-                >
-                    <Plus className="size-4" aria-hidden="true" />
-                    Upload bill
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button
+                        type="button"
+                        onClick={() => {
+                            onDismissDuplicateNotice()
+                            setUploadOpen(true)
+                        }}
+                        disabled={pipelineStage !== null}
+                        aria-controls={showUploadPanel ? 'bill-upload-panel' : undefined}
+                        aria-expanded={showUploadPanel}
+                    >
+                        <Plus className="size-4" aria-hidden="true" />
+                        Upload bill
+                    </Button>
+                </div>
             </div>
 
             {/* Pipeline Stage Processing */}
@@ -145,6 +152,57 @@ export function BillsWorkspace({
                 </motion.div>
             )}
 
+            {/* Informational Duplicate Notice (Clean Non-Error State) */}
+            {duplicateNotice && pipelineStage === null && (
+                <motion.div
+                    key="duplicate-notice"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION.page / 1000, ease: 'easeInOut' }}
+                    role="status"
+                    aria-live="polite"
+                    className="flex flex-col gap-3 rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between dark:border-sky-400/20 dark:bg-sky-950/20"
+                >
+                    <div className="flex items-start gap-3">
+                        <div className="mt-0.5 rounded-lg bg-sky-500/10 p-2 text-sky-600 dark:text-sky-400">
+                            <FileCheck className="size-5" aria-hidden="true" />
+                        </div>
+                        <div className="flex flex-col gap-0.5">
+                            <h3 className="text-sm font-semibold text-foreground">
+                                {duplicateNotice.title || 'Bill already uploaded'}
+                            </h3>
+                            <p className="text-sm text-muted-foreground">
+                                {duplicateNotice.message || 'This bill is already recorded for your household.'}
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2 self-end sm:self-center">
+                        {duplicateNotice.existingBillId && (
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => {
+                                    onDismissDuplicateNotice()
+                                    setUploadOpen(false)
+                                    onSelectBill(duplicateNotice.existingBillId)
+                                }}
+                            >
+                                View existing bill
+                            </Button>
+                        )}
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={onDismissDuplicateNotice}
+                        >
+                            Cancel
+                        </Button>
+                    </div>
+                </motion.div>
+            )}
+
             {/* Upload Panel */}
             {showUploadPanel ? (
                 <motion.div
@@ -159,7 +217,7 @@ export function BillsWorkspace({
                         busy={pipelineStage !== null}
                         onUpload={async (file) => {
                             const outcome = await onUpload(file)
-                            if (outcome?.uploaded) {
+                            if (outcome?.uploaded || outcome?.duplicate) {
                                 setUploadOpen(false)
                             }
                             return outcome

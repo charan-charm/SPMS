@@ -27,6 +27,7 @@ import { DataNatureBadge } from '../../components/data-display/DataNatureBadge'
 import { StatusBadge } from '../../components/data-display/StatusBadge'
 import { ConfidenceIndicator } from '../../components/data-display/ConfidenceIndicator'
 import { RecommendationCard } from '../../features/recommendations/RecommendationCard'
+import { ForecastChart } from '../../features/forecasts/ForecastChart'
 import { SPMSLoadingState } from '../../components/feedback/SPMSLoadingState'
 import { Button } from '../../components/ui/button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/ui/card'
@@ -130,6 +131,18 @@ export function DashboardPage() {
 
     const topRecommendation = recommendations.length > 0 ? recommendations[0] : null
 
+    const latestPeriodDisplay = (() => {
+        if (!billsSummary.latestVerified) return '--'
+        const b = billsSummary.latestVerified
+        const start = b.billing_period_start || b.values?.billing_period_start
+        const end = b.billing_period_end || b.values?.billing_period_end
+        if (start && end) return `${start} → ${end}`
+        if (start) return `From ${start}`
+        if (end) return `Until ${end}`
+        if (b.bill_date || b.values?.bill_date) return String(b.bill_date || b.values?.bill_date)
+        return '--'
+    })()
+
     return (
         <div className="space-y-6 pb-12">
             {/* Page Header */}
@@ -152,7 +165,12 @@ export function DashboardPage() {
                         )}
                     </div>
                     <p className="mt-1 text-sm text-text-muted">
-                        {household?.service_number ? `Service No: ${household.service_number} · ` : ''}APSPDCL Tirupati · {household?.timezone || 'Asia/Kolkata'}
+                        {[
+                            household?.location_label?.trim(),
+                            'APSPDCL',
+                            household?.service_number ? `Service No: ${household.service_number}` : null,
+                            household?.timezone || 'Asia/Kolkata',
+                        ].filter(Boolean).join(' · ')}
                     </p>
                 </div>
 
@@ -277,7 +295,7 @@ export function DashboardPage() {
                         <Sparkles className="h-3.5 w-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
                     </div>
                     <div className="mt-1 text-sm font-semibold text-text-primary">
-                        {recommendations.length} Active Advice
+                        {recommendations.length} Active Recommendation{recommendations.length === 1 ? '' : 's'}
                     </div>
                     <span className="text-[11px] text-text-muted">
                         {insightsCount} Insights evaluated
@@ -290,39 +308,47 @@ export function DashboardPage() {
                 {/* 1. Solar Generation */}
                 <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
                     <div className="flex items-center justify-between text-xs text-text-muted">
-                        <span className="font-medium">Solar Generation Today</span>
+                        <span className="font-medium">Solar Generation</span>
                         <Sun className="h-4 w-4 text-emerald-400" />
                     </div>
                     <div>
                         <div className="font-heading text-2xl font-bold text-text-primary">
-                            {solarLatest?.daily_generation_kwh !== undefined
+                            {solarLatest?.daily_generation_kwh !== undefined && solarLatest.daily_generation_kwh !== null
                                 ? `${Number(solarLatest.daily_generation_kwh).toFixed(2)} kWh`
-                                : (solarForecast?.predicted_value !== undefined ? `${solarForecast.predicted_value.toFixed(2)} kWh` : '--')}
+                                : (solarForecast?.predicted_value !== undefined && solarForecast.predicted_value !== null
+                                    ? `${Number(solarForecast.predicted_value).toFixed(2)} kWh`
+                                    : '--')}
                         </div>
                         <div className="text-[11px] text-text-muted mt-0.5">
-                            Total lifetime: {solarLatest?.total_generation_kwh ? `${Number(solarLatest.total_generation_kwh).toFixed(1)} kWh` : '--'}
+                            {solarLatest
+                                ? `Today's actual yield · ${Number(solarLatest.daily_generation_kwh || 0).toFixed(1)} kWh`
+                                : (solarForecast
+                                    ? 'Day-ahead projected yield'
+                                    : 'Awaiting inverter telemetry')}
                         </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
-                        <DataNatureBadge nature={solarLatest?.data_nature || 'ACTUAL'} />
-                        <StatusBadge status={solarLatest?.data_status || 'STALE'} />
+                        <DataNatureBadge nature={solarLatest ? 'ACTUAL' : (solarForecast?.data_nature || 'PREDICTED')} />
+                        <StatusBadge status={solarLatest ? (solarLatest.data_status || 'ONLINE') : 'STANDBY'} />
                     </div>
                 </div>
 
-                {/* 2. Projected Household Demand */}
+                {/* 2. Household Consumption */}
                 <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
                     <div className="flex items-center justify-between text-xs text-text-muted">
-                        <span className="font-medium">Projected Day Demand</span>
+                        <span className="font-medium">Household Consumption</span>
                         <Zap className="h-4 w-4 text-sky-400" />
                     </div>
                     <div>
                         <div className="font-heading text-2xl font-bold text-text-primary">
                             {consumptionForecast?.predicted_value !== undefined && consumptionForecast.predicted_value !== null
-                                ? `${consumptionForecast.predicted_value.toFixed(2)} kWh`
-                                : 'Evaluating'}
+                                ? `${Number(consumptionForecast.predicted_value).toFixed(2)} kWh`
+                                : '--'}
                         </div>
                         <div className="text-[11px] text-text-muted mt-0.5">
-                            Based on {billsSummary.verified} verified APSPDCL bill{billsSummary.verified === 1 ? '' : 's'}
+                            {billsSummary.verified > 0
+                                ? `Day demand · ${billsSummary.verified} verified bill${billsSummary.verified === 1 ? '' : 's'}`
+                                : 'Day demand projection'}
                         </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
@@ -331,20 +357,16 @@ export function DashboardPage() {
                     </div>
                 </div>
 
-                {/* 3. Projected Energy Balance */}
+                {/* 3. Grid / Energy Balance */}
                 <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
                     <div className="flex items-center justify-between text-xs text-text-muted">
-                        <span className="font-medium">
-                            {energyBalance?.classification === 'POTENTIAL_SURPLUS'
-                                ? 'Potential Surplus'
-                                : (energyBalance?.classification === 'POTENTIAL_DEFICIT' ? 'Potential Deficit' : 'Projected Balance')}
-                        </span>
+                        <span className="font-medium">Grid / Energy Balance</span>
                         <Scale className="h-4 w-4 text-teal-400" />
                     </div>
                     <div>
                         <div className="font-heading text-2xl font-bold text-text-primary">
                             {energyBalance?.balance_kwh !== undefined && energyBalance.balance_kwh !== null
-                                ? `${Math.abs(energyBalance.balance_kwh).toFixed(2)} kWh`
+                                ? `${energyBalance.classification === 'POTENTIAL_SURPLUS' ? '+' : energyBalance.classification === 'POTENTIAL_DEFICIT' ? '-' : ''}${Math.abs(energyBalance.balance_kwh).toFixed(2)} kWh`
                                 : '--'}
                         </div>
                         <div className={`text-[11px] mt-0.5 font-medium ${
@@ -355,10 +377,10 @@ export function DashboardPage() {
                                     : 'text-text-muted'
                         }`}>
                             {energyBalance?.classification === 'POTENTIAL_SURPLUS'
-                                ? 'Potential Surplus · Midday opportunity'
+                                ? 'Net surplus · Solar export opportunity'
                                 : energyBalance?.classification === 'POTENTIAL_DEFICIT'
-                                    ? 'Potential Deficit · Evening demand'
-                                    : (energyBalance?.classification || 'Evaluating')}
+                                    ? 'Net deficit · Grid import needed'
+                                    : (energyBalance?.classification || 'Evaluating balance')}
                         </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
@@ -367,10 +389,10 @@ export function DashboardPage() {
                     </div>
                 </div>
 
-                {/* 4. Estimated Energy Cost */}
+                {/* 4. Estimated Energy Cost (Variable) */}
                 <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
                     <div className="flex items-center justify-between text-xs text-text-muted">
-                        <span className="font-medium">Estimated Future Cost</span>
+                        <span className="font-medium">Estimated Energy Cost (Variable)</span>
                         <IndianRupee className="h-4 w-4 text-emerald-400" />
                     </div>
                     <div>
@@ -379,19 +401,51 @@ export function DashboardPage() {
                                 ? `₹${Number(energyCost.estimated_cost_inr).toFixed(2)}`
                                 : '--'}
                         </div>
-                        <div className="text-[11px] text-text-muted mt-0.5">
-                            {energyCost?.estimated_cost_inr === null || energyCost?.estimated_cost_inr === undefined
-                                ? 'Cost estimate unavailable'
-                                : energyCost.estimated_cost_inr === 0
-                                    ? 'Surplus covers estimated demand'
-                                    : 'Potential grid energy cost'}
+                        <div className="text-[11px] text-text-muted mt-0.5 space-y-0.5">
+                            <p>
+                                {energyCost?.estimated_cost_inr === null || energyCost?.estimated_cost_inr === undefined
+                                    ? 'Variable cost estimate pending'
+                                    : Number(energyCost.estimated_cost_inr) === 0
+                                        ? '₹0.00 variable energy · Covered by solar surplus'
+                                        : 'Variable grid energy cost only'}
+                            </p>
+                            <p className="text-[10px] text-text-muted/80">
+                                Fixed charges and statutory taxes not included.
+                            </p>
                         </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
                         <DataNatureBadge nature="ESTIMATED" />
-                        <span className="text-[11px] text-text-muted font-medium">Estimated (INR)</span>
+                        <span className="text-[11px] text-text-muted font-medium">Variable (INR)</span>
                     </div>
                 </div>
+            </div>
+
+            {/* Solar Generation vs Household Demand Time-Series Chart */}
+            <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-base font-semibold text-text-primary flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4 text-emerald-400" />
+                        <span>Solar Generation vs Household Demand</span>
+                    </h2>
+                    <Link
+                        to="/forecasts"
+                        className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
+                    >
+                        <span>Detailed Forecasts</span>
+                        <ArrowRight className="h-3 w-3" />
+                    </Link>
+                </div>
+                <ForecastChart
+                    timeSeries={forecastData?.time_series || []}
+                    horizon="DAY_AHEAD"
+                    solarConfidence={solarForecast?.confidence || 'MODERATE'}
+                    consumptionConfidence={consumptionForecast?.confidence || 'MODERATE'}
+                    isLoading={isLoading || isRefreshing}
+                    referenceTime={forecastData?.reference_time || forecastData?.generated_at}
+                    timezone={forecastData?.timezone || household?.timezone || 'Asia/Kolkata'}
+                    period={forecastData?.period}
+                />
             </div>
 
             {/* Top Actionable Recommendation Highlight */}
@@ -413,6 +467,7 @@ export function DashboardPage() {
                     <RecommendationCard
                         recommendation={topRecommendation}
                         onDismiss={() => loadDashboardData(true)}
+                        compact
                     />
                 </div>
             )}
@@ -492,9 +547,7 @@ export function DashboardPage() {
                             <div className="rounded-lg bg-surface-alt p-3 border border-border/50">
                                 <span className="text-xs text-text-muted block">Latest Period</span>
                                 <span className="text-xs font-medium text-text-primary">
-                                    {billsSummary.latestVerified
-                                        ? `${billsSummary.latestVerified.values?.billing_period_start || ''} → ${billsSummary.latestVerified.values?.billing_period_end || ''}`
-                                        : '--'}
+                                    {latestPeriodDisplay}
                                 </span>
                             </div>
                         </div>

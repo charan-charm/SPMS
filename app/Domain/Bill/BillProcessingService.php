@@ -489,9 +489,21 @@ final class BillProcessingService
             $updated = $this->bills->recordExtraction($account, $bill->id(), $draft, $validations, $flags, $now);
         } catch (AppException $e) {
             $this->bills->markProcessingFailed($account, $bill->id(), $now);
+            try {
+                if ($this->storage->delete($temp->storageKey())) {
+                    $this->tempDocs->markDeleted($temp->id(), $now->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'));
+                }
+            } catch (Throwable) {
+            }
             throw $e;
         } catch (Throwable) {
             $this->bills->markProcessingFailed($account, $bill->id(), $now);
+            try {
+                if ($this->storage->delete($temp->storageKey())) {
+                    $this->tempDocs->markDeleted($temp->id(), $now->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'));
+                }
+            } catch (Throwable) {
+            }
             throw new AppException(
                 'PERSISTENCE_FAILED',
                 'The extraction could not be stored; the bill was marked failed.',

@@ -104,11 +104,15 @@ describe('SPMS landing page (O1)', () => {
         expect(ambience.querySelectorAll('a, button, input, [tabindex]')).toHaveLength(0)
     })
 
-    it('links header/footer navigation to sections that exist on the page', () => {
+    it('links header/footer navigation to sections that exist on the page and centers desktop nav', () => {
         const { container } = renderLanding()
 
         const header = container.querySelector('header')
         const nav = within(header).getByRole('navigation', { name: /landing sections/i })
+        expect(nav.className).toContain('absolute')
+        expect(nav.className).toContain('inset-x-0')
+        expect(nav.className).toContain('justify-center')
+
         for (const link of nav.querySelectorAll('a[href^="#"]')) {
             const targetId = link.getAttribute('href').slice(1)
             expect(container.querySelector(`section#${targetId}`)).toBeTruthy()
@@ -186,7 +190,7 @@ describe('SPMS landing page (O1)', () => {
         expect(sectionHeadings.some((t) => /solar day arc/.test(t))).toBe(false)
     })
 
-    it('keeps the solar-vs-home graph, its legend and the bill context, with no network calls', () => {
+    it('keeps the solar-vs-home graph, its legend and the bill context, with clearly illustrative labels and no network calls', () => {
         const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
             throw new Error('landing page must not call the network')
         })
@@ -194,19 +198,32 @@ describe('SPMS landing page (O1)', () => {
 
         const solarSection = container.querySelector('section#solar-usage')
         expect(within(solarSection).getByRole('heading', { name: /solar vs household energy/i })).toBeInTheDocument()
-        expect(solarSection).toHaveTextContent(/solar — actual/i)
+        expect(solarSection).toHaveTextContent(/solar — example/i)
+        expect(solarSection).toHaveTextContent(/consumption — example/i)
+        expect(solarSection).not.toHaveTextContent(/solar — actual/i)
+        expect(solarSection).not.toHaveTextContent(/consumption — actual/i)
         expect(solarSection).toHaveTextContent(/electricity-bill information/i)
 
         expect(fetchSpy).not.toHaveBeenCalled()
         fetchSpy.mockRestore()
     })
 
-    it('shows the recommendation showcase and the built-for-households section', () => {
+    it('shows the recommendation showcase and the built-for-households section with honest evidence structure', () => {
         const { container } = renderLanding()
 
         const recommendations = container.querySelector('section#recommendations')
         expect(recommendations).toBeTruthy()
         expect(recommendations.textContent).toMatch(/example recommendation/i)
+        expect(recommendations).toHaveTextContent(/shifting flexible household energy use toward the higher-solar period/i)
+        expect(recommendations).toHaveTextContent(/solar outlook/i)
+        expect(recommendations).toHaveTextContent(/household demand/i)
+        expect(recommendations).toHaveTextContent(/energy situation/i)
+        expect(recommendations).toHaveTextContent(/advisory guidance areas/i)
+        expect(recommendations).toHaveTextContent(/improving solar self-use when potential surplus is identified/i)
+        expect(recommendations).toHaveTextContent(/never controls or schedules appliances/i)
+        expect(recommendations).not.toHaveTextContent(/guaranteed savings/i)
+        expect(recommendations).not.toHaveTextContent(/guaranteed surplus/i)
+        expect(recommendations).not.toHaveTextContent(/guaranteed grid export/i)
 
         const households = container.querySelector('section#built-for-households')
         expect(households).toBeTruthy()

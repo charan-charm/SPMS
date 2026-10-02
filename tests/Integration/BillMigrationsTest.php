@@ -87,7 +87,7 @@ final class BillMigrationsTest
                 $expected = array_merge(
                     ['id', 'household_id', 'status'],
                     BillField::ALL,
-                    ['verified_at', 'created_at', 'updated_at']
+                    ['verified_at', 'created_at', 'updated_at', 'dedup_active_period', 'fingerprint']
                 );
                 sort($expected);
 

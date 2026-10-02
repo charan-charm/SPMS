@@ -73,6 +73,7 @@ export function RecoverPage() {
     // STEP 1 Handler: Request Reset
     const handleRequestSubmit = async (e) => {
         e?.preventDefault()
+        if (requestSubmitting) return
         const trimmedEmail = requestEmail.trim()
         if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
             setRequestError('Please enter a valid email address.')
@@ -99,6 +100,7 @@ export function RecoverPage() {
 
     // STEP 2 Handler: Verify 6-digit recovery code
     const handleVerifySubmit = useCallback(async (codeToVerify) => {
+        if (verifySubmitting) return
         const trimmedCode = (codeToVerify || code).replace(/\D/g, '').slice(0, 6)
         if (trimmedCode.length !== 6) {
             setCodeError('Please enter the 6-digit recovery code.')
@@ -127,7 +129,7 @@ export function RecoverPage() {
         } finally {
             setVerifySubmitting(false)
         }
-    }, [code, requestEmail])
+    }, [code, requestEmail, verifySubmitting])
 
     const handleCodeChange = (e) => {
         const digits = e.target.value.replace(/\D/g, '').slice(0, 6)
@@ -173,6 +175,7 @@ export function RecoverPage() {
     // STEP 3 Handler: Set New Password
     const handlePasswordSubmit = async (e) => {
         e.preventDefault()
+        if (passwordSubmitting) return
         setPasswordErrors({ fieldErrors: {}, generalError: null })
 
         const fieldErrors = {}

@@ -36,17 +36,17 @@ function LegendLine({ color, dashed = false, width = 24 }) {
 }
 
 const LEGEND = [
-    { swatch: <LegendLine color="var(--spms-chart-solar)" />, label: 'Solar — actual' },
-    { swatch: <LegendLine color="var(--spms-chart-usage)" />, label: 'Consumption — actual' },
-    { swatch: <LegendLine color="var(--spms-chart-solar)" dashed />, label: 'Solar — forecast' },
-    { swatch: <LegendLine color="var(--spms-chart-usage)" dashed />, label: 'Consumption — forecast' },
+    { swatch: <LegendLine color="var(--spms-chart-solar)" />, label: 'Solar — example' },
+    { swatch: <LegendLine color="var(--spms-chart-usage)" />, label: 'Consumption — example' },
+    { swatch: <LegendLine color="var(--spms-chart-solar)" dashed />, label: 'Solar — forecast (example)' },
+    { swatch: <LegendLine color="var(--spms-chart-usage)" dashed />, label: 'Consumption — forecast (example)' },
     {
         swatch: <span aria-hidden="true" className="size-2.5 shrink-0 rounded-sm bg-chart-surplus/60" />,
-        label: 'Potential surplus',
+        label: 'Potential surplus (illustrative)',
     },
     {
         swatch: <span aria-hidden="true" className="size-2.5 shrink-0 rounded-sm bg-chart-deficit/50" />,
-        label: 'Potential deficit',
+        label: 'Potential deficit (illustrative)',
     },
 ]
 
@@ -123,7 +123,7 @@ export function SolarVsUsageSection() {
                             <svg
                                 viewBox="0 0 720 320"
                                 role="img"
-                                aria-label="Illustrative example chart: household solar production and consumption across one example day. Solar rises after sunrise, peaks around midday and ends near sunset; consumption shows morning and evening peaks. Before midday the values are labeled actual, after it forecast as dashed lines. The hours around midday form a potential surplus where the solar curve sits above consumption; early morning and evening form potential deficits."
+                                aria-label="Illustrative example chart: household solar production and consumption across one example day. Solar rises after sunrise, peaks around midday and ends near sunset; consumption shows morning and evening peaks. Before midday the values represent example recorded measurements, after it example forecasts as dashed lines. The hours around midday form a potential surplus where the solar curve sits above consumption; early morning and evening form potential deficits."
                                 focusable="false"
                                 className="h-auto w-full"
                             >
@@ -178,7 +178,7 @@ export function SolarVsUsageSection() {
                                     fontWeight="600"
                                     fill="var(--spms-muted)"
                                 >
-                                    MEASURED SO FAR
+                                    RECORDED (EXAMPLE)
                                 </text>
                                 <text
                                     x={Number(CURVES.xNow) + 8}
@@ -187,7 +187,7 @@ export function SolarVsUsageSection() {
                                     fontWeight="600"
                                     fill="var(--spms-secondary)"
                                 >
-                                    FORECAST
+                                    FORECAST (EXAMPLE)
                                 </text>
 
                                 <ChartPath

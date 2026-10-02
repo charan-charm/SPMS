@@ -191,7 +191,8 @@ describe('BillsWorkspace lifecycle states', () => {
         expect(screen.getByRole('heading', { name: /review needed/i })).toBeInTheDocument()
         expect(screen.getByText(/some information from this bill needs your attention/i)).toBeInTheDocument()
         expect(screen.getByText(/spms found a difference between this value and the other readings/i)).toBeInTheDocument()
-        expect((await screen.findAllByText('+177 kWh')).length).toBeGreaterThanOrEqual(2)
+        expect(await screen.findByText('+177 kWh')).toBeInTheDocument()
+        expect(screen.getByText('177 kWh deficit')).toBeInTheDocument()
 
         // The expectation of -177 is NOT dumped on the main screen…
         expect(container.textContent).not.toContain('-177')
@@ -782,6 +783,84 @@ describe('BillsWorkspace lifecycle states', () => {
             expect(container.textContent).not.toMatch(/verified statement feed/i)
             expect(screen.getByText('2 statements recorded')).toBeInTheDocument()
             expect(screen.getByText(/2 recorded · 2 extracted · 0 awaiting review/i)).toBeInTheDocument()
+        })
+
+        it('15. April 2026 real example: surplus renders "233 kWh surplus" without confusing negative primary value', () => {
+            const values = {
+                ...extractedValues(),
+                consumption_kwh: '169.000',
+                solar_units_kwh: '402.000',
+                net_units_kwh: '-233.000',
+            }
+
+            const { container } = renderWorkspace({
+                bills: [{ bill_id: 'apr-2026', status: 'EXTRACTED', billing_period_start: '2026-04-01', billing_period_end: '2026-05-01' }],
+                detail: {
+                    ...detailFor('EXTRACTED', values, { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'apr-2026',
+                    billing_period_start: '2026-04-01',
+                    billing_period_end: '2026-05-01',
+                },
+            })
+
+            // Card 2: Labeled as "Solar units credited"
+            expect(screen.getByText('Solar units credited')).toBeInTheDocument()
+            expect(screen.getAllByText('402 kWh').length).toBeGreaterThanOrEqual(1)
+
+            // Card 3: Energy balance card
+            expect(screen.getAllByText('Energy balance').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getByText('233 kWh surplus')).toBeInTheDocument()
+            expect(screen.getByText('Solar units exceeded household grid consumption')).toBeInTheDocument()
+
+            // Does NOT prominently dump "-233 kWh" in the primary summary card
+            const energySummarySection = container.querySelector('[aria-labelledby="energy-summary-title"]')
+            expect(energySummarySection).not.toBeNull()
+            expect(energySummarySection.textContent).not.toContain('-233 kWh')
+
+            // Underlying canonical signed calculation remains preserved in detail values
+            expect(values.net_units_kwh).toBe('-233.000')
+        })
+
+        it('16. deficit example: 271 kWh consumption and 177 kWh solar renders "94 kWh deficit"', () => {
+            const values = {
+                ...extractedValues(),
+                consumption_kwh: '271.000',
+                solar_units_kwh: '177.000',
+                net_units_kwh: '94.000',
+            }
+
+            renderWorkspace({
+                bills: [{ bill_id: 'deficit-bill', status: 'EXTRACTED' }],
+                detail: {
+                    ...detailFor('EXTRACTED', values, { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'deficit-bill',
+                },
+            })
+
+            expect(screen.getAllByText('Energy balance').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getByText('94 kWh deficit')).toBeInTheDocument()
+            expect(screen.getByText('Household grid consumption exceeded solar units')).toBeInTheDocument()
+        })
+
+        it('17. balanced example: equal consumption and solar renders "0 kWh balanced"', () => {
+            const values = {
+                ...extractedValues(),
+                consumption_kwh: '200.000',
+                solar_units_kwh: '200.000',
+                net_units_kwh: '0.000',
+            }
+
+            renderWorkspace({
+                bills: [{ bill_id: 'balanced-bill', status: 'EXTRACTED' }],
+                detail: {
+                    ...detailFor('EXTRACTED', values, { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'balanced-bill',
+                },
+            })
+
+            expect(screen.getAllByText('Energy balance').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getByText('0 kWh balanced')).toBeInTheDocument()
+            expect(screen.getByText('Solar units matched household grid consumption')).toBeInTheDocument()
         })
     })
 })

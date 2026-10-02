@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Link, useLocation } from 'react-router'
+import { Link, useLocation, useSearchParams } from 'react-router'
 import { CheckCircle2, AlertCircle, Mail, RotateCcw, ArrowRight, LoaderCircle, Clock } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../../components/ui/card'
@@ -19,12 +19,16 @@ const RESEND_COOLDOWN = 60
 
 export function VerifyPage() {
     const location = useLocation()
-    const emailFromState = location.state?.email || ''
-    const environmentFromState = location.state?.environment || null
+    const [searchParams] = useSearchParams()
+
+    const queryCode = (searchParams.get('code') || searchParams.get('token') || '').replace(/\D/g, '').slice(0, 6)
+    const queryEmail = searchParams.get('email') || ''
+    const emailFromState = location.state?.email || queryEmail || ''
+    const environmentFromState = location.state?.environment || searchParams.get('env') || null
     const registeredFromState = Boolean(location.state?.registered)
 
     // 6-digit code input
-    const [code, setCode] = useState('')
+    const [code, setCode] = useState(queryCode)
     const inputRef = useRef(null)
 
     // Verification states: 'idle' | 'verifying' | 'success' | 'error'
@@ -54,6 +58,7 @@ export function VerifyPage() {
     }, [cooldown])
 
     const handleVerify = useCallback(async (codeToVerify) => {
+        if (verifyStatus === 'verifying') return
         const trimmed = (codeToVerify || '').replace(/\D/g, '').slice(0, 6)
         if (trimmed.length !== 6) {
             setVerifyError('Please enter the 6-digit code from your email.')
@@ -88,7 +93,7 @@ export function VerifyPage() {
                 }
             }
         }
-    }, [emailFromState, environmentFromState])
+    }, [emailFromState, environmentFromState, verifyStatus])
 
     const handleCodeChange = (e) => {
         const digits = e.target.value.replace(/\D/g, '').slice(0, 6)
@@ -108,6 +113,15 @@ export function VerifyPage() {
             handleVerify(pasted)
         }
     }
+
+    // Auto-verify once on mount if 6-digit code was provided in URL query params
+    const autoVerifiedRef = useRef(false)
+    useEffect(() => {
+        if (!autoVerifiedRef.current && queryCode.length === 6) {
+            autoVerifiedRef.current = true
+            handleVerify(queryCode)
+        }
+    }, [queryCode, handleVerify])
 
     const [resendEmail, setResendEmail] = useState(emailFromState)
 

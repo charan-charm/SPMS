@@ -45,7 +45,7 @@ export function BillUploadPanel({ onUpload, busy = false, externalError = null, 
         setUploading(true)
         const outcome = (await onUpload(file)) ?? { uploaded: true }
         setUploading(false)
-        if (outcome.uploaded) {
+        if (outcome.uploaded || outcome.duplicate) {
             setFile(null)
             setError(null)
         } else if (outcome.error) {

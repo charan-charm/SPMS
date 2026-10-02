@@ -342,6 +342,8 @@ final class SolarForecastModel
             dataNature: $dataNature,
             dataQuality: $dataQuality,
             provenance: [
+                'forecast_source' => 'DETERMINISTIC',
+                'model_name' => 'SOLAR_DETERMINISTIC_BASELINE',
                 'model_version' => self::MODEL_VERSION,
                 'generated_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
                 'sources' => $sources,

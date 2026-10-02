@@ -125,6 +125,41 @@ final class HouseholdApiTest
                 }
             }),
 
+            TestResult::check('POST /api/v1/household/demo/ensure fails unauthenticated with 401', function (): void {
+                try {
+                    self::controller()->ensureDemo(self::request('POST'));
+                    Assert::true(false, 'Expected ensureDemo to fail unauthenticated');
+                } catch (AppException $e) {
+                    Assert::same('UNAUTHENTICATED', $e->errorCode());
+                    Assert::same(401, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('POST /api/v1/household/demo/ensure in demo environment returns existing household without mutation', function (): void {
+                \App\Support\Database::switchTo('demo');
+                try {
+                    $accountRepo = new \App\Repositories\AccountRepository();
+                    $demoAccount = $accountRepo->findByEmail('demo.surplus@spms.local');
+                    Assert::true($demoAccount !== null, 'DEMO1 account must exist');
+
+                    $memberRepo = new \App\Repositories\MembershipRepository();
+                    $initial = $memberRepo->findActiveByAccount($demoAccount->id());
+                    Assert::true($initial !== null, 'DEMO1 initial household must exist');
+                    $initialHousehold = $initial['household'];
+
+                    $response = self::controller()->ensureDemo(self::request('POST', as: $demoAccount));
+                    Assert::same(200, $response->status());
+                    Assert::same($initialHousehold->id(), $response->body()['data']['household']['id']);
+                    Assert::same('Solar Surplus Residence', $response->body()['data']['household']['label']);
+
+                    $after = $memberRepo->findActiveByAccount($demoAccount->id());
+                    Assert::same($initialHousehold->id(), $after['household']->id(), 'Household ID must remain unchanged');
+                    Assert::same($initialHousehold->label(), $after['household']->label(), 'Household label must remain unchanged');
+                } finally {
+                    \App\Support\Database::switchTo('test');
+                }
+            }),
+
             TestResult::check('V1 single-household rule: a second creation is rejected, never replaced', function (): void {
                 $fixture = AuthTesting::householdFixture();
 

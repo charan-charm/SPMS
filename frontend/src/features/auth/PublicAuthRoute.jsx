@@ -21,7 +21,14 @@ export function PublicAuthRoute({ children }) {
     }
 
     if (status === 'authenticated') {
-        const destination = location.state?.from || '/dashboard'
+        const from = location.state?.from
+        const isAuthRoute = typeof from === 'string' && (
+            from.startsWith('/login') ||
+            from.startsWith('/register') ||
+            from.startsWith('/verify') ||
+            from.startsWith('/recover')
+        )
+        const destination = from && !isAuthRoute ? from : '/dashboard'
         return <Navigate to={destination} replace />
     }
 

@@ -1,0 +1,453 @@
+/*
+ * SolarAI Avatar Animations
+ * Clean, lightweight, GPU-accelerated motion for the 3D SolarAI character.
+ * Uses transform & opacity only.
+ * Respects prefers-reduced-motion.
+ */
+
+/* ── Keyframes ─────────────────────────────────────────────────────── */
+
+/* Idle: calm, subconscious breathing float (3.8s–4.5s) */
+@keyframes solarai-float {
+    0%, 100% {
+        transform: translateY(0px) rotate(0deg) scale(1);
+    }
+    50% {
+        transform: translateY(-2px) rotate(0.2deg) scale(1.008);
+    }
+}
+
+/* Thinking: subtle curious head tilt (one-shot, held calm & still — no continuous bobbing, spinning, wobbling, or pulsing) */
+@keyframes solarai-think {
+    0% {
+        transform: rotate(0deg) translateY(0);
+    }
+    100% {
+        transform: rotate(2deg) translateY(-1px);
+    }
+}
+
+/* Greeting: welcoming gentle upward float + tiny tilt + soft settle (0.95s one-shot) */
+@keyframes solarai-greet {
+    0% {
+        transform: translateY(4px) scale(0.96) rotate(0deg);
+        opacity: 0.9;
+    }
+    35% {
+        transform: translateY(-4px) scale(1.025) rotate(-1.5deg);
+        opacity: 1;
+    }
+    70% {
+        transform: translateY(-1px) scale(1.005) rotate(0.5deg);
+    }
+    100% {
+        transform: translateY(0px) scale(1) rotate(0deg);
+    }
+}
+
+/* Responding: tiny confirmation settle on answer completion (0.6s one-shot) */
+@keyframes solarai-respond {
+    0% {
+        transform: translateY(0px) scale(1);
+    }
+    40% {
+        transform: translateY(-2px) scale(1.025);
+    }
+    100% {
+        transform: translateY(0px) scale(1);
+    }
+}
+
+/* Error: gentle concerned tilt (2.8s) */
+@keyframes solarai-error-tilt {
+    0%, 100% {
+        transform: rotate(0deg);
+    }
+    50% {
+        transform: rotate(-2deg);
+    }
+}
+
+/*
+ * FAB peek-in entrance — plays once per page load (~400ms delay).
+ * Toned down, subtle & premium:
+ *   0%    → starts 65px below viewport (within 60–70px, not 110px)
+ *   26%   → quick upward peek, overshoots only 7px (within 6–8px)
+ *   45%   → tiny duck back down 14px (within 12–16px, not 36px)
+ *   68%   → pops back up with subtle 3.5° tilt (within 3–4°, not 8°)
+ *   84%   → tiny counter-settle of -1.5° (within 1–2°)
+ *   100%  → locks completely at final resting position, perfectly still
+ * Total duration: 850ms (within 800–900ms, toned down from 1.1s).
+ */
+@keyframes solarai-fab-peek-in {
+    0% {
+        transform: translateY(65px);
+        opacity: 0;
+    }
+    /* Quick upward peek, overshooting only 7px */
+    26% {
+        transform: translateY(-7px) rotate(0deg);
+        opacity: 1;
+    }
+    /* Tiny duck back down 14px */
+    45% {
+        transform: translateY(14px) rotate(0.5deg);
+        opacity: 1;
+    }
+    /* Pops back up with a subtle 3.5° tilt */
+    68% {
+        transform: translateY(-3px) rotate(3.5deg);
+    }
+    /* Tiny counter-settle (-1.5°) */
+    84% {
+        transform: translateY(1px) rotate(-1.5deg);
+    }
+    /* Settles perfectly still */
+    100% {
+        transform: translateY(0) rotate(0deg);
+        opacity: 1;
+    }
+}
+
+/* FAB entrance class — 0.4s delay (~400ms) after page load, 850ms duration */
+.solarai-fab-entrance {
+    animation: solarai-fab-peek-in 850ms cubic-bezier(0.22, 1, 0.36, 1) 0.4s both;
+    will-change: transform, opacity;
+}
+
+/*
+ * Avatar entrance — fires on every drawer open.
+ * Applied to: header avatar (always visible) + welcome card avatar (no-messages view).
+ * Starts 40px to the right (clearly perceivable), glides in with expo-out easing,
+ * then 2 tiny positional settle steps near the end.
+ * Total: 680ms, one-shot, forwards.
+ */
+@keyframes solarai-av-enter {
+    /* Start 40px right, invisible */
+    0% {
+        transform: translateX(40px);
+        opacity: 0;
+    }
+    /* Fade in while still moving */
+    20% {
+        opacity: 1;
+    }
+    /* Overshoot by 3px (settle step 1) */
+    72% {
+        transform: translateX(-3px);
+        opacity: 1;
+    }
+    /* Return 1px past zero (settle step 2) */
+    87% {
+        transform: translateX(1px);
+    }
+    /* Lock at rest */
+    100% {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* ── Base avatar container & element ─────────────────────────────── */
+.solarai-av-container {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.solarai-av {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    position: relative;
+    background: transparent !important;
+    overflow: visible;
+    will-change: transform;
+    /* Subtle 3D depth contact shadow adhering to character alpha contour */
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.12)) drop-shadow(0 0 2px rgba(34, 197, 94, 0.16));
+    transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* Dark mode: subtle solar rim light conforming to character contour */
+.dark .solarai-av {
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35)) drop-shadow(0 0 4px rgba(34, 197, 94, 0.24));
+}
+
+/* ── Animation states ─────────────────────────────────────────────── */
+
+.solarai-av-idle {
+    animation: solarai-float 4.2s ease-in-out infinite;
+}
+
+/* Drawer welcome card avatar — one-shot entrance, then fully static */
+.solarai-av-enter {
+    animation: solarai-av-enter 680ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    will-change: transform, opacity;
+}
+
+/* Settled: completely static, no animation */
+.solarai-av-settled {
+    animation: none;
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.solarai-av-thinking {
+    animation: solarai-think 350ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.15)) drop-shadow(0 0 5px rgba(34, 197, 94, 0.28));
+}
+
+.dark .solarai-av-thinking {
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4)) drop-shadow(0 0 6px rgba(34, 197, 94, 0.32));
+}
+
+.solarai-av-greeting {
+    animation: solarai-greet 0.95s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.solarai-av-responding {
+    animation: solarai-respond 0.6s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.solarai-av-error {
+    animation: solarai-error-tilt 2.8s ease-in-out infinite;
+    filter: drop-shadow(0 2px 4px rgba(239, 68, 68, 0.25));
+}
+
+/* ── Subtle Interactive Button Hovers (1–2% scale only) ─────────── */
+.solarai-header-btn:hover .solarai-av,
+button:hover > .solarai-av,
+button:hover > .solarai-av-container .solarai-av {
+    transform: translateY(-1px) scale(1.02);
+}
+
+/* ── SolarAI FAB Orbit Ring & Ambient Highlight ────────────────── */
+@keyframes solarai-orbit-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes solarai-orbit-pulse {
+    0%, 100% {
+        opacity: 0.5;
+        transform: scale(0.98);
+    }
+    50% {
+        opacity: 0.85;
+        transform: scale(1.03);
+    }
+}
+
+.solarai-orbit-track {
+    position: absolute;
+    inset: -6px;
+    border: 1px dashed rgba(34, 197, 94, 0.32);
+    border-radius: 9999px;
+    animation: solarai-orbit-spin 12s linear infinite;
+    pointer-events: none;
+}
+
+.dark .solarai-orbit-track {
+    border-color: rgba(34, 197, 94, 0.42);
+}
+
+/* Ambient soft glow halo highlighting the AI assistant on the page */
+.solarai-orbit-halo {
+    position: absolute;
+    inset: -8px;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(34, 197, 94, 0.22) 0%, rgba(234, 179, 8, 0.15) 55%, transparent 75%);
+    animation: solarai-orbit-pulse 3.8s ease-in-out infinite;
+    filter: blur(5px);
+    pointer-events: none;
+}
+
+.dark .solarai-orbit-halo {
+    background: radial-gradient(circle, rgba(34, 197, 94, 0.32) 0%, rgba(234, 179, 8, 0.2) 55%, transparent 75%);
+    filter: blur(7px);
+}
+
+/* Glowing orbital satellite energy node circling the assistant */
+.solarai-orbit-particle {
+    position: absolute;
+    top: -3.5px;
+    left: calc(50% - 3.5px);
+    width: 7px;
+    height: 7px;
+    border-radius: 9999px;
+    background: #22c55e;
+    box-shadow: 0 0 8px 2px rgba(34, 197, 94, 0.75), 0 0 14px 4px rgba(234, 179, 8, 0.45);
+}
+
+.dark .solarai-orbit-particle {
+    background: #4ade80;
+    box-shadow: 0 0 10px 3px rgba(74, 222, 128, 0.8), 0 0 16px 5px rgba(250, 204, 21, 0.5);
+}
+
+/* ── FAB Orb: Layered Depth (inner highlight + glass rim + ambient shadow) ── */
+/*
+ * .solarai-fab-orb provides three calm depth layers:
+ *   1. box-shadow: ambient ground shadow (feels raised off the UI)
+ *   2. box-shadow inset: soft upper-left glass highlight strip
+ *   3. ::before pseudo: subtle specular arc on the upper-left curved glass
+ * Light & dark variants via .dark selector.
+ * Hover deepens shadow slightly (no scale — that is handled by Tailwind class).
+ */
+.solarai-fab-orb {
+    /* Layered box-shadows: ground shadow + inner highlight + rim */
+    box-shadow:
+        /* Ambient raised shadow — calm, not dramatic */
+        0 4px 16px -2px rgba(0, 0, 0, 0.14),
+        0 2px 6px -1px rgba(0, 0, 0, 0.10),
+        /* Glass rim: faint bright ring around the whole orb */
+        0 0 0 1px rgba(255, 255, 255, 0.18),
+        /* Inner upper-left highlight */
+        inset 2px 2px 6px rgba(255, 255, 255, 0.22),
+        inset -1px -1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.dark .solarai-fab-orb {
+    box-shadow:
+        /* Deeper ambient shadow in dark mode */
+        0 6px 24px -4px rgba(0, 0, 0, 0.40),
+        0 2px 8px -2px rgba(0, 0, 0, 0.30),
+        /* Glass rim subtly green-tinted in dark */
+        0 0 0 1px rgba(255, 255, 255, 0.08),
+        /* Inner upper-left highlight — softer in dark */
+        inset 2px 2px 6px rgba(255, 255, 255, 0.10),
+        inset -1px -1px 4px rgba(0, 0, 0, 0.20);
+}
+
+/* Specular arc: upper-left curved glass catchlight */
+.solarai-fab-orb::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    /* Radial highlight from top-left corner only */
+    background: radial-gradient(
+        ellipse 60% 40% at 28% 22%,
+        rgba(255, 255, 255, 0.18) 0%,
+        transparent 65%
+    );
+    z-index: 1;
+}
+
+.dark .solarai-fab-orb::before {
+    background: radial-gradient(
+        ellipse 60% 40% at 28% 22%,
+        rgba(255, 255, 255, 0.08) 0%,
+        transparent 65%
+    );
+}
+
+/* On hover: deepen the ground shadow slightly (complements Tailwind hover:scale) */
+.solarai-fab-orb:hover {
+    box-shadow:
+        0 8px 28px -4px rgba(0, 0, 0, 0.18),
+        0 3px 10px -2px rgba(0, 0, 0, 0.12),
+        0 0 0 1px rgba(255, 255, 255, 0.22),
+        inset 2px 2px 8px rgba(255, 255, 255, 0.26),
+        inset -1px -1px 4px rgba(0, 0, 0, 0.05);
+}
+
+.dark .solarai-fab-orb:hover {
+    box-shadow:
+        0 10px 36px -6px rgba(0, 0, 0, 0.50),
+        0 4px 14px -3px rgba(0, 0, 0, 0.35),
+        0 0 0 1px rgba(255, 255, 255, 0.10),
+        inset 2px 2px 8px rgba(255, 255, 255, 0.12),
+        inset -1px -1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* ── Drawer floating-card presentation ───────────────────────────── */
+/*
+ * .solarai-drawer-card gives the right-side drawer a floating premium card feel:
+ *   - Rounded left/top/bottom corners (top-right & bottom-right stay flush with the
+ *     viewport edge, so the card visually floats inward from the right)
+ *   - A soft layered drop shadow on the left/top/bottom edges
+ *   - Thin top + bottom border to cap the card edges cleanly
+ *   - Small top/bottom margin so the card breathes away from the viewport edges
+ * Width, layout, content, and z-index are untouched.
+ */
+.solarai-drawer-card {
+    border-radius: 1rem 0 0 1rem;   /* tl bl — right edge stays viewport-flush */
+    /* Soft layered shadow: ambient depth + focused edge shadow */
+    box-shadow:
+        -8px 0 32px -6px rgba(0, 0, 0, 0.18),
+        -2px 0 8px -2px rgba(0, 0, 0, 0.10),
+        0 8px 32px -8px rgba(0, 0, 0, 0.14),
+        0 -4px 16px -6px rgba(0, 0, 0, 0.08);
+    /* Top + bottom border to close the card outline */
+    border-top: 1px solid var(--spms-border);
+    border-bottom: 1px solid var(--spms-border);
+    /* Breathe away from the viewport top/bottom edges */
+    margin-top: 0.75rem;
+    margin-bottom: 0.75rem;
+    height: calc(100% - 1.5rem) !important;  /* compensate for the margin */
+    overflow: hidden;   /* clips inner content to rounded corners */
+}
+
+.dark .solarai-drawer-card {
+    box-shadow:
+        -10px 0 40px -8px rgba(0, 0, 0, 0.45),
+        -3px 0 12px -3px rgba(0, 0, 0, 0.30),
+        0 10px 40px -10px rgba(0, 0, 0, 0.35),
+        0 -4px 20px -6px rgba(0, 0, 0, 0.20);
+}
+
+
+.solarai-drawer-enter {
+    animation: spms-slide-in-right 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    will-change: transform;
+}
+
+.solarai-drawer-exit {
+    animation: spms-slide-out-right 240ms cubic-bezier(0.4, 0, 1, 1) forwards;
+    will-change: transform;
+}
+
+.solarai-backdrop-enter {
+    animation: spms-fade-in 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    will-change: opacity;
+}
+
+.solarai-backdrop-exit {
+    animation: spms-fade-out 220ms ease-in forwards;
+    will-change: opacity;
+}
+
+/* ── Accessibility: prefers-reduced-motion ───────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .solarai-av,
+    .solarai-av-idle,
+    .solarai-av-enter,
+    .solarai-av-settled,
+    .solarai-av-thinking,
+    .solarai-av-greeting,
+    .solarai-av-responding,
+    .solarai-av-error,
+    .solarai-fab-entrance,
+    .solarai-orbit-track,
+    .solarai-orbit-halo,
+    .solarai-orbit-particle,
+    .solarai-drawer-enter,
+    .solarai-drawer-exit,
+    .solarai-backdrop-enter,
+    .solarai-backdrop-exit {
+        animation: none !important;
+        transform: none !important;
+        transition: none !important;
+        opacity: 1 !important;
+    }
+
+    /* Depth shadows are static — no animation to suppress. Already accessible. */
+}
