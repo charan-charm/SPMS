@@ -231,6 +231,40 @@ final class SolarConnectionWorkflowTest
                 Assert::same(1, $historyResp['count']);
                 Assert::same('3450.75', $historyResp['history'][0]['power_w']);
 
+                // 10b. Opportunistic visit auto-synchronization
+                // If recently synced, returns FRESH without calling provider
+                $autoSyncResp = $solar->autoSync(self::cookieRequest(
+                    'POST',
+                    '/api/v1/solar/sync/auto',
+                    $session['token'],
+                    [],
+                    [AuthMiddleware::CSRF_HEADER => $session['csrf']]
+                ))->body()['data'];
+                Assert::false($autoSyncResp['synced']);
+                Assert::same('FRESH', $autoSyncResp['status']);
+
+                // Concurrency test: when another process holds GET_LOCK, returns IN_PROGRESS without blocking
+                $cfg = \App\Support\DataEnvironments::connectionConfig('test');
+                $dsn = sprintf('mysql:host=%s;port=%s;dbname=%s;charset=%s', $cfg['HOST'], $cfg['PORT'], $cfg['DATABASE'], $cfg['CHARSET']);
+                $otherPdo = new \PDO($dsn, $cfg['USERNAME'], $cfg['PASSWORD']);
+                $lockKey = 'spms_solar_sync_' . substr(hash('sha256', $session['household_id']), 0, 24);
+                $stmt = $otherPdo->prepare('SELECT GET_LOCK(:k, 0)');
+                $stmt->execute(['k' => $lockKey]);
+
+                $syncService = new SolarService(provider: $fake);
+                $lockedResult = $syncService->syncIfStale($session['household_id'], 0);
+                Assert::false($lockedResult['synced']);
+                Assert::same('IN_PROGRESS', $lockedResult['status']);
+
+                // Release lock on other connection
+                $relStmt = $otherPdo->prepare('SELECT RELEASE_LOCK(:k)');
+                $relStmt->execute(['k' => $lockKey]);
+
+                // When stale and lock free, sync triggers and returns SUCCESS
+                $successResult = $syncService->syncIfStale($session['household_id'], 0);
+                Assert::true($successResult['synced']);
+                Assert::same('SUCCESS', $successResult['status']);
+
                 // 11. Disconnect solar
                 $discResp = $solar->disconnect(self::cookieRequest(
                     'DELETE',

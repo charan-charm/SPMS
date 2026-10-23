@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { solarApi } from '../../services/api/solar'
 import { useSolar } from '../../features/solar/useSolar'
+import { useAuth } from '../../features/auth/useAuth'
 import { SolarConnectForm } from '../../features/solar/SolarConnectForm'
 import { SolarConnectionCard } from '../../features/solar/SolarConnectionCard'
 import { SolarLiveReadingCard } from '../../features/solar/SolarLiveReadingCard'
+import { SolarPowerCurve } from '../../features/solar/SolarPowerCurve'
 import { SolarHistoryTable } from '../../features/solar/SolarHistoryTable'
 import { SPMSLoadingState } from '../../components/feedback/SPMSLoadingState'
 import { Sun, LoaderCircle, AlertCircle } from 'lucide-react'
@@ -34,10 +36,15 @@ const CONNECT_STATUS_SEQUENCE = [
  */
 export function SolarPage() {
     const { updateConnection } = useSolar()
+    const { account } = useAuth()
+    const isDemo = account?.mode === 'DEMO_TEST'
     const [loading, setLoading] = useState(true)
     const [connection, setConnection] = useState(null)
     const [latestReading, setLatestReading] = useState(null)
     const [history, setHistory] = useState([])
+    const [availableDays, setAvailableDays] = useState([])
+    const [selectedDate, setSelectedDate] = useState('')
+    const [dayReadingsCache, setDayReadingsCache] = useState({})
     const [isSyncing, setIsSyncing] = useState(false)
     const [error, setError] = useState(null)
 
@@ -59,26 +66,37 @@ export function SolarPage() {
             abortRef.current = new AbortController()
             const signal = abortRef.current.signal
 
-            setError(null)
             const connResp = await solarApi.getConnection(signal)
             if (!mountedRef.current) return
 
+            setError(null)
             const conn = connResp.connection
             setConnection(conn)
             updateConnection(conn)
 
             if (conn && conn.configured) {
-                const [latestResp, historyResp] = await Promise.all([
+                const [latestResp, historyResp, daysResp] = await Promise.all([
                     solarApi.getLatest(signal).catch(() => ({ latest: null })),
-                    solarApi.getHistory({ limit: 20 }, signal).catch(() => ({ history: [] })),
+                    solarApi.getHistory({ limit: 500 }, signal).catch(() => ({ history: [] })),
+                    solarApi.getDays(signal).catch(() => ({ days: [] })),
                 ])
 
                 if (!mountedRef.current) return
                 setLatestReading(latestResp.latest)
                 setHistory(historyResp.history || [])
+
+                const days = daysResp.days || []
+                setAvailableDays(days)
+                if (days.length > 0) {
+                    const todayDay = days.find((d) => d.is_today)
+                    const defaultDate = todayDay ? todayDay.date : days[0].date
+                    setSelectedDate((prev) => prev || defaultDate)
+                }
             } else {
                 setLatestReading(null)
                 setHistory([])
+                setAvailableDays([])
+                setSelectedDate('')
             }
         } catch (err) {
             if (err.name !== 'AbortError' && mountedRef.current) {
@@ -91,14 +109,40 @@ export function SolarPage() {
         }
     }, [updateConnection])
 
+    const handleSelectDate = useCallback(async (dateStr) => {
+        if (!dateStr) return
+        setSelectedDate(dateStr)
+
+        if (dayReadingsCache[dateStr]) {
+            return
+        }
+
+        try {
+            const resp = await solarApi.getHistory({ date: dateStr })
+            if (resp?.history && mountedRef.current) {
+                setDayReadingsCache((prev) => ({
+                    ...prev,
+                    [dateStr]: resp.history,
+                }))
+            }
+        } catch (err) {
+            console.error(`Failed to load readings for date ${dateStr}:`, err)
+        }
+    }, [dayReadingsCache])
+
     useEffect(() => {
         mountedRef.current = true
-        // loadData is an async function guarded by mountedRef + AbortController —
-        // the standard SPMS page-level data-fetch pattern.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        loadData()
+        let active = true
+
+        const init = async () => {
+            if (active) {
+                await loadData()
+            }
+        }
+        init()
 
         return () => {
+            active = false
             mountedRef.current = false
             abortRef.current?.abort()
         }
@@ -112,21 +156,24 @@ export function SolarPage() {
             if (resp.latest) {
                 setLatestReading(resp.latest)
             }
-            const hist = await solarApi.getHistory({ limit: 20 })
+            const [hist, daysResp] = await Promise.all([
+                solarApi.getHistory({ limit: 500 }),
+                solarApi.getDays(),
+            ])
             setHistory(hist.history || [])
+            setAvailableDays(daysResp.days || [])
 
             const connResp = await solarApi.getConnection()
             setConnection(connResp.connection)
             updateConnection(connResp.connection)
         } catch (err) {
             setError(err.message || 'Failed to sync solar telemetry.')
-            // Secondary refresh to ensure error status propagates to header/card
             try {
                 const connResp = await solarApi.getConnection()
                 setConnection(connResp.connection)
                 updateConnection(connResp.connection)
             } catch {
-                // Secondary error ignored
+                // Ignore secondary connection fetch failure
             }
         } finally {
             setIsSyncing(false)
@@ -244,6 +291,17 @@ export function SolarPage() {
             {/* ── Main Content Area ────────────────────────────────────────── */}
             {!connection || !connection.configured ? (
                 <div className="relative py-4">
+                    {isDemo && (
+                        <div className="mb-4 rounded-xl border border-sky-500/30 bg-sky-500/10 p-4 text-sky-950 dark:text-sky-200 flex items-start gap-3">
+                            <Sun className="size-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+                            <div>
+                                <div className="font-semibold text-xs uppercase tracking-wider">DEMO Mode Solar Notice</div>
+                                <div className="text-xs text-sky-800 dark:text-sky-300 mt-0.5 leading-relaxed">
+                                    Pre-seeded solar curves and intelligence are available via the scenario selector in the header. To connect physical hardware, enter your GoodWe SEMS+ portal credentials below.
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     {/* SolarConnectForm is ALWAYS mounted so its internal state
                         (discovered stations, form field values) survives through
                         the loading lifecycle. The loading overlay is layered above
@@ -291,16 +349,43 @@ export function SolarPage() {
                 </div>
             ) : (
                 <div className="space-y-6">
+                    {isDemo && (
+                        <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-4 text-sky-950 dark:text-sky-200 flex items-start gap-3">
+                            <Sun className="size-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+                            <div>
+                                <div className="font-semibold text-sm">SIMULATED SOLAR TELEMETRY (DEMO)</div>
+                                <div className="text-xs text-sky-800 dark:text-sky-300 mt-0.5 leading-relaxed">
+                                    Demonstration telemetry generated for the active residential scenario. No physical inverter connection is required to inspect generation curves, energy balances, or recommendations.
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <SolarConnectionCard
                         connection={connection}
+                        latestReading={latestReading}
                         onSync={handleSync}
                         onDisconnect={handleDisconnect}
                         isSyncing={isSyncing}
+                        isDemo={isDemo}
                     />
 
                     <SolarLiveReadingCard reading={latestReading} />
 
-                    <SolarHistoryTable history={history} />
+                    <SolarPowerCurve
+                        history={history}
+                        readings={dayReadingsCache[selectedDate] || null}
+                        availableDays={availableDays}
+                        selectedDate={selectedDate}
+                        onSelectDate={handleSelectDate}
+                    />
+
+                    <SolarHistoryTable
+                        days={availableDays}
+                        history={history}
+                        selectedDate={selectedDate}
+                        onSelectDate={handleSelectDate}
+                    />
                 </div>
             )}
         </div>

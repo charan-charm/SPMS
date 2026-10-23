@@ -6,8 +6,10 @@ namespace App\Repositories;
 
 use App\Domain\Solar\DTO\NormalizedSolarSnapshot;
 use App\Support\Database;
+use App\Support\DataEnvironments;
 use DateTimeImmutable;
 use PDO;
+use RuntimeException;
 
 /**
  * SPMS O4 — Solar Inverter Reading Persistence (docs/10 D-059, D-060, D-061).
@@ -33,6 +35,11 @@ final class SolarReadingRepository
         NormalizedSolarSnapshot $snapshot,
         string $syncBatchId
     ): void {
+        $profile = Database::currentProfile();
+        if ($profile === DataEnvironments::REAL && $snapshot->dataNature() === 'SIMULATED') {
+            throw new RuntimeException('Simulated telemetry records cannot be persisted in the real database profile.');
+        }
+
         $now = (new DateTimeImmutable('now'))->format('Y-m-d H:i:s');
 
         $statement = $this->connection()->prepare(<<<'SQL'
@@ -56,7 +63,7 @@ final class SolarReadingRepository
                 received_at = VALUES(received_at),
                 power_w = VALUES(power_w),
                 daily_generation_kwh = VALUES(daily_generation_kwh),
-                total_generation_kwh = VALUES(total_generation_kwh),
+                total_generation_kwh = COALESCE(VALUES(total_generation_kwh), total_generation_kwh),
                 pv_power_w = VALUES(pv_power_w),
                 ac_voltage_v = VALUES(ac_voltage_v),
                 ac_current_a = VALUES(ac_current_a),
@@ -114,6 +121,54 @@ final class SolarReadingRepository
     }
 
     /**
+     * Store multiple normalized telemetry snapshots in a single transaction.
+     *
+     * @param list<NormalizedSolarSnapshot> $snapshots
+     */
+    public function insertMany(
+        string $householdId,
+        array $snapshots,
+        string $syncBatchId
+    ): int {
+        if (empty($snapshots)) {
+            return 0;
+        }
+
+        $pdo = $this->connection();
+        $inTransaction = $pdo->inTransaction();
+        if (!$inTransaction) {
+            $pdo->beginTransaction();
+        }
+
+        try {
+            $count = 0;
+            foreach ($snapshots as $snapshot) {
+                if (!$snapshot instanceof NormalizedSolarSnapshot) {
+                    continue;
+                }
+                $bytes = random_bytes(16);
+                $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+                $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+                $id = vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
+
+                $this->insert($id, $householdId, $snapshot, $syncBatchId);
+                $count++;
+            }
+
+            if (!$inTransaction) {
+                $pdo->commit();
+            }
+
+            return $count;
+        } catch (\Throwable $e) {
+            if (!$inTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
      * Retrieve the most recent telemetry snapshot for a household.
      *
      * @return array<string, mixed>|null
@@ -123,6 +178,27 @@ final class SolarReadingRepository
         $statement = $this->connection()->prepare(<<<'SQL'
             SELECT * FROM solar_readings
             WHERE household_id = :household_id
+            ORDER BY measurement_time DESC
+            LIMIT 1
+        SQL);
+        $statement->execute(['household_id' => $householdId]);
+
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Retrieve the most recent telemetry reading containing electrical parameters (Vac, Iac, Fac).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findLatestElectricalByHouseholdId(string $householdId): ?array
+    {
+        $statement = $this->connection()->prepare(<<<'SQL'
+            SELECT * FROM solar_readings
+            WHERE household_id = :household_id
+              AND (ac_voltage_v IS NOT NULL OR ac_current_a IS NOT NULL OR ac_frequency_hz IS NOT NULL)
             ORDER BY measurement_time DESC
             LIMIT 1
         SQL);
@@ -169,6 +245,19 @@ final class SolarReadingRepository
     }
 
     /**
+     * Count distinct calendar days with solar readings for a household.
+     */
+    public function countDistinctDaysByHouseholdId(string $householdId): int
+    {
+        $statement = $this->connection()->prepare(
+            'SELECT COUNT(DISTINCT DATE(measurement_time)) FROM solar_readings WHERE household_id = :household_id'
+        );
+        $statement->execute(['household_id' => $householdId]);
+
+        return (int) $statement->fetchColumn();
+    }
+
+    /**
      * Count total solar readings for a household.
      */
     public function countByHouseholdId(string $householdId): int
@@ -199,6 +288,35 @@ final class SolarReadingRepository
         $floatVal = (float) $val;
 
         return $floatVal > 0.0 ? $floatVal : null;
+    }
+
+    /**
+     * Retrieve daily solar generation summaries grouped by calendar date.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function findDailySummariesByHouseholdId(string $householdId): array
+    {
+        $sql = <<<'SQL'
+            SELECT 
+                DATE(measurement_time) as cal_date,
+                COUNT(*) as readings_count,
+                MIN(TIME(measurement_time)) as first_reading,
+                MAX(TIME(measurement_time)) as last_reading,
+                MAX(power_w) as max_power_w,
+                MAX(daily_generation_kwh) as max_daily_kwh
+            FROM solar_readings
+            WHERE household_id = :household_id
+            GROUP BY DATE(measurement_time)
+            ORDER BY cal_date DESC
+        SQL;
+
+        $statement = $this->connection()->prepare($sql);
+        $statement->execute(['household_id' => $householdId]);
+
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        return is_array($rows) ? $rows : [];
     }
 
     private function connection(): PDO

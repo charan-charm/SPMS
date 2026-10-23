@@ -11,6 +11,8 @@ use App\Support\Request;
 use App\Support\Response;
 use App\Support\HtmlResponse;
 use App\Support\CsvResponse;
+use App\Support\ExcelResponse;
+use App\Support\PdfResponse;
 use App\Support\Router;
 use App\Support\AppException;
 use App\Controllers\HealthController;
@@ -20,6 +22,7 @@ use App\Controllers\EnergyCostController;
 use App\Controllers\IntelligenceController;
 use App\Controllers\AuthController;
 use App\Controllers\HouseholdController;
+use App\Controllers\DemoScenarioController;
 use App\Controllers\BillController;
 use App\Controllers\SolarController;
 use App\Controllers\ForecastController;
@@ -28,6 +31,7 @@ use App\Controllers\ReportController;
 use App\Controllers\AnalyticsController;
 use App\Controllers\NotificationController;
 use App\Controllers\AssistantController;
+use App\Controllers\WeatherController;
 use App\Repositories\HealthRepository;
 use App\Security\AuthMiddleware;
 use App\Services\HealthService;
@@ -89,7 +93,7 @@ final class App
         $logger = $this->logger;
 
         $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
-        $isAllowedOrigin = $origin !== '' && (bool) preg_match('#^https?://(localhost|127\.0\.0\.1)(:\d+)?$#', $origin);
+        $isAllowedOrigin = self::isOriginAllowed($origin);
 
         // Preflight OPTIONS handling (CORS support across local dev ports e.g. 5173 / 5174 / 8080 / 8081)
         if (strtoupper($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
@@ -149,7 +153,7 @@ final class App
             $controller = new $controllerClass();
             $response = $controller->{$action}($request);
 
-            if (!$response instanceof Response && !$response instanceof HtmlResponse && !$response instanceof CsvResponse) {
+            if (!$response instanceof Response && !$response instanceof HtmlResponse && !$response instanceof CsvResponse && !$response instanceof ExcelResponse && !$response instanceof PdfResponse) {
                 throw new \RuntimeException('Controller did not return a Response');
             }
 
@@ -166,7 +170,7 @@ final class App
                         ->withHeader('Access-Control-Allow-Credentials', 'true')
                         ->withHeader('Access-Control-Expose-Headers', 'X-Request-Id, X-SPMS-CSRF');
                 }
-            } elseif (($response instanceof HtmlResponse || $response instanceof CsvResponse) && $isAllowedOrigin && PHP_SAPI !== 'cli') {
+            } elseif (($response instanceof HtmlResponse || $response instanceof CsvResponse || $response instanceof ExcelResponse || $response instanceof PdfResponse) && $isAllowedOrigin && PHP_SAPI !== 'cli') {
                 header('Access-Control-Allow-Origin: ' . $origin);
                 header('Access-Control-Allow-Credentials: true');
                 header('Access-Control-Expose-Headers', 'Content-Disposition, X-Request-Id, X-SPMS-CSRF');
@@ -247,6 +251,10 @@ final class App
         $router->add('POST', '/api/v1/household/demo/ensure', [HouseholdController::class, 'ensureDemo']);
         $router->add('PATCH', '/api/v1/household', [HouseholdController::class, 'update']);
 
+        // D1 — Demo Scenario Discovery & Switching (DEMO-only, CSRF-protected for mutations)
+        $router->add('GET', '/api/v1/demo/scenarios', [DemoScenarioController::class, 'index']);
+        $router->add('POST', '/api/v1/demo/scenarios/switch', [DemoScenarioController::class, 'switch']);
+
         // B2 — Secure bill document intake (docs/10 D-068). Authenticated,
         // CSRF-protected multipart upload; household derived server-side;
         // intake + temporary private storage only — no OCR, no drafts.
@@ -279,12 +287,20 @@ final class App
         $router->add('DELETE', '/api/v1/solar/connection', [SolarController::class, 'disconnect']);
         $router->add('GET', '/api/v1/solar/latest', [SolarController::class, 'latest']);
         $router->add('GET', '/api/v1/solar/history', [SolarController::class, 'history']);
+        $router->add('GET', '/api/v1/solar/days', [SolarController::class, 'days']);
         $router->add('POST', '/api/v1/solar/sync', [SolarController::class, 'sync']);
+        $router->add('POST', '/api/v1/solar/sync/auto', [SolarController::class, 'autoSync']);
 
         // F3 — Energy Forecasting (docs/02 §2, docs/06 §3, docs/10 D-040).
         // Authenticated + CSRF (mutations) + household-scoped.
         $router->add('GET', '/api/v1/forecasts', [ForecastController::class, 'index']);
+        $router->add('GET', '/api/v1/forecasts/validation', [ForecastController::class, 'validation']);
+        $router->add('GET', '/api/v1/forecasts/performance', [ForecastController::class, 'performance']);
         $router->add('POST', '/api/v1/forecasts/generate', [ForecastController::class, 'generate']);
+
+        // F12 — Weather Intelligence (Section 5).
+        // Authenticated + household-scoped.
+        $router->add('GET', '/api/v1/weather', [WeatherController::class, 'current']);
 
         // F7 — Recommendations (docs/01 §15, docs/02 §2 F7, docs/06 §3, docs/10 D-072).
         // Authenticated + CSRF (mutations) + household-scoped.
@@ -292,10 +308,14 @@ final class App
         $router->add('GET', '/api/v1/recommendations/{id}', [RecommendationController::class, 'show']);
         $router->add('POST', '/api/v1/recommendations/generate', [RecommendationController::class, 'generate']);
         $router->add('POST', '/api/v1/recommendations/{id}/dismiss', [RecommendationController::class, 'dismiss']);
+        $router->add('POST', '/api/v1/recommendations/{id}/feedback', [RecommendationController::class, 'submitFeedback']);
 
         // F8 — Reporting & Data Export (docs/02 §2 F8, docs/03 §4).
         // Authenticated + household-scoped.
         $router->add('GET', '/api/v1/reports/summary', [ReportController::class, 'summary']);
+        $router->add('GET', '/api/v1/reports/monthly', [ReportController::class, 'monthly']);
+        $router->add('GET', '/api/v1/reports/monthly/export/pdf', [ReportController::class, 'exportPdf']);
+        $router->add('GET', '/api/v1/reports/monthly/export/excel', [ReportController::class, 'exportExcel']);
         $router->add('GET', '/api/v1/reports/bills/export', [ReportController::class, 'exportBills']);
         $router->add('GET', '/api/v1/reports/solar/export', [ReportController::class, 'exportSolar']);
 
@@ -303,6 +323,8 @@ final class App
         // Authenticated + household-scoped. Read-only aggregation over existing data.
         $router->add('GET', '/api/v1/analytics/summary', [AnalyticsController::class, 'summary']);
         $router->add('GET', '/api/v1/analytics/monthly', [AnalyticsController::class, 'monthly']);
+        $router->add('GET', '/api/v1/analytics/daily', [AnalyticsController::class, 'daily']);
+        $router->add('GET', '/api/v1/analytics/day-curve', [AnalyticsController::class, 'dayCurve']);
 
         // F9 — Notification Center
         // Authenticated + household-scoped.
@@ -322,6 +344,99 @@ final class App
         $router->add('GET', '/register', [PageController::class, 'register']);
         $router->add('GET', '/privacy', [PageController::class, 'privacy']);
         $router->add('GET', '/contact', [PageController::class, 'contact']);
+    }
+
+    /**
+     * Parse and canonicalize an HTTP/HTTPS web origin per RFC 6454.
+     *
+     * Returns canonical '<scheme>://<host>[:<port>]' string, or null if malformed/disallowed.
+     * Rejects wildcards, paths (beyond optional '/'), userinfo, query strings, fragments,
+     * and unsupported schemes. Normalizes scheme and host to lowercase and strips default ports
+     * (80 for http, 443 for https).
+     */
+    public static function normalizeOrigin(string $origin): ?string
+    {
+        $origin = trim($origin);
+        if ($origin === '' || str_contains($origin, '*')) {
+            return null;
+        }
+
+        if (str_contains($origin, '@') || str_contains($origin, '?') || str_contains($origin, '#')) {
+            return null;
+        }
+
+        $parts = parse_url($origin);
+        if ($parts === false || !is_array($parts)) {
+            return null;
+        }
+
+        if (empty($parts['scheme']) || empty($parts['host'])) {
+            return null;
+        }
+
+        if (isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
+            return null;
+        }
+
+        if (isset($parts['path']) && $parts['path'] !== '' && $parts['path'] !== '/') {
+            return null;
+        }
+
+        $scheme = strtolower($parts['scheme']);
+        if ($scheme !== 'http' && $scheme !== 'https') {
+            return null;
+        }
+
+        $host = strtolower($parts['host']);
+        if ($host === '' || str_contains($host, ' ') || str_contains($host, '*')) {
+            return null;
+        }
+
+        $port = isset($parts['port']) ? (int) $parts['port'] : null;
+        if ($port !== null) {
+            if ($port <= 0 || $port > 65535) {
+                return null;
+            }
+            if (($scheme === 'http' && $port === 80) || ($scheme === 'https' && $port === 443)) {
+                $port = null;
+            }
+        }
+
+        return $scheme . '://' . $host . ($port !== null ? ':' . $port : '');
+    }
+
+    /**
+     * Determine whether an HTTP Origin header is permitted under CORS policy.
+     *
+     * Production enforces a canonicalized origin match against CORS_ALLOWED_ORIGIN (wildcards disallowed).
+     * Local loopback origins (localhost / 127.0.0.1) are permitted ONLY when APP_ENV === 'development'.
+     */
+    public static function isOriginAllowed(string $origin, ?string $appEnv = null, ?string $configuredOrigin = null): bool
+    {
+        $origin = trim($origin);
+        if ($origin === '') {
+            return false;
+        }
+
+        $appEnv = $appEnv ?? (Config::get('APP_ENV', 'production') ?? 'production');
+        $configuredOrigin = $configuredOrigin ?? Config::get('CORS_ALLOWED_ORIGIN');
+
+        // 1. Explicitly configured production origin (canonicalized exact match)
+        if (is_string($configuredOrigin) && trim($configuredOrigin) !== '') {
+            $normConfigured = self::normalizeOrigin($configuredOrigin);
+            $normCandidate = self::normalizeOrigin($origin);
+
+            if ($normConfigured !== null && $normCandidate !== null && hash_equals($normConfigured, $normCandidate)) {
+                return true;
+            }
+        }
+
+        // 2. Loopback development origins permitted only when APP_ENV === 'development'
+        if ($appEnv === 'development') {
+            return (bool) preg_match('#^https?://(localhost|127\.0\.0\.1)(:\d+)?$#', $origin);
+        }
+
+        return false;
     }
 
     private function internalErrorResponse(): Response

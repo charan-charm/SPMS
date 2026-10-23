@@ -181,13 +181,15 @@ final class ConsumptionForecastModel
         $current = $start;
 
         if ($resolution === ForecastHorizon::RESOLUTION_HOURLY) {
+            $tzObj = new DateTimeZone('Asia/Kolkata');
             while ($current < $end) {
-                $hour = (int) $current->format('H');
+                $localCurrent = $current->setTimezone($tzObj);
+                $localHour = (int) $localCurrent->format('H');
                 $timestampKey = $current->format('Y-m-d\TH:i:s\Z');
 
                 // Standard residential diurnal load profile:
                 // Peak morning 07-09, dip mid-day, peak evening 18-22, base night 23-06
-                $hourlyLoadFactor = $this->residentialDiurnalLoadFactor($hour);
+                $hourlyLoadFactor = $this->residentialDiurnalLoadFactor($localHour);
                 $predictedKwh = round($avgDailyKwh * $hourlyLoadFactor, 3);
                 $predictedPowerW = round($predictedKwh * 1000.0, 1);
 
@@ -199,7 +201,9 @@ final class ConsumptionForecastModel
 
                 $points[] = [
                     'timestamp' => $timestampKey,
-                    'hour' => $hour,
+                    'hour' => $localHour,
+                    'local_hour' => $localHour,
+                    'local_time' => $localCurrent->format('Y-m-d H:i:s'),
                     'predicted_w' => $predictedPowerW,
                     'lower_w' => $lowerW,
                     'upper_w' => $upperW,

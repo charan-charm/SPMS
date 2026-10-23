@@ -93,6 +93,55 @@ const DEFAULT_QUESTIONS = [
 ]
 
 /**
+ * Maps raw data nature enums to household-friendly labels and semantic styling.
+ * Hides raw database enums (ACTUAL, PREDICTED, SIMULATED, STALE) behind plain language.
+ */
+function formatDataNature(nature) {
+    if (!nature) return null
+    const upper = String(nature).toUpperCase()
+    if (upper === 'ACTUAL') {
+        return {
+            label: 'Actual reading',
+            badgeClass: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25',
+            dotClass: 'bg-emerald-500',
+        }
+    }
+    if (upper === 'PREDICTED') {
+        return {
+            label: 'Forecast projection',
+            badgeClass: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/25',
+            dotClass: 'bg-blue-500',
+        }
+    }
+    if (upper === 'SIMULATED') {
+        return {
+            label: 'Simulated data',
+            badgeClass: 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/25',
+            dotClass: 'bg-purple-500',
+        }
+    }
+    if (upper === 'STALE') {
+        return {
+            label: 'Data may be outdated',
+            badgeClass: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25',
+            dotClass: 'bg-amber-500',
+        }
+    }
+    if (upper === 'UNAVAILABLE') {
+        return {
+            label: 'Not enough data to answer this yet',
+            badgeClass: 'bg-surface-alt text-muted border-border/80',
+            dotClass: 'bg-muted',
+        }
+    }
+    return {
+        label: nature,
+        badgeClass: 'bg-surface-alt text-muted border-border/80',
+        dotClass: 'bg-muted',
+    }
+}
+
+/**
  * Renders assistant response Markdown safely.
  *
  * Supported: **bold**, *italic*, # headings (h3), bullet lists (- item),
@@ -358,9 +407,9 @@ export function AssistantDrawer({
             {/* Backdrop click to close */}
             <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
 
-            {/* Slide-in Drawer Container (400-460px on desktop, full width on mobile) */}
+            {/* Slide-in Drawer Container (~48-50% desktop width up to 800px max, near-full-screen on mobile) */}
             <div
-                className={`solarai-drawer-card relative flex h-full w-full sm:w-[440px] max-w-full flex-col border-l border-border bg-surface ${isClosing ? 'solarai-drawer-exit' : 'solarai-drawer-enter'
+                className={`solarai-drawer-card relative flex h-full w-full sm:w-[80vw] md:w-[60vw] lg:w-[48vw] max-w-[800px] flex-col border-l border-border bg-surface ${isClosing ? 'solarai-drawer-exit' : 'solarai-drawer-enter'
                     } motion-reduce:animate-none`}
             >
 
@@ -504,48 +553,30 @@ export function AssistantDrawer({
                                             {/* Rendered Markdown content */}
                                             <MarkdownContent content={msg.content} />
 
-                                            {/* Provenance badges */}
-                                            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-border/60 text-[10px]">
-                                                {msg.dataNature && (
-                                                    <span
-                                                        className={`rounded px-1.5 py-0.5 font-semibold uppercase ${msg.dataNature === 'ACTUAL'
-                                                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                                                            : msg.dataNature === 'PREDICTED'
-                                                                ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-                                                                : 'bg-purple-500/15 text-purple-600 dark:text-purple-400'
-                                                            }`}
-                                                    >
-                                                        {msg.dataNature}
-                                                    </span>
-                                                )}
-
-                                                {msg.confidence && (
-                                                    <span className="rounded bg-surface-alt px-1.5 py-0.5 text-muted border border-border/80">
-                                                        Confidence: {msg.confidence}
-                                                    </span>
-                                                )}
-
-                                                {msg.provider && (
-                                                    <span className="rounded bg-surface-alt px-1.5 py-0.5 text-muted border border-border/80 uppercase font-mono">
-                                                        {msg.provider}
-                                                    </span>
-                                                )}
-
-                                                {msg.fallbackUsed && (
-                                                    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-600 dark:text-amber-400 font-medium">
-                                                        Fallback Provider
-                                                    </span>
-                                                )}
-                                            </div>
-
-                                            {/* Limitations */}
-                                            {msg.limitations && msg.limitations.length > 0 && (
-                                                <div className="rounded bg-surface-alt/70 p-2 text-xs border border-border/60 text-muted space-y-1">
-                                                    <div className="flex items-center gap-1 text-[11px] font-semibold text-heading">
-                                                        <AlertTriangle className="size-3 text-amber-500" />
-                                                        <span>Noted Limitations</span>
+                                            {/* Data nature indicator (end-user friendly, internal provider/confidence hidden) */}
+                                            {msg.dataNature && (() => {
+                                                const info = formatDataNature(msg.dataNature)
+                                                if (!info) return null
+                                                return (
+                                                    <div className="flex items-center gap-1.5 pt-2 border-t border-border/60">
+                                                        <span
+                                                            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium border ${info.badgeClass}`}
+                                                        >
+                                                            <span className={`size-1.5 rounded-full ${info.dotClass}`} aria-hidden="true" />
+                                                            {info.label}
+                                                        </span>
                                                     </div>
-                                                    <ul className="list-disc list-inside text-[11px] space-y-0.5">
+                                                )
+                                            })()}
+
+                                            {/* Critical Trust & Limitations Notice */}
+                                            {msg.limitations && msg.limitations.length > 0 && (
+                                                <div className="rounded-xl bg-amber-500/10 dark:bg-amber-500/15 p-2.5 text-xs border border-amber-500/25 text-amber-900 dark:text-amber-200 space-y-1.5">
+                                                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                                                        <AlertTriangle className="size-3.5 text-amber-500 shrink-0" aria-hidden="true" />
+                                                        <span>Important Data Notes</span>
+                                                    </div>
+                                                    <ul className="list-disc list-inside text-[11px] space-y-1 text-body/90 dark:text-muted">
                                                         {msg.limitations.map((lim, i) => (
                                                             <li key={i}>{lim}</li>
                                                         ))}

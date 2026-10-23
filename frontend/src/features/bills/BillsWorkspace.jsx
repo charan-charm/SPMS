@@ -27,6 +27,7 @@ import { DURATION } from '../../lib/motion'
 export function BillsWorkspace({
     sessionPhase = 'ready',
     bills = [],
+    selectedBillId = null,
     detail = null,
     detailPhase = 'ready',
     pipelineStage = null,
@@ -42,18 +43,36 @@ export function BillsWorkspace({
     onRetrySession = () => {},
     onVerify = null,
     verifying = false,
+    onCorrect = null,
     uploadOpen: uploadOpenProp,
     onUploadOpenChange,
     children,
 }) {
     const uploadPanelRef = useRef(null)
+    const reviewSectionRef = useRef(null)
     const [internalUploadOpen, setInternalUploadOpen] = useState(false)
+    const [manualEntryId, setManualEntryId] = useState(null)
     const uploadOpen = uploadOpenProp ?? internalUploadOpen
     const setUploadOpen = (value) => {
         if (uploadOpenProp === undefined) {
             setInternalUploadOpen(value)
         }
         onUploadOpenChange?.(value)
+    }
+
+    const scrollToReview = () => {
+        try {
+            if (reviewSectionRef.current) {
+                reviewSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            } else {
+                const el = document.getElementById('selected-bill-review-section')
+                if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }
+            }
+        } catch {
+            // Ignore in test / headless environments
+        }
     }
 
     const sortedBills = useMemo(() => sortBillsChronologically(bills), [bills])
@@ -147,6 +166,7 @@ export function BillsWorkspace({
                         onSelectBill={(id) => {
                             setUploadOpen(false)
                             onSelectBill(id)
+                            scrollToReview()
                         }}
                     />
                 </motion.div>
@@ -186,6 +206,7 @@ export function BillsWorkspace({
                                     onDismissDuplicateNotice()
                                     setUploadOpen(false)
                                     onSelectBill(duplicateNotice.existingBillId)
+                                    scrollToReview()
                                 }}
                             >
                                 View existing bill
@@ -256,12 +277,12 @@ export function BillsWorkspace({
                     )}
 
                     {detailPhase === 'ready' && activeDetail && (
-                        <div className="flex flex-col gap-5">
+                        <div id="selected-bill-review-section" ref={reviewSectionRef} className="flex flex-col gap-5">
                             {/* Statement Navigator (month + year) when multiple bills exist */}
                             {sortedBills.length > 1 && (
                                 <StatementNavigator
                                     bills={sortedBills}
-                                    selectedId={activeDetail.bill_id}
+                                    selectedId={selectedBillId ?? activeDetail.bill_id}
                                     onSelect={(id) => {
                                         setUploadOpen(false)
                                         onSelectBill(id)
@@ -277,6 +298,9 @@ export function BillsWorkspace({
                                 onUploadAnother={() => setUploadOpen(true)}
                                 onVerify={onVerify}
                                 verifying={verifying}
+                                onCorrect={onCorrect}
+                                isManualEntry={manualEntryId === activeDetail.bill_id}
+                                onEnterManually={() => setManualEntryId(activeDetail.bill_id)}
                             />
                         </div>
                     )}
@@ -295,10 +319,11 @@ export function BillsWorkspace({
             <div className="flex flex-col gap-4">
                 <BillHistory
                     bills={sortedBills}
-                    selectedId={activeDetail?.bill_id ?? null}
+                    selectedId={selectedBillId ?? activeDetail?.bill_id ?? null}
                     onSelect={(id) => {
                         setUploadOpen(false)
                         onSelectBill(id)
+                        scrollToReview()
                     }}
                     onUpload={() => setUploadOpen(true)}
                 />
@@ -329,7 +354,28 @@ function PageHeading({ demo = false }) {
 }
 
 /** Detail content router for a non-pipeline moment. */
-function BillWorkspaceDetail({ detail, processFailure, onContinue, onUploadAnother, onVerify, verifying }) {
+function BillWorkspaceDetail({
+    detail,
+    processFailure,
+    onContinue,
+    onUploadAnother,
+    onVerify,
+    verifying,
+    onCorrect = null,
+    isManualEntry = false,
+    onEnterManually = null,
+}) {
+    if (isManualEntry) {
+        return (
+            <BillReviewPanel
+                detail={detail}
+                onVerify={onVerify}
+                verifying={verifying}
+                onCorrectField={onCorrect ? (field, val) => onCorrect(detail.bill_id, { [field]: val }) : null}
+            />
+        )
+    }
+
     // Definitive terminal failure: if bill is PROCESSING_FAILED or processing failed, show ONLY failure card
     if (detail.status === 'PROCESSING_FAILED' || (processFailure && (detail.status === 'PROCESSING' || detail.status === 'UPLOADED'))) {
         return (
@@ -339,6 +385,7 @@ function BillWorkspaceDetail({ detail, processFailure, onContinue, onUploadAnoth
                 reason={processFailure?.reason}
                 onRetry={onContinue}
                 onUploadAnother={onUploadAnother}
+                onEnterManually={onEnterManually}
             />
         )
     }
@@ -369,6 +416,7 @@ function BillWorkspaceDetail({ detail, processFailure, onContinue, onUploadAnoth
                 retry={false}
                 onRetry={onContinue}
                 onUploadAnother={onUploadAnother}
+                onEnterManually={onEnterManually}
             />
         )
     }
@@ -379,6 +427,7 @@ function BillWorkspaceDetail({ detail, processFailure, onContinue, onUploadAnoth
                 detail={detail}
                 onVerify={onVerify}
                 verifying={verifying}
+                onCorrectField={onCorrect ? (field, val) => onCorrect(detail.bill_id, { [field]: val }) : null}
             />
         )
     }

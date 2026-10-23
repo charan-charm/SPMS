@@ -33,10 +33,16 @@ use DateTimeZone;
  */
 final class SolarForecastModel
 {
-    public const MODEL_VERSION = 'SPMS_SOLAR_V1_DETERMINISTIC';
+    public const MODEL_VERSION = 'SPMS_SOLAR_CALIBRATED_V2';
 
     /** Default inverter peak capacity in watts when not detected from history. Standard residential: 5 kW. */
     private const DEFAULT_CAPACITY_PEAK_W = 5000.0;
+
+    /** Fixed rooftop optical aperture exponent for cosine projection. */
+    public const APERTURE_EXPONENT = 1.15;
+
+    /** System performance ratio accounting for inverter efficiency, cabling, temperature, and mild soiling derate. */
+    public const DEFAULT_PERFORMANCE_RATIO = 0.88;
 
     private readonly HouseholdRepository $households;
     private readonly OpenMeteoGeocodingClient $geocoding;
@@ -66,6 +72,12 @@ final class SolarForecastModel
         DateTimeImmutable $referenceTime,
         ?array $solarConnection = null
     ): ForecastSnapshot {
+        // 1. Resolve household and timezone for solar geometry
+        $household = $this->households->findById($householdId);
+        $locationLabel = $household?->locationLabel();
+        $householdTz = $household?->timezone() ?? 'Asia/Kolkata';
+        $tzObj = new DateTimeZone($householdTz);
+
         $window = ForecastHorizon::computeTimeWindow($horizon, $referenceTime);
         $start = $window['start'];
         $end = $window['end'];
@@ -74,8 +86,9 @@ final class SolarForecastModel
         $limitations = [];
         $sources = ['goodwe_readings'];
 
-        // 1. Check GoodWe connection & reading history
+        // 2. Check GoodWe connection & reading history
         $readingCount = $this->readings->countByHouseholdId($householdId);
+        $historicalDays = $this->readings->countDistinctDaysByHouseholdId($householdId);
         $latestReading = $this->readings->findLatestByHouseholdId($householdId);
 
         // Derive rated peak capacity using authoritative resolution ladder
@@ -100,11 +113,7 @@ final class SolarForecastModel
             $limitations[] = 'Latest GoodWe solar telemetry reading is STALE; generation baseline reflects past telemetry.';
         }
 
-        // 2. Weather integration seam (F12 — Open-Meteo dynamic location & forecast)
-        $household = $this->households->findById($householdId);
-        $locationLabel = $household?->locationLabel();
-        $householdTz = $household?->timezone() ?? 'Asia/Kolkata';
-
+        // 3. Weather integration seam (F12 — Open-Meteo dynamic location & forecast)
         $weatherResult = null;
         $geoResult = null;
         $resolvedLat = null;
@@ -196,15 +205,27 @@ final class SolarForecastModel
                 $hour = (int) $current->format('H');
                 $timestampKey = $current->format('Y-m-d\TH:i:s\Z');
 
-                $clearSkyFactor = $this->clearSkyDiurnalFactor($hour);
+                $localCurrent = $current->setTimezone($tzObj);
+                $localHour = (int) $localCurrent->format('H');
+                $midCurrent = $localCurrent->modify('+30 minutes');
+
+                $clearSkyFactor = $this->clearSkyDiurnalFactor($midCurrent, $resolvedLat, $resolvedLon);
 
                 // Apply weather attenuation if available
                 $weatherFactor = 1.0;
+                $cloudPct = null;
+                $tempC = null;
+                $dni = null;
                 if (isset($weatherFactorsByHour[$timestampKey])) {
                     $weatherFactor = max(0.2, (float) $weatherFactorsByHour[$timestampKey]['clear_sky_index']);
+                    $cloudPct = $weatherFactorsByHour[$timestampKey]['cloud_cover_pct'] ?? null;
+                    $tempC = $weatherFactorsByHour[$timestampKey]['temperature_c'] ?? null;
+                    $dni = $weatherFactorsByHour[$timestampKey]['direct_normal_irradiance_wm2'] ?? null;
                 }
 
-                $predictedPowerW = round($peakCapacityW * $clearSkyFactor * $weatherFactor, 1);
+                $predictedPowerW = $clearSkyFactor > 0.0
+                    ? round($peakCapacityW * $clearSkyFactor * self::DEFAULT_PERFORMANCE_RATIO * $weatherFactor, 1)
+                    : 0.0;
                 $predictedKwh = round($predictedPowerW / 1000.0, 3); // 1 hour energy
 
                 $lowerKwh = max(0.0, round($predictedKwh * (1.0 - $uncertaintyPct / 100.0), 3));
@@ -215,13 +236,21 @@ final class SolarForecastModel
 
                 $points[] = [
                     'timestamp' => $timestampKey,
+                    'local_time' => $localCurrent->format('Y-m-d H:i:s'),
                     'hour' => $hour,
+                    'local_hour' => $localHour,
                     'predicted_w' => $predictedPowerW,
+                    'predicted_kw' => round($predictedPowerW / 1000.0, 3),
                     'lower_w' => $lowerW,
                     'upper_w' => $upperW,
                     'predicted_kwh' => $predictedKwh,
                     'lower_kwh' => $lowerKwh,
                     'upper_kwh' => $upperKwh,
+                    'clear_sky_factor' => $clearSkyFactor,
+                    'weather_factor' => $weatherFactor,
+                    'cloud_cover_pct' => $cloudPct,
+                    'temperature_c' => $tempC,
+                    'solar_irradiance_wm2' => $dni,
                     'data_nature' => $dataNature,
                     'confidence' => $confidence,
                 ];
@@ -281,11 +310,15 @@ final class SolarForecastModel
             }
 
             $weatherSummary = [
-                'status' => 'WEATHER_ENHANCED',
+                'status' => 'ACTIVE',
                 'available' => true,
                 'provider' => $weatherResult['provider'] ?? 'OPEN_METEO',
+                'weather_mode' => $weatherResult['weather_mode'] ?? 'LIVE_FORECAST',
+                'weather_source' => $weatherResult['weather_source'] ?? 'Open-Meteo Hourly Forecast API',
                 'source_label' => ($weatherResult['provider'] ?? '') === 'FAKE_WEATHER_PROVIDER' ? 'Simulated Open-Meteo' : 'Open-Meteo',
                 'location_name' => $geoResult['name'] ?? $locationLabel ?? 'Household Location',
+                'historical_days' => max(1, $historicalDays),
+                'evidence_count' => $readingCount,
                 'coordinates' => $resolvedLat !== null && $resolvedLon !== null ? [
                     'latitude' => $resolvedLat,
                     'longitude' => $resolvedLon,
@@ -296,7 +329,9 @@ final class SolarForecastModel
                 'precipitation_probability_pct' => $selectedFactor['precipitation_probability_pct'] ?? null,
                 'solar_irradiance_wm2' => $selectedFactor['direct_normal_irradiance_wm2'] ?? $selectedFactor['shortwave_radiation_wm2'] ?? null,
                 'condition' => $selectedFactor['condition'] ?? 'CLEAR',
+                'weather_code' => $selectedFactor['weather_code'] ?? ($selectedFactor['condition'] === 'CLEAR' ? 0 : 2),
                 'clear_sky_index' => $selectedFactor['clear_sky_index'] ?? null,
+                'solar_impact' => $selectedFactor['solar_impact'] ?? ((($selectedFactor['cloud_cover_pct'] ?? 50.0) < 30.0) ? 'STRONG' : (((($selectedFactor['cloud_cover_pct'] ?? 50.0) > 70.0)) ? 'LOW' : 'MODERATE')),
                 'error' => null,
                 'fallback_explanation' => null,
             ];
@@ -306,8 +341,12 @@ final class SolarForecastModel
                 'status' => $isNotConfigured ? 'UNAVAILABLE' : 'FALLBACK',
                 'available' => false,
                 'provider' => $weatherResult['provider'] ?? 'OPEN_METEO',
-                'source_label' => 'Open-Meteo',
+                'weather_mode' => 'FALLBACK',
+                'weather_source' => 'Astronomical Clear-Sky Model',
+                'source_label' => 'Astronomical Clear-Sky',
                 'location_name' => $geoResult['name'] ?? $locationLabel,
+                'historical_days' => max(1, $historicalDays),
+                'evidence_count' => $readingCount,
                 'coordinates' => $resolvedLat !== null && $resolvedLon !== null ? [
                     'latitude' => $resolvedLat,
                     'longitude' => $resolvedLon,
@@ -318,6 +357,8 @@ final class SolarForecastModel
                 'precipitation_probability_pct' => null,
                 'solar_irradiance_wm2' => null,
                 'condition' => 'UNAVAILABLE',
+                'weather_code' => null,
+                'solar_impact' => 'UNAVAILABLE',
                 'error' => $weatherResult['error'] ?? ($isNotConfigured ? 'Household location label is not configured.' : 'Weather service unavailable'),
                 'fallback_explanation' => $isNotConfigured
                     ? 'Household location is not configured: solar forecast relies on clear-sky physical solar pattern fallback model.'
@@ -342,16 +383,21 @@ final class SolarForecastModel
             dataNature: $dataNature,
             dataQuality: $dataQuality,
             provenance: [
-                'forecast_source' => 'DETERMINISTIC',
-                'model_name' => 'SOLAR_DETERMINISTIC_BASELINE',
+                'forecast_source' => 'CALIBRATED_PHYSICS',
+                'model_name' => $weatherResult['available'] ? 'SPMS Solar Calibrated V2' : 'SPMS Solar Clear-Sky Fallback V2',
                 'model_version' => self::MODEL_VERSION,
                 'generated_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
                 'sources' => $sources,
                 'evidence_count' => $readingCount,
+                'historical_days' => max(1, $historicalDays),
+
                 'peak_capacity_w' => $peakCapacityW,
                 'capacity_source' => $capacitySource,
+                'performance_ratio' => self::DEFAULT_PERFORMANCE_RATIO,
                 'weather_available' => $weatherResult['available'],
                 'weather_provider' => $weatherResult['provider'] ?? null,
+                'weather_mode' => $weatherSummary['weather_mode'],
+                'weather_source' => $weatherSummary['weather_source'],
                 'location_resolved' => $geoResult['resolved'] ?? false,
                 'location_name' => $geoResult['name'] ?? null,
                 'coordinates' => $resolvedLat !== null && $resolvedLon !== null ? [
@@ -366,16 +412,83 @@ final class SolarForecastModel
     }
 
     /**
-     * Compute diurnal clear sky solar factor (0.0 to 1.0) for a given hour of day.
+     * Compute diurnal clear sky solar factor (0.0 to 1.0) using astronomical sun position or local solar hour.
      */
-    private function clearSkyDiurnalFactor(int $hour): float
-    {
-        if ($hour < 6 || $hour > 18) {
+    public function clearSkyDiurnalFactor(
+        DateTimeImmutable|float|int $timeOrHour,
+        ?float $latitude = null,
+        ?float $longitude = null
+    ): float {
+        return self::calculateClearSkyDiurnalFactor($timeOrHour, $latitude, $longitude);
+    }
+
+    /**
+     * Static diurnal clear-sky solar factor (0.0 to 1.0) for deterministic baseline derivation.
+     */
+    public static function calculateClearSkyDiurnalFactor(
+        DateTimeImmutable|float|int $timeOrHour,
+        ?float $latitude = null,
+        ?float $longitude = null
+    ): float {
+        if ($timeOrHour instanceof DateTimeImmutable) {
+            $localTime = $timeOrHour;
+            $localTs = $localTime->getTimestamp();
+
+            $sunriseTs = null;
+            $sunsetTs = null;
+
+            if ($latitude !== null && $longitude !== null) {
+                try {
+                    $sunInfo = date_sun_info($localTs, $latitude, $longitude);
+                    if (isset($sunInfo['sunrise'], $sunInfo['sunset']) && $sunInfo['sunrise'] > 0 && $sunInfo['sunset'] > 0) {
+                        $sunriseTs = (int) $sunInfo['sunrise'];
+                        $sunsetTs = (int) $sunInfo['sunset'];
+                    }
+                } catch (\Throwable) {
+                    // Fall back to local hour
+                }
+            }
+
+            if ($sunriseTs !== null && $sunsetTs !== null && $sunsetTs > $sunriseTs) {
+                if ($localTs <= $sunriseTs || $localTs >= $sunsetTs) {
+                    return 0.0;
+                }
+                $daylightFraction = ($localTs - $sunriseTs) / ($sunsetTs - $sunriseTs);
+                $sinVal = sin($daylightFraction * M_PI);
+                return round(pow(max(0.0, $sinVal), self::APERTURE_EXPONENT), 4);
+            }
+
+            // Fallback: local solar hour
+            $hour = (float) $localTime->format('H') + ((float) $localTime->format('i') / 60.0);
+        } else {
+            $hour = (float) $timeOrHour;
+        }
+
+        if ($hour <= 6.0 || $hour >= 18.0) {
             return 0.0;
         }
 
-        $fractionOfDaylight = ($hour - 6) / 12.0;
-        return round(sin($fractionOfDaylight * M_PI), 4);
+        $fractionOfDaylight = ($hour - 6.0) / 12.0;
+        $sinVal = sin($fractionOfDaylight * M_PI);
+        return round(pow(max(0.0, $sinVal), self::APERTURE_EXPONENT), 4);
+    }
+
+    /**
+     * Compute theoretical clear-sky power (kW) without weather attenuation.
+     */
+    public static function computeClearSkyPowerKw(
+        DateTimeImmutable $localTime,
+        float $peakCapacityW,
+        ?float $latitude = null,
+        ?float $longitude = null,
+        float $performanceRatio = self::DEFAULT_PERFORMANCE_RATIO
+    ): float {
+        $factor = self::calculateClearSkyDiurnalFactor($localTime, $latitude, $longitude);
+        if ($factor <= 0.0) {
+            return 0.0;
+        }
+        $powerW = round($peakCapacityW * $factor * $performanceRatio, 1);
+        return round($powerW / 1000.0, 3);
     }
 
     /**

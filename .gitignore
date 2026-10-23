@@ -41,3 +41,11 @@ storage/logs/
 
 # Local scratch / probe files
 scratch/
+
+storage/backups/
+storage/cache/
+storage/locks/
+storage/temp/
+*.pem
+*.key
+*.tar.gz

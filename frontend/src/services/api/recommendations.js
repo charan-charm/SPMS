@@ -59,3 +59,20 @@ export function generateRecommendations(signal = undefined) {
 export function dismissRecommendation(id, signal = undefined) {
     return apiClient.post(`/recommendations/${encodeURIComponent(id)}/dismiss`, {}, { signal })
 }
+
+/**
+ * Submit user feedback on a recommendation.
+ *
+ * @param {string} id
+ * @param {Object} feedbackData
+ * @param {'YES'|'NO'} feedbackData.usefulness
+ * @param {'YES'|'PARTLY'|'NOT_YET'} [feedbackData.followed_status]
+ * @param {string} [feedbackData.reason]
+ * @param {string} [feedbackData.optional_comment]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{data: Object, meta: Object, requestId: string|null, status: number}>}
+ */
+export function submitRecommendationFeedback(id, feedbackData, signal = undefined) {
+    return apiClient.post(`/recommendations/${encodeURIComponent(id)}/feedback`, feedbackData, { signal })
+}
+

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../services/api/client'
 import { loadServerSession } from '../../services/api/session'
-import { getBill, listBills, processBill, uploadBill, verifyBill } from '../../services/api/bills'
+import { getBill, listBills, processBill, uploadBill, verifyBill, correctBill } from '../../services/api/bills'
 import { BillsWorkspace } from '../../features/bills/BillsWorkspace'
 import { sortBillsChronologically } from '../../features/bills/presentation'
 
@@ -19,6 +19,33 @@ import { sortBillsChronologically } from '../../features/bills/presentation'
  * processing call is the application path, and a still-PROCESSING bill
  * offers an explicit "Continue analysis" the user controls.
  */
+function getUrlBillId() {
+    if (typeof window === 'undefined') return null
+    try {
+        const params = new URLSearchParams(window.location.search)
+        return params.get('billId') || params.get('id') || null
+    } catch {
+        return null
+    }
+}
+
+function updateUrlBillId(billId) {
+    if (typeof window === 'undefined') return
+    try {
+        const url = new URL(window.location.href)
+        if (billId) {
+            url.searchParams.set('billId', billId)
+            url.searchParams.delete('id')
+        } else {
+            url.searchParams.delete('billId')
+            url.searchParams.delete('id')
+        }
+        window.history.replaceState({}, '', url.toString())
+    } catch {
+        // Ignore in test runners without full URL support
+    }
+}
+
 export function BillsPage() {
     const [sessionPhase, setSessionPhase] = useState('checking')
     const [accountMode, setAccountMode] = useState('REAL')
@@ -34,6 +61,7 @@ export function BillsPage() {
 
     const abortRef = useRef(null)
     const mountedRef = useRef(true)
+    const latestRequestedBillIdRef = useRef(null)
 
     const pollTimerRef = useRef(null)
     const pollCountRef = useRef(0)
@@ -73,14 +101,17 @@ export function BillsPage() {
     const openBill = useCallback(
         async (billId) => {
             setSelectedId(billId)
+            latestRequestedBillIdRef.current = billId
             setDetailPhase('loading')
             try {
                 const { data } = await getBill(billId, signal())
                 if (!mountedRef.current) return
+                if (latestRequestedBillIdRef.current !== billId) return
                 setDetail(data.bill)
                 setDetailPhase('ready')
             } catch (err) {
                 if (!mountedRef.current || isAbort(err)) return
+                if (latestRequestedBillIdRef.current !== billId) return
                 if (handleUnauthorized(err)) return
                 setDetail(null)
                 setDetailPhase('error')
@@ -181,10 +212,14 @@ export function BillsPage() {
                 if (!mountedRef.current) return null
                 const rows = sortBillsChronologically(data.bills ?? [])
                 setBills(rows)
-                const target = preferId ?? pickActive(rows)
+                const urlTarget = getUrlBillId()
+                const validUrlTarget = urlTarget && rows.some((r) => r.bill_id === urlTarget) ? urlTarget : null
+                const target = preferId ?? validUrlTarget ?? pickActive(rows)
                 if (target) {
+                    updateUrlBillId(target)
                     await openBill(target)
                 } else {
+                    updateUrlBillId(null)
                     setSelectedId(null)
                     setDetail(null)
                     setDetailPhase('ready')
@@ -360,13 +395,14 @@ export function BillsPage() {
 
     const handleSelectBill = useCallback(
         (billId) => {
-            if (billId === selectedId) return
+            updateUrlBillId(billId)
+            if (billId === selectedId && detail?.bill_id === billId) return
             stopPolling()
             setProcessFailure(null)
             setDuplicateNotice(null)
             void openBill(billId)
         },
-        [openBill, selectedId, stopPolling],
+        [detail?.bill_id, openBill, selectedId, stopPolling],
     )
 
     const handleRetryProcess = useCallback(() => {
@@ -400,11 +436,33 @@ export function BillsPage() {
         [handleUnauthorized, refreshList],
     )
 
+    const handleCorrectBill = useCallback(
+        async (billId, updates) => {
+            try {
+                const { data } = await correctBill(billId, updates, signal())
+                if (!mountedRef.current) return data
+                await openBill(billId)
+                void listBills(signal()).then(({ data: listData }) => {
+                    if (mountedRef.current) {
+                        setBills(sortBillsChronologically(listData.bills ?? []))
+                    }
+                })
+                return data
+            } catch (err) {
+                if (!mountedRef.current || isAbort(err)) return
+                if (handleUnauthorized(err)) return
+                throw err
+            }
+        },
+        [handleUnauthorized, openBill],
+    )
+
     return (
         <BillsWorkspace
             sessionPhase={sessionPhase}
             accountMode={accountMode}
             bills={bills}
+            selectedBillId={selectedId}
             detail={detail}
             detailPhase={detailPhase}
             pipelineStage={pipelineStage}
@@ -419,6 +477,7 @@ export function BillsPage() {
             onRetrySession={bootstrap}
             onVerify={handleVerify}
             verifying={verifying}
+            onCorrect={handleCorrectBill}
         />
     )
 }

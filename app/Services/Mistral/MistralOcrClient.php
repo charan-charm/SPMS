@@ -143,8 +143,12 @@ final class MistralOcrClient
         . 'Do not use the previous-period BILLED UNITS value as the current consumption. '
         . 'SOLARKWH with PRESENT and PREVIOUS values represents cumulative solar generation readings. Map PRESENT to '
         . 'present_solar_reading and PREVIOUS to previous_solar_reading. '
-        . 'SOLAR UNITS represents the billing-period solar generation quantity. Map the current-period SOLAR UNITS value '
-        . 'to solar_units_kwh. '
+        . 'SOLAR UNITS represents the billing-period solar generation quantity. '
+        . 'SOLAR EXPORT UNITS in the billing units table represents current-period solar export. Map the current-period '
+        . 'SOLAR EXPORT UNITS value to solar_export_units_kwh and solar_units_kwh. '
+        . 'Do NOT map an ambiguous, secondary, or bottom-of-bill figure (such as "Solar Units: 177") to solar_export_units_kwh '
+        . 'or solar_units_kwh when a distinct SOLAR EXPORT UNITS row is present; instead, map any such separate ambiguous or '
+        . 'unmapped figure to other_solar_balance_or_adjustment_kwh. '
         . 'NET UNITS represents the billing-period net energy quantity. Map the current-period NET UNITS value to '
         . 'net_units_kwh. Preserve its sign exactly. Do not replace a negative value with zero. '
         . 'Where a row contains current and previous values, the first/current value is the current billing period and the '
@@ -225,9 +229,14 @@ final class MistralOcrClient
         $previousSolar['description'] = 'Cumulative solar generation reading for the previous period from the SOLARKWH row.';
         $presentSolar = ['type' => ['number', 'null']];
         $presentSolar['description'] = 'Cumulative solar generation reading for the present period from the SOLARKWH row.';
+        $solarExportUnits = ['type' => ['number', 'null']];
+        $solarExportUnits['description'] = 'Billing-period solar export quantity from the current-period SOLAR EXPORT UNITS row in the billing units table.';
         $solarUnits = ['type' => ['number', 'null']];
-        $solarUnits['description'] = 'Billing-period solar generation quantity from the current-period SOLAR UNITS row; '
-            . 'not a cumulative SOLARKWH reading.';
+        $solarUnits['description'] = 'Billing-period solar export quantity from the current-period SOLAR EXPORT UNITS row; '
+            . 'not a cumulative SOLARKWH reading and never an ambiguous bottom-of-bill figure.';
+        $otherSolar = ['type' => ['number', 'null']];
+        $otherSolar['description'] = 'Any separate, secondary, or bottom-of-bill solar balance/adjustment/unmapped figure '
+            . '(such as Solar Units: 177) that is distinct from current-period SOLAR EXPORT UNITS. null when not present.';
         $netUnits = ['type' => ['number', 'null']];
         $netUnits['description'] = 'Billing-period net quantity from the current-period NET UNITS row. Sign must be '
             . 'preserved exactly as displayed; a negative value must never become zero.';
@@ -270,7 +279,9 @@ final class MistralOcrClient
                 'solar' => $section([
                     'previous_solar_reading' => $previousSolar,
                     'present_solar_reading' => $presentSolar,
+                    'solar_export_units_kwh' => $solarExportUnits,
                     'solar_units_kwh' => $solarUnits,
+                    'other_solar_balance_or_adjustment_kwh' => $otherSolar,
                     'net_units_kwh' => $netUnits,
                 ]),
                 'cost' => [

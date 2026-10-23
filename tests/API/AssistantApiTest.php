@@ -11,7 +11,9 @@ use App\Domain\Assistant\AssistantService;
 use App\Domain\Assistant\Providers\FakeAIProvider;
 use App\Domain\Assistant\SPMSContextBuilder;
 use App\Domain\Household\HouseholdService;
+use App\Domain\Intelligence\Insight;
 use App\Repositories\AssistantMessageRepository;
+use App\Repositories\InsightRepository;
 use App\Support\AppException;
 use App\Support\Database;
 use App\Support\Request;
@@ -166,6 +168,81 @@ final class AssistantApiTest
                 Assert::false($data['fallback_used']);
             }),
 
+            TestResult::check('POST /api/v1/assistant succeeds with page_context=insights when active insights exist', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $account = $fixture['account'];
+                $householdId = $fixture['household_id'];
+
+                $fakeResponse = 'Your solar generation has a detected midday pattern with peak output observed.';
+                $fake = new FakeAIProvider('gemini', 'gemini-1.5-flash', true, $fakeResponse);
+                $gateway = new AIProviderGateway(customProviders: ['gemini' => $fake], primaryProvider: 'gemini', fallbackEnabled: false);
+
+                $mockInsightRepo = new class($householdId) extends InsightRepository {
+                    public function __construct(private readonly string $targetHhId) {}
+                    public function list(array $filters = []): array
+                    {
+                        return [
+                            Insight::fromStorageRow([
+                                'id' => '00000000-0000-0000-0000-000000000055',
+                                'household_id' => $this->targetHhId,
+                                'category' => 'SOLAR',
+                                'type' => 'SOLAR_PEAK_SHIFT',
+                                'title' => 'Midday Solar Shift Observed',
+                                'summary' => 'Peak solar generation was observed shifted by 1 hour.',
+                                'significance' => 'HIGH',
+                                'confidence' => 'HIGH',
+                                'status' => 'DETECTED',
+                                'affected_period_start' => '2026-10-21 10:00:00',
+                                'affected_period_end' => '2026-10-21 14:00:00',
+                                'affected_period_resolution' => 'HOUR',
+                                'detected_at' => '2026-10-21 11:00:00',
+                                'first_detected_at' => '2026-10-21 11:00:00',
+                                'last_observed_at' => '2026-10-21 11:00:00',
+                                'updated_at' => '2026-10-21 11:00:00',
+                                'observation_count' => 1,
+                                'data_nature' => 'ACTUAL',
+                                'data_status' => 'FRESH',
+                                'quality' => 'GOOD',
+                                'explanation' => 'Midday solar generation analysis.',
+                                'explanation_source' => 'F6_DETERMINISTIC_ENGINE_V1',
+                                'evidence_summary' => 'Peak solar observed.',
+                                'supporting_facts' => '[]',
+                                'limitations' => '[]',
+                                'provenance' => '{}',
+                            ]),
+                        ];
+                    }
+                };
+
+                $contextBuilder = new SPMSContextBuilder(insightRepository: $mockInsightRepo);
+                $service = new AssistantService(
+                    contextBuilder: $contextBuilder,
+                    gateway: $gateway,
+                    validator: new AssistantResponseValidator(),
+                    messageRepository: new AssistantMessageRepository(Database::connection())
+                );
+
+                $controller = self::makeController($service);
+
+                $req = AuthTesting::authed(
+                    Request::create('POST', '/api/v1/assistant', [], [
+                        'message' => 'todays generation',
+                        'page_context' => 'insights',
+                    ]),
+                    $account
+                );
+
+                $response = $controller->ask($req);
+                Assert::same(200, $response->status());
+
+                $data = $response->data();
+                Assert::true(isset($data['answer']));
+                Assert::same('gemini', $data['provider']);
+                Assert::true(in_array('insights', $data['context_domains'], true));
+                Assert::false($data['fallback_used']);
+            }),
+
             TestResult::check('GET and DELETE /api/v1/assistant enforce strict household conversation isolation', function (): void {
                 RequestId::set(RequestId::new());
                 $fixture1 = AuthTesting::householdFixture();
@@ -221,6 +298,198 @@ final class AssistantApiTest
 
                 $postClearHist2 = $controller->history($histReq2)->data()['messages'];
                 Assert::true(count($postClearHist2) > 0, 'Household 2 history must remain untouched');
+            }),
+
+            TestResult::check('POST /api/v1/assistant answers weekly solar generation question with authoritative context', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $account = $fixture['account'];
+
+                $fakeResponse = 'Based on your solar records, your most recent recorded week generated 125.320 kWh.';
+                $fake = new FakeAIProvider('gemini', 'gemini-1.5-flash', true, $fakeResponse);
+                $gateway = new AIProviderGateway(customProviders: ['gemini' => $fake], primaryProvider: 'gemini', fallbackEnabled: false);
+                $service = new AssistantService(
+                    contextBuilder: new SPMSContextBuilder(),
+                    gateway: $gateway,
+                    validator: new AssistantResponseValidator(),
+                    messageRepository: new AssistantMessageRepository(Database::connection())
+                );
+
+                $controller = self::makeController($service);
+
+                $req = AuthTesting::authed(
+                    Request::create('POST', '/api/v1/assistant', [], [
+                        'message' => 'this week generation',
+                        'page_context' => 'insights',
+                    ]),
+                    $account
+                );
+
+                $response = $controller->ask($req);
+                Assert::same(200, $response->status());
+
+                $data = $response->data();
+                Assert::true(isset($data['answer']));
+                Assert::same('gemini', $data['provider']);
+                Assert::true(in_array('solar', $data['context_domains'], true));
+                Assert::true(in_array('insights', $data['context_domains'], true));
+            }),
+
+            TestResult::check('POST /api/v1/assistant routes weather questions to weather domain', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $account = $fixture['account'];
+
+                $fakeResponse = 'Today the weather is partly cloudy with good conditions for solar production.';
+                $fake = new FakeAIProvider('gemini', 'gemini-1.5-flash', true, $fakeResponse);
+                $gateway = new AIProviderGateway(customProviders: ['gemini' => $fake], primaryProvider: 'gemini', fallbackEnabled: false);
+                $service = new AssistantService(
+                    contextBuilder: new SPMSContextBuilder(),
+                    gateway: $gateway,
+                    validator: new AssistantResponseValidator(),
+                    messageRepository: new AssistantMessageRepository(Database::connection())
+                );
+
+                $controller = self::makeController($service);
+
+                $req = AuthTesting::authed(
+                    Request::create('POST', '/api/v1/assistant', [], [
+                        'message' => 'what is the weather today?',
+                    ]),
+                    $account
+                );
+
+                $response = $controller->ask($req);
+                Assert::same(200, $response->status());
+
+                $data = $response->data();
+                Assert::true(in_array('weather', $data['context_domains'], true));
+            }),
+
+            TestResult::check('POST /api/v1/assistant routes bill coverage questions to bills and solar domains', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $account = $fixture['account'];
+
+                $fakeResponse = 'Your solar generation covered approximately 78% of your billed consumption.';
+                $fake = new FakeAIProvider('gemini', 'gemini-1.5-flash', true, $fakeResponse);
+                $gateway = new AIProviderGateway(customProviders: ['gemini' => $fake], primaryProvider: 'gemini', fallbackEnabled: false);
+                $service = new AssistantService(
+                    contextBuilder: new SPMSContextBuilder(),
+                    gateway: $gateway,
+                    validator: new AssistantResponseValidator(),
+                    messageRepository: new AssistantMessageRepository(Database::connection())
+                );
+
+                $controller = self::makeController($service);
+
+                $req = AuthTesting::authed(
+                    Request::create('POST', '/api/v1/assistant', [], [
+                        'message' => 'how much of my bill is covered by solar?',
+                    ]),
+                    $account
+                );
+
+                $response = $controller->ask($req);
+                Assert::same(200, $response->status());
+
+                $data = $response->data();
+                Assert::true(in_array('bills', $data['context_domains'], true));
+                Assert::true(in_array('solar', $data['context_domains'], true));
+            }),
+
+            TestResult::check('POST /api/v1/assistant routes historical comparison questions accurately', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $account = $fixture['account'];
+
+                $fakeResponse = 'Comparing this week with last week requires historical data from both periods.';
+                $fake = new FakeAIProvider('gemini', 'gemini-1.5-flash', true, $fakeResponse);
+                $gateway = new AIProviderGateway(customProviders: ['gemini' => $fake], primaryProvider: 'gemini', fallbackEnabled: false);
+                $service = new AssistantService(
+                    contextBuilder: new SPMSContextBuilder(),
+                    gateway: $gateway,
+                    validator: new AssistantResponseValidator(),
+                    messageRepository: new AssistantMessageRepository(Database::connection())
+                );
+
+                $controller = self::makeController($service);
+
+                $req = AuthTesting::authed(
+                    Request::create('POST', '/api/v1/assistant', [], [
+                        'message' => 'compare this week with last week',
+                    ]),
+                    $account
+                );
+
+                $response = $controller->ask($req);
+                Assert::same(200, $response->status());
+
+                $data = $response->data();
+                Assert::true(in_array('solar', $data['context_domains'], true));
+            }),
+
+            TestResult::check('POST /api/v1/assistant answers lowest generation day query', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $account = $fixture['account'];
+
+                $fakeResponse = 'Your lowest recorded active generation day was 19.810 kWh.';
+                $fake = new FakeAIProvider('gemini', 'gemini-1.5-flash', true, $fakeResponse);
+                $gateway = new AIProviderGateway(customProviders: ['gemini' => $fake], primaryProvider: 'gemini', fallbackEnabled: false);
+                $service = new AssistantService(
+                    contextBuilder: new SPMSContextBuilder(),
+                    gateway: $gateway,
+                    validator: new AssistantResponseValidator(),
+                    messageRepository: new AssistantMessageRepository(Database::connection())
+                );
+
+                $controller = self::makeController($service);
+
+                $req = AuthTesting::authed(
+                    Request::create('POST', '/api/v1/assistant', [], [
+                        'message' => 'what was our lowest generation day?',
+                    ]),
+                    $account
+                );
+
+                $response = $controller->ask($req);
+                Assert::same(200, $response->status());
+
+                $data = $response->data();
+                Assert::true(in_array('solar', $data['context_domains'], true));
+            }),
+
+            TestResult::check('POST /api/v1/assistant handles appliance control request with advisory safety refusal', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $account = $fixture['account'];
+
+                $fakeResponse = 'I cannot switch off your AC. SPMS is strictly an analytical advisory system that suggests optimal load windows.';
+                $fake = new FakeAIProvider('gemini', 'gemini-1.5-flash', true, $fakeResponse);
+                $gateway = new AIProviderGateway(customProviders: ['gemini' => $fake], primaryProvider: 'gemini', fallbackEnabled: false);
+                $service = new AssistantService(
+                    contextBuilder: new SPMSContextBuilder(),
+                    gateway: $gateway,
+                    validator: new AssistantResponseValidator(),
+                    messageRepository: new AssistantMessageRepository(Database::connection())
+                );
+
+                $controller = self::makeController($service);
+
+                $req = AuthTesting::authed(
+                    Request::create('POST', '/api/v1/assistant', [], [
+                        'message' => 'can you turn off my AC to save power?',
+                    ]),
+                    $account
+                );
+
+                $response = $controller->ask($req);
+                Assert::same(200, $response->status());
+
+                $data = $response->data();
+                Assert::true(isset($data['answer']));
+                Assert::true(str_contains($data['answer'], 'advisory'));
             }),
         ];
     }

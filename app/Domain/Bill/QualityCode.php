@@ -27,6 +27,7 @@ final class QualityCode
     public const UNREADABLE_FIELD = 'UNREADABLE_FIELD';
     public const AMBIGUOUS_AMOUNT = 'AMBIGUOUS_AMOUNT';
     public const CONFLICTING_METER_READINGS = 'CONFLICTING_METER_READINGS';
+    public const CONFLICTING_SOLAR_READINGS = 'CONFLICTING_SOLAR_READINGS';
     public const INCONSISTENT_NET_UNITS = 'INCONSISTENT_NET_UNITS';
 
     /**
@@ -52,6 +53,7 @@ final class QualityCode
         self::UNREADABLE_FIELD,
         self::AMBIGUOUS_AMOUNT,
         self::CONFLICTING_METER_READINGS,
+        self::CONFLICTING_SOLAR_READINGS,
         self::INCONSISTENT_NET_UNITS,
         self::NO_BILL_EVIDENCE,
         self::SERVICE_NUMBER_MISMATCH,

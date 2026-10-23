@@ -114,6 +114,65 @@ final class GoodWeNormalizationTest
                 Assert::same('NORMAL', $arr['inverter_status']);
                 Assert::same('ACTUAL', $arr['data_nature']);
             }),
+
+            TestResult::check('GoodWe telemetry parser parses SEMS US date format without month overflow into future years', function (): void {
+                $adapter = new \App\Integrations\GoodWe\GoodWeSemsPortalAdapter();
+                $ref = new \ReflectionMethod($adapter, 'parseMeasurementTime');
+                $fallback = new DateTimeImmutable('2026-09-28 12:00:00');
+
+                // Standard SEMS US timestamp (m/d/Y H:i:s)
+                $parsedUs = $ref->invoke($adapter, '09/21/2026 17:05:34', $fallback);
+                Assert::same('2026-09-21 17:05:34', $parsedUs->format('Y-m-d H:i:s'));
+                Assert::same('2026', $parsedUs->format('Y'));
+
+                // ISO format (Y-m-d H:i:s)
+                $parsedIso = $ref->invoke($adapter, '2026-09-28 04:47:58', $fallback);
+                Assert::same('2026-09-28 04:47:58', $parsedIso->format('Y-m-d H:i:s'));
+
+                // European format (d/m/Y H:i:s)
+                $parsedEu = $ref->invoke($adapter, '21/09/2026 17:05:34', $fallback);
+                Assert::same('2026-09-21 17:05:34', $parsedEu->format('Y-m-d H:i:s'));
+
+                // 12-hour AM/PM format
+                $parsedAmPm = $ref->invoke($adapter, '09/21/2026 05:05:34 PM', $fallback);
+                Assert::same('2026-09-21 17:05:34', $parsedAmPm->format('Y-m-d H:i:s'));
+
+                // Invalid/overflow format must NOT overflow into 2027 and must fall back safely
+                $parsedOverflow = $ref->invoke($adapter, '25/25/2026 12:00:00', $fallback);
+                Assert::same($fallback->format('Y-m-d H:i:s'), $parsedOverflow->format('Y-m-d H:i:s'));
+
+                // Null or empty string must return fallback
+                $parsedNull = $ref->invoke($adapter, null, $fallback);
+                Assert::same($fallback->format('Y-m-d H:i:s'), $parsedNull->format('Y-m-d H:i:s'));
+            }),
+
+            TestResult::check('GoodWe factor flattener extracts code-keyed values from nested factor groups', function (): void {
+                $adapter = new \App\Integrations\GoodWe\GoodWeSemsPortalAdapter();
+                $ref = new \ReflectionMethod($adapter, 'flattenFactors');
+
+                $groups = [
+                    [
+                        'code' => 'proPvStats',
+                        'factors' => [
+                            ['code' => 'proPvStatsToday', 'data' => '12.80', 'unit' => 'kWh'],
+                            ['code' => 'proPvStatsTotal', 'data' => '3423.40', 'unit' => 'kWh'],
+                        ],
+                    ],
+                    [
+                        'code' => 'acParameters',
+                        'factors' => [
+                            ['code' => 'Vac', 'data' => '232.5', 'unit' => 'V'],
+                            ['code' => 'Iac', 'data' => '1.5', 'unit' => 'A'],
+                        ],
+                    ],
+                ];
+
+                $flattened = $ref->invoke($adapter, $groups);
+                Assert::same('12.80', $flattened['proPvStatsToday']);
+                Assert::same('3423.40', $flattened['proPvStatsTotal']);
+                Assert::same('232.5', $flattened['Vac']);
+                Assert::same('1.5', $flattened['Iac']);
+            }),
         ];
     }
 }

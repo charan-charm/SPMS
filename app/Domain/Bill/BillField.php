@@ -40,32 +40,53 @@ final class BillField
     public const DUE_DATE = 'due_date';
 
     // Energy / meter evidence (signed)
+    public const CONSUMPTION_KWH = 'consumption_kwh';
+    public const PREVIOUS_METER_READING = 'previous_meter_reading';
+    public const PRESENT_METER_READING = 'present_meter_reading';
+    public const PREVIOUS_SOLAR_READING = 'previous_solar_reading';
+    public const PRESENT_SOLAR_READING = 'present_solar_reading';
+    public const SOLAR_UNITS_KWH = 'solar_units_kwh';
+    public const NET_UNITS_KWH = 'net_units_kwh';
+    public const OPENING_KVAH = 'opening_kvah';
+    public const CLOSING_KVAH = 'closing_kvah';
+    public const CONSUMPTION_KVAH = 'consumption_kvah';
+
     public const ENERGY = [
-        'consumption_kwh',
-        'previous_meter_reading',
-        'present_meter_reading',
-        'previous_solar_reading',
-        'present_solar_reading',
-        'solar_units_kwh',
-        'net_units_kwh',
-        'opening_kvah',
-        'closing_kvah',
-        'consumption_kvah',
+        self::CONSUMPTION_KWH,
+        self::PREVIOUS_METER_READING,
+        self::PRESENT_METER_READING,
+        self::PREVIOUS_SOLAR_READING,
+        self::PRESENT_SOLAR_READING,
+        self::SOLAR_UNITS_KWH,
+        self::NET_UNITS_KWH,
+        self::OPENING_KVAH,
+        self::CLOSING_KVAH,
+        self::CONSUMPTION_KVAH,
     ];
 
     // Money — conceptually distinct, stored separately (§6)
+    public const BILL_AMOUNT = 'bill_amount';
+    public const ARREARS = 'arrears';
+    public const TOTAL_DUE = 'total_due';
+    public const ENERGY_CHARGES = 'energy_charges';
+    public const FIXED_CHARGES = 'fixed_charges';
+    public const CUSTOMER_SERVICE_CHARGES = 'customer_service_charges';
+    public const OTHER_CHARGES = 'other_charges';
+    public const TAXES_ADJUSTMENTS = 'taxes_adjustments';
+
     public const MONEY = [
-        'bill_amount',
-        'arrears',
-        'total_due',
-        'energy_charges',
-        'fixed_charges',
-        'customer_service_charges',
-        'other_charges',
-        'taxes_adjustments',
+        self::BILL_AMOUNT,
+        self::ARREARS,
+        self::TOTAL_DUE,
+        self::ENERGY_CHARGES,
+        self::FIXED_CHARGES,
+        self::CUSTOMER_SERVICE_CHARGES,
+        self::OTHER_CHARGES,
+        self::TAXES_ADJUSTMENTS,
     ];
 
-    public const LOAD = ['contracted_load'];
+    public const CONTRACTED_LOAD = 'contracted_load';
+    public const LOAD = [self::CONTRACTED_LOAD];
 
     public const DATES = [
         self::BILLING_PERIOD_START,
@@ -79,12 +100,15 @@ final class BillField
 
     public const SOURCE = 'source';
     public const SOURCE_METADATA_JSON = 'source_metadata_json';
+    public const UTILITY_PROVIDER = 'utility_provider';
+    public const TARIFF_CATEGORY = 'tariff_category';
+    public const METER_TYPE = 'meter_type';
 
     public const TEXT = [
         self::SOURCE,
-        'utility_provider',
-        'tariff_category',
-        'meter_type',
+        self::UTILITY_PROVIDER,
+        self::TARIFF_CATEGORY,
+        self::METER_TYPE,
         self::SERVICE_NUMBER,
         self::SOURCE_METADATA_JSON,
     ];
@@ -131,6 +155,36 @@ final class BillField
     public static function isPersistable(string $field): bool
     {
         return in_array($field, self::ALL, true);
+    }
+
+    /**
+     * Canonical Field Policy (Requirement 8):
+     * Factual bill fields directly verifiable from the physical/digital
+     * document that a user may inspect and correct.
+     */
+    public const USER_EDITABLE = [
+        ...self::DATES,
+        ...self::ENERGY,
+        ...self::MONEY,
+        ...self::LOAD,
+        'utility_provider',
+        'tariff_category',
+        'meter_type',
+        self::SERVICE_NUMBER,
+    ];
+
+    /**
+     * Read-only system and metadata fields. Direct manual edits are rejected;
+     * these are managed through deterministic provenance and ingestion adapters.
+     */
+    public const READ_ONLY = [
+        self::SOURCE,
+        self::SOURCE_METADATA_JSON,
+    ];
+
+    public static function isEditable(string $field): bool
+    {
+        return in_array($field, self::USER_EDITABLE, true);
     }
 
     /**

@@ -34,4 +34,16 @@ describe('solarApi client timeout configuration', () => {
             expect.objectContaining({ timeoutMs: 30000 })
         )
     })
+
+    it('posts to /solar/sync/auto for opportunistic visit synchronization', async () => {
+        postSpy.mockResolvedValueOnce({ data: { synced: true, status: 'SUCCESS' } })
+        const res = await solarApi.autoSyncTelemetry()
+
+        expect(postSpy).toHaveBeenCalledWith(
+            '/solar/sync/auto',
+            {},
+            expect.objectContaining({ signal: undefined })
+        )
+        expect(res).toEqual({ synced: true, status: 'SUCCESS' })
+    })
 })

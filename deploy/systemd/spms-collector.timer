@@ -1,0 +1,13 @@
+[Unit]
+Description=Run SPMS Real Solar Telemetry Ingestion Every 5 Minutes
+RefuseManualStart=no
+RefuseManualStop=no
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target

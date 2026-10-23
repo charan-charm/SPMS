@@ -54,13 +54,16 @@ describe('WeatherInputCard', () => {
 
         render(<WeatherInputCard weather={fallbackWeather} />)
 
-        expect(screen.getByText('Fallback')).toBeInTheDocument()
+        expect(screen.getByText('CLEAR-SKY FALLBACK ACTIVE')).toBeInTheDocument()
+        expect(screen.getByText('External weather unavailable')).toBeInTheDocument()
         expect(screen.getByTestId('weather-fallback-explanation')).toBeInTheDocument()
         expect(
             screen.getByText(/solar forecast relies on clear-sky physical solar pattern fallback model/i)
         ).toBeInTheDocument()
         // Ensure no fabricated weather metrics are displayed
         expect(screen.queryByText('31.5°C')).not.toBeInTheDocument()
+        // Do not present Open-Meteo as the active source when fallback is active
+        expect(screen.queryByText(/Source:\s*Open-Meteo/i)).not.toBeInTheDocument()
     })
 
     it('renders unavailable status when weather data is missing or location is unconfigured', () => {

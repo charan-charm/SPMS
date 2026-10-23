@@ -71,8 +71,8 @@ final class Recommendation
         private string $dataNature,
         private array $provenance,
         private array $limitations,
-        private readonly ?string $relevantPeriodStart,
-        private readonly ?string $relevantPeriodEnd,
+        private ?string $relevantPeriodStart,
+        private ?string $relevantPeriodEnd,
         private readonly DateTimeImmutable $validFrom,
         private DateTimeImmutable $validUntil,
         private readonly DateTimeImmutable $createdAt,
@@ -299,6 +299,8 @@ final class Recommendation
         $this->dataNature = $candidate->dataNature;
         $this->provenance = $candidate->provenance;
         $this->limitations = $candidate->limitations;
+        $this->relevantPeriodStart = $candidate->relevantPeriodStart;
+        $this->relevantPeriodEnd = $candidate->relevantPeriodEnd;
         $this->validUntil = $candidate->validUntil;
         $this->updatedAt = $now;
     }

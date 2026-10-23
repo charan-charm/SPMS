@@ -19,10 +19,35 @@ use App\Domain\Solar\SolarService;
 use App\Repositories\SolarConnectionRepository;
 use App\Support\Config;
 
+$rawOptions = getopt('', ['daemon', 'interval:', 'household:', 'env:', 'verbose']);
+$targetEnv = isset($rawOptions['env']) && is_string($rawOptions['env']) ? strtolower(trim($rawOptions['env'])) : (getenv('SPMS_DATA_ENVIRONMENT') ?: 'real');
+if (in_array($targetEnv, ['real', 'demo', 'test'], true)) {
+    putenv("SPMS_DATA_ENVIRONMENT={$targetEnv}");
+    $_ENV['SPMS_DATA_ENVIRONMENT'] = $targetEnv;
+}
+
 Config::initialize($rootPath);
 
-$options = getopt('', ['daemon', 'interval:', 'household:', 'verbose']);
+// Prevent overlapping runs using non-blocking lock file
+$lockDir = $rootPath . '/storage/locks';
+if (!is_dir($lockDir)) {
+    @mkdir($lockDir, 0755, true);
+}
+$lockFile = $lockDir . "/solar_collection_{$targetEnv}.lock";
+$lockHandle = fopen($lockFile, 'c');
+if ($lockHandle === false || !flock($lockHandle, LOCK_EX | LOCK_NB)) {
+    echo sprintf('[%s] Another solar ingestion process is already running for %s environment. Exiting.%s', date('Y-m-d H:i:s'), $targetEnv, PHP_EOL);
+    exit(0);
+}
 
+register_shutdown_function(static function () use (&$lockHandle): void {
+    if ($lockHandle !== null && is_resource($lockHandle)) {
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+    }
+});
+
+$options = $rawOptions;
 $isDaemon = isset($options['daemon']);
 $specificHousehold = isset($options['household']) && is_string($options['household'])
     ? trim($options['household'])
@@ -39,8 +64,9 @@ $solarService = new SolarService();
 $connectionsRepo = new SolarConnectionRepository();
 
 echo sprintf(
-    '[%s] SPMS Solar Ingestion Worker started (daemon: %s, interval: %ds)%s',
+    '[%s] SPMS Solar Ingestion Worker started (env: %s, daemon: %s, interval: %ds)%s',
     date('Y-m-d H:i:s'),
+    $targetEnv,
     $isDaemon ? 'yes' : 'no',
     $intervalSeconds,
     PHP_EOL

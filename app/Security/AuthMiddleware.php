@@ -181,7 +181,7 @@ final class AuthMiddleware
             }
         }
 
-        $defaultProfile = getenv('SPMS_DATA_ENVIRONMENT') ?: 'real';
+        $defaultProfile = \App\Support\Config::get('SPMS_DATA_ENVIRONMENT') ?: (getenv('SPMS_DATA_ENVIRONMENT') ?: 'real');
         if (in_array($defaultProfile, ['real', 'demo', 'test'], true)) {
             \App\Support\Database::switchTo($defaultProfile);
         } else {

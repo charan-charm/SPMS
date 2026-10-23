@@ -219,6 +219,179 @@ final class BillVerificationApiTest
                 Assert::same('USER_CORRECTION', $provenance['bill_amount']['source'] ?? null);
             }),
 
+            TestResult::check('PATCH /api/v1/bills/{id} rejects anonymous callers with 401', function (): void {
+                RequestId::set(RequestId::new());
+
+                try {
+                    self::controller()->update(Request::create('PATCH', '/api/v1/bills/018b0000-0000-7000-8000-000000000001', body: ['consumption_kwh' => '100.000']));
+                    Assert::true(false, 'Expected 401 UNAUTHENTICATED');
+                } catch (AppException $e) {
+                    Assert::same('UNAUTHENTICATED', $e->errorCode());
+                    Assert::same(401, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('PATCH /api/v1/bills/{id} rejects cross-household attempt with 404', function (): void {
+                RequestId::set(RequestId::new());
+                $fixtureA = AuthTesting::householdFixture('patch-cross-a-' . bin2hex(random_bytes(3)));
+                $fixtureB = AuthTesting::householdFixture('patch-cross-b-' . bin2hex(random_bytes(3)));
+                $billA = self::createBillWithDraft($fixtureA['household_id'], '2024-06-01', '2024-06-30');
+
+                try {
+                    $req = AuthTesting::authed(Request::create('PATCH', '/api/v1/bills/' . $billA->id(), body: ['consumption_kwh' => '200.000']), $fixtureB['account']);
+                    self::controller()->update($req);
+                    Assert::true(false, 'Expected 404 NOT_FOUND for cross-household bill patch');
+                } catch (AppException $e) {
+                    Assert::same('NOT_FOUND', $e->errorCode());
+                    Assert::same(404, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('PATCH /api/v1/bills/{id} rejects read-only fields under canonical field policy', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture('patch-readonly-' . bin2hex(random_bytes(3)));
+                $bill = self::createBillWithDraft($fixture['household_id'], '2024-07-01', '2024-07-31');
+
+                try {
+                    $req = AuthTesting::authed(Request::create('PATCH', '/api/v1/bills/' . $bill->id(), body: [
+                        'source' => 'MANUAL_OVERWRITE',
+                    ]), $fixture['account']);
+                    self::controller()->update($req);
+                    Assert::true(false, 'Expected 422 READ_ONLY_FIELD');
+                } catch (AppException $e) {
+                    Assert::same('READ_ONLY_FIELD', $e->errorCode());
+                    Assert::same(422, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('PATCH /api/v1/bills/{id} rejects invalid numeric values with 422', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture('patch-badnum-' . bin2hex(random_bytes(3)));
+                $bill = self::createBillWithDraft($fixture['household_id'], '2024-08-01', '2024-08-31');
+
+                try {
+                    $req = AuthTesting::authed(Request::create('PATCH', '/api/v1/bills/' . $bill->id(), body: [
+                        'consumption_kwh' => 'invalid-energy-units',
+                    ]), $fixture['account']);
+                    self::controller()->update($req);
+                    Assert::true(false, 'Expected 422 VALIDATION_ERROR');
+                } catch (AppException $e) {
+                    Assert::same('VALIDATION_ERROR', $e->errorCode());
+                    Assert::same(422, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('user correction preserves immutable draft, revalidates net units conflict, transitions to EXTRACTED without auto-verifying, then verifies successfully', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture('patch-reval-' . bin2hex(random_bytes(3)), '8623310010998');
+
+                // Simulate October extraction case:
+                // Meter: 1460 -> 1663 (consumption: 203)
+                // Solar: 2200 -> 2503 (solar meter delta: 303)
+                // Extracted candidate solar units: 177.000 (wrong candidate)
+                // Net units: -100.000
+                // Net validation: 203 - 177 = 26 != -100 (CONFLICT -> INCONSISTENT_NET_UNITS, NEEDS_REVIEW)
+                $bill = Bill::create($fixture['household_id'], '2026-09-01', '2026-10-01', self::now())
+                    ->transitionTo(BillStatus::PROCESSING, self::now())
+                    ->transitionTo(BillStatus::EXTRACTED, self::now())
+                    ->withValues([
+                        'consumption_kwh' => '203.000',
+                        'previous_meter_reading' => '1460.000',
+                        'present_meter_reading' => '1663.000',
+                        'previous_solar_reading' => '2200.000',
+                        'present_solar_reading' => '2503.000',
+                        'solar_units_kwh' => '177.000',
+                        'net_units_kwh' => '-100.000',
+                        'bill_amount' => '149.00',
+                        'service_number' => '8623310010998',
+                    ], self::now())
+                    ->transitionTo(BillStatus::NEEDS_REVIEW, self::now());
+
+                $repo = new BillRepository(self::pdo());
+                $repo->insert($bill);
+                self::$createdBillIds[] = $bill->id();
+
+                // Save initial draft and conflicting validation
+                $draft = BillExtractionDraft::create(
+                    $bill->id(),
+                    'mistral',
+                    'mistral-ocr-2503',
+                    self::now(),
+                    DocumentAssessment::VALID_WITH_LIMITATIONS,
+                    'inconsistent net units',
+                    '0.9500',
+                    $bill->values(),
+                    []
+                );
+                $repo->insertDraft($draft);
+                $repo->upsertValidation($bill->id(), \App\Domain\Bill\BillValidation::create(
+                    \App\Domain\Bill\ValidationRule::NET_UNITS,
+                    \App\Domain\Bill\ValidationStatus::CONFLICT,
+                    '26.000',
+                    '-100.000'
+                ), self::now()->format('Y-m-d H:i:s'));
+                $repo->recordQualityFlag($bill->id(), BillQualityFlag::create(QualityCode::INCONSISTENT_NET_UNITS, 'net_units_kwh'), self::now()->format('Y-m-d H:i:s'));
+
+                // Verify initial state: NEEDS_REVIEW with net conflict
+                $detailBefore = self::controller()->show(AuthTesting::authed(Request::create('GET', '/api/v1/bills/' . $bill->id()), $fixture['account']));
+                Assert::same(BillStatus::NEEDS_REVIEW, $detailBefore->body()['data']['bill']['status']);
+
+                // USER CORRECTS solar_units_kwh to 303.000 (authoritative solar export from meter delta 2503 - 2200)
+                // Now: 203 - 303 = -100.000 (matches net_units_kwh)!
+                $reqPatch = AuthTesting::authed(Request::create('PATCH', '/api/v1/bills/' . $bill->id(), body: [
+                    'solar_units_kwh' => '303.000',
+                ]), $fixture['account']);
+                $patchRes = self::controller()->update($reqPatch);
+
+                Assert::same(200, $patchRes->status());
+                Assert::same('303.000', $patchRes->body()['data']['values']['solar_units_kwh']);
+
+                // Bill status transitioned from NEEDS_REVIEW to EXTRACTED because conflict resolved!
+                Assert::same(BillStatus::EXTRACTED, $patchRes->body()['data']['status']);
+                // Crucial requirement: correction does NOT automatically mark bill VERIFIED
+                Assert::true($patchRes->body()['data']['status'] !== BillStatus::VERIFIED);
+
+                // Fetch full detail to verify draft immutability and revalidation outcome
+                $detailAfter = self::controller()->show(AuthTesting::authed(Request::create('GET', '/api/v1/bills/' . $bill->id()), $fixture['account']));
+                $billData = $detailAfter->body()['data']['bill'];
+
+                // 1. Immutable original draft is preserved
+                Assert::same('177.000', $billData['extraction']['raw_values']['solar_units_kwh'], 'Draft raw value must retain 177.000');
+                // 2. Current value reflects user correction
+                Assert::same('303.000', $billData['values']['solar_units_kwh']);
+                // 3. Provenance marks user correction
+                Assert::same('USER_CORRECTION', $billData['provenance']['solar_units_kwh']['source']);
+                // 4. NET_UNITS validation now passes
+                $netVal = null;
+                foreach ($billData['validations'] as $v) {
+                    if ($v['rule'] === \App\Domain\Bill\ValidationRule::NET_UNITS) {
+                        $netVal = $v;
+                    }
+                }
+                Assert::true($netVal !== null && $netVal['status'] === \App\Domain\Bill\ValidationStatus::PASS, 'NET_UNITS validation must PASS after correction');
+                // 5. INCONSISTENT_NET_UNITS quality flag cleared
+                $flags = array_column($billData['quality_flags'], 'code');
+                Assert::false(in_array(QualityCode::INCONSISTENT_NET_UNITS, $flags, true), 'INCONSISTENT_NET_UNITS flag must be cleared');
+
+                // Now user explicitly verifies the bill
+                $reqVerify = AuthTesting::authed(Request::create('POST', '/api/v1/bills/' . $bill->id() . '/verify'), $fixture['account']);
+                $verifyRes = self::controller()->verify($reqVerify);
+                Assert::same(200, $verifyRes->status());
+                Assert::same(BillStatus::VERIFIED, $verifyRes->body()['data']['status']);
+
+                // Protected: Verified bill cannot be edited anymore
+                try {
+                    $reqPostVerifyPatch = AuthTesting::authed(Request::create('PATCH', '/api/v1/bills/' . $bill->id(), body: [
+                        'solar_units_kwh' => '350.000',
+                    ]), $fixture['account']);
+                    self::controller()->update($reqPostVerifyPatch);
+                    Assert::true(false, 'Expected 409 INVALID_BILL_STATE for verified bill correction');
+                } catch (AppException $e) {
+                    Assert::same('INVALID_BILL_STATE', $e->errorCode());
+                    Assert::same(409, $e->httpStatus());
+                }
+            }),
+
             TestResult::check('cleanup removes verification test bills', function (): void {
                 $pdo = self::pdo();
                 foreach (self::$createdBillIds as $id) {

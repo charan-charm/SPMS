@@ -117,6 +117,53 @@ final class AuthMigrationsTest
                 $globalMode = (string) $pdo->query('SELECT @@GLOBAL.sql_mode')->fetchColumn();
                 Assert::notContains('STRICT_TRANS_TABLES', $globalMode, 'global XAMPP configuration must stay untouched');
             }),
+
+            TestResult::check('SessionService::revoke handles complete, partial, and empty session representations without warnings', function (): void {
+                $pdo = Database::connection();
+                $accountId = self::insertTestAccount($pdo);
+                $service = new \App\Domain\Auth\SessionService();
+
+                // 1. Valid complete session
+                $started = $service->start($accountId);
+                $session = $started['session'];
+                Assert::true(isset($session['id']) && isset($session['account_id']));
+
+                $revoked = $service->revoke($session, 'UNIT_TEST_LOGOUT');
+                Assert::true($revoked, 'Must report successful revocation for valid session');
+
+                $repo = new \App\Repositories\SessionRepository();
+                $persisted = $repo->findById((string) $session['id']);
+                Assert::true($persisted !== null);
+                Assert::true($persisted['revoked_at'] !== null, 'Session must be marked revoked');
+
+                // 2. Partial session: only id present (missing account_id)
+                $started2 = $service->start($accountId);
+                $partialSessionWithIdOnly = ['id' => $started2['session']['id']];
+
+                $revokedPartial = $service->revoke($partialSessionWithIdOnly, 'PARTIAL_TEST_REVOKE');
+                Assert::true($revokedPartial, 'Must resolve account_id and revoke session');
+
+                $persisted2 = $repo->findById((string) $started2['session']['id']);
+                Assert::true($persisted2 !== null);
+                Assert::true($persisted2['revoked_at'] !== null);
+
+                // 3. Incomplete session: missing id or empty array
+                $emptySession = [];
+                $revokedEmpty = $service->revoke($emptySession, 'EMPTY_REVOKE');
+                Assert::false($revokedEmpty, 'Must return false and not report success when session has no id');
+
+                $partialNoId = ['account_id' => $accountId];
+                $revokedNoId = $service->revoke($partialNoId, 'NO_ID_REVOKE');
+                Assert::false($revokedNoId, 'Must return false when id is missing');
+
+                // 4. Nonexistent id
+                $nonExistent = ['id' => '00000000-0000-0000-0000-000000000000'];
+                $revokedNonExistent = $service->revoke($nonExistent, 'NONEXISTENT_REVOKE');
+                Assert::false($revokedNonExistent, 'Must return false when session does not exist');
+
+                // Clean up test account
+                $pdo->prepare('DELETE FROM accounts WHERE id = ?')->execute([$accountId]);
+            }),
         ];
     }
 

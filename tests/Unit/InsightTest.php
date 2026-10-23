@@ -126,7 +126,7 @@ final class InsightTest
         return [
             TestResult::check('Taxonomy contains every controlled type with a valid category', function (): void {
                 $types = InsightTaxonomy::types();
-                Assert::same(20, count($types));
+                Assert::same(26, count($types));
 
                 foreach ($types as $type) {
                     Assert::true(InsightTaxonomy::isValidType($type), 'Type must be valid: ' . $type);
@@ -970,6 +970,117 @@ final class InsightTest
                     'start' => '2026-08-01',
                     'end' => '2026-09-01',
                 ]));
+            }),
+
+            TestResult::check('Insight exposes title and summary accessors returning assigned strings', function (): void {
+                $candidate = new DetectedCandidate(
+                    type: 'CONSUMPTION_INCREASE',
+                    title: 'Household consumption increased by 25%',
+                    summary: 'Daily consumption rose from 8.2 kWh to 10.3 kWh.',
+                    affectedPeriod: ['start' => '2026-09-02', 'end' => '2026-09-02', 'resolution' => 'DAY'],
+                    supportingFacts: ['Prior average: 8.2 kWh.'],
+                    limitations: [],
+                    evidenceSummary: null,
+                    explanation: 'Consumption analysis.',
+                    explanationSource: 'TEST_DETECTOR',
+                    evidenceDomains: ['consumption'],
+                    natures: ['ACTUAL'],
+                    statuses: ['FRESH'],
+                    qualities: [],
+                    detectors: ['TEST_DETECTOR'],
+                    significanceHint: 'MODERATE'
+                );
+
+                $insight = Insight::detected($candidate, InsightSignificance::MODERATE, InsightConfidence::HIGH, self::now(), 'hh-accessors');
+
+                Assert::same('Household consumption increased by 25%', $insight->title());
+                Assert::same('Daily consumption rose from 8.2 kWh to 10.3 kWh.', $insight->summary());
+
+                $rowInsight = Insight::fromStorageRow([
+                    'id' => 'ins-test-01',
+                    'household_id' => 'hh-accessors',
+                    'category' => 'SOLAR',
+                    'type' => 'SOLAR_PEAK_SHIFT',
+                    'title' => 'Midday Peak Generation',
+                    'summary' => 'Solar generation peaked 1 hour later than usual.',
+                    'significance' => 'HIGH',
+                    'confidence' => 'HIGH',
+                    'status' => 'DETECTED',
+                    'affected_period_start' => '2026-09-10 10:00:00',
+                    'affected_period_end' => '2026-09-10 14:00:00',
+                    'affected_period_resolution' => 'HOUR',
+                    'detected_at' => '2026-09-10 12:00:00',
+                    'first_detected_at' => '2026-09-10 12:00:00',
+                    'last_observed_at' => '2026-09-10 12:00:00',
+                    'updated_at' => '2026-09-10 12:00:00',
+                    'observation_count' => 1,
+                    'data_nature' => 'ACTUAL',
+                    'data_status' => 'FRESH',
+                    'quality' => 'GOOD',
+                    'explanation' => 'Midday solar generation analysis.',
+                    'explanation_source' => 'F6_DETERMINISTIC_ENGINE_V1',
+                    'evidence_summary' => 'Peak solar observed.',
+                    'supporting_facts' => '[]',
+                    'limitations' => '[]',
+                    'provenance' => '{}',
+                ]);
+
+                Assert::same('Midday Peak Generation', $rowInsight->title());
+                Assert::same('Solar generation peaked 1 hour later than usual.', $rowInsight->summary());
+            }),
+
+            TestResult::check('InsightEngine sorts candidates by title when significance and type match', function (): void {
+                $detector = new class implements InsightDetector {
+                    public function detect(InsightEvidenceInput $evidence): array
+                    {
+                        return [
+                            new DetectedCandidate(
+                                type: 'CONSUMPTION_INCREASE',
+                                title: 'Zebra consumption surge',
+                                summary: 'Summary Z.',
+                                affectedPeriod: ['start' => '2026-09-02', 'end' => '2026-09-02', 'resolution' => 'DAY'],
+                                supportingFacts: [],
+                                limitations: [],
+                                evidenceSummary: null,
+                                explanation: 'Explanation.',
+                                explanationSource: 'TEST_DETECTOR',
+                                evidenceDomains: ['consumption'],
+                                natures: ['ACTUAL'],
+                                statuses: ['FRESH'],
+                                qualities: [],
+                                detectors: ['TEST_DETECTOR'],
+                                significanceHint: 'HIGH'
+                            ),
+                            new DetectedCandidate(
+                                type: 'CONSUMPTION_INCREASE',
+                                title: 'Alpha consumption surge',
+                                summary: 'Summary A.',
+                                affectedPeriod: ['start' => '2026-09-03', 'end' => '2026-09-03', 'resolution' => 'DAY'],
+                                supportingFacts: [],
+                                limitations: [],
+                                evidenceSummary: null,
+                                explanation: 'Explanation.',
+                                explanationSource: 'TEST_DETECTOR',
+                                evidenceDomains: ['consumption'],
+                                natures: ['ACTUAL'],
+                                statuses: ['FRESH'],
+                                qualities: [],
+                                detectors: ['TEST_DETECTOR'],
+                                significanceHint: 'HIGH'
+                            ),
+                        ];
+                    }
+                };
+
+                $engine = new InsightEngine(detectors: [$detector]);
+                $evidence = InsightEvidenceInput::fromArray([
+                    'household_id' => 'hh-sort',
+                ]);
+
+                $insights = $engine->evaluate($evidence, self::now());
+                Assert::same(2, count($insights));
+                Assert::same('Alpha consumption surge', $insights[0]->title());
+                Assert::same('Zebra consumption surge', $insights[1]->title());
             }),
         ];
     }

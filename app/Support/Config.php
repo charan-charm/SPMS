@@ -29,14 +29,21 @@ final class Config
             $values = Env::parse((string) file_get_contents($envFile));
         }
 
-        $demoLocalFile = $basePath . DIRECTORY_SEPARATOR . '.env.demo.local';
-        if (is_readable($demoLocalFile)) {
-            $demoValues = Env::parse((string) file_get_contents($demoLocalFile));
-            $values = array_merge($values, $demoValues);
+        // D-071: resolve the trusted REAL/DEMO/TEST data environment profile
+        // from process env SPMS_DATA_ENVIRONMENT (priority 1) or .env (priority 2).
+        $profile = DataEnvironments::resolveProfile($values);
+
+        // .env.demo.local supplies local credentials and overrides for the DEMO
+        // environment only. It must never hijack a REAL or TEST environment into DEMO mode.
+        if ($profile === DataEnvironments::DEMO) {
+            $demoLocalFile = $basePath . DIRECTORY_SEPARATOR . '.env.demo.local';
+            if (is_readable($demoLocalFile)) {
+                $demoValues = Env::parse((string) file_get_contents($demoLocalFile));
+                $values = array_merge($values, $demoValues);
+            }
         }
 
-        // D-071: resolve the trusted REAL/DEMO/TEST data environment and
-        // overlay its DB_* connection values BEFORE the singleton exists,
+        // Overlay the resolved environment's DB_* connection values BEFORE the singleton exists,
         // so the choice is immutable per process and never request-driven.
         $values = DataEnvironments::apply($values);
 

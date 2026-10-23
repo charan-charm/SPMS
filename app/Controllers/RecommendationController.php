@@ -65,9 +65,17 @@ final class RecommendationController
             }
         }
 
+        $account = Authorization::requireAccount($request);
+        $ids = array_map(static fn (Recommendation $r): string => $r->id(), $recommendations);
+        $feedbacks = $this->service->getFeedbackForRecommendations($ids, $account->id());
+
         return Response::success([
             'recommendations' => array_map(
-                static fn (Recommendation $r): array => $r->toArray(),
+                static function (Recommendation $r) use ($feedbacks): array {
+                    $arr = $r->toArray();
+                    $arr['user_feedback'] = isset($feedbacks[$r->id()]) ? $feedbacks[$r->id()]->toArray() : null;
+                    return $arr;
+                },
                 $recommendations
             ),
             'count' => count($recommendations),
@@ -86,6 +94,7 @@ final class RecommendationController
     {
         $householdId = $this->requireHouseholdId($request);
         $this->assertNoCrossHouseholdClaim($request, $householdId);
+        $account = Authorization::requireAccount($request);
 
         $id = (string) ($params['id'] ?? $this->extractId($request->path()) ?? '');
         if ($id === '') {
@@ -101,8 +110,12 @@ final class RecommendationController
             );
         }
 
+        $feedbacks = $this->service->getFeedbackForRecommendations([$id], $account->id());
+        $arr = $recommendation->toArray();
+        $arr['user_feedback'] = isset($feedbacks[$id]) ? $feedbacks[$id]->toArray() : null;
+
         return Response::success([
-            'recommendation' => $recommendation->toArray(),
+            'recommendation' => $arr,
         ]);
     }
 
@@ -113,12 +126,19 @@ final class RecommendationController
     {
         $householdId = $this->requireHouseholdId($request);
         $this->assertNoCrossHouseholdClaim($request, $householdId);
+        $account = Authorization::requireAccount($request);
 
         $activeRecommendations = $this->service->generate($householdId, forceFresh: true);
+        $ids = array_map(static fn (Recommendation $r): string => $r->id(), $activeRecommendations);
+        $feedbacks = $this->service->getFeedbackForRecommendations($ids, $account->id());
 
         return Response::success([
             'recommendations' => array_map(
-                static fn (Recommendation $r): array => $r->toArray(),
+                static function (Recommendation $r) use ($feedbacks): array {
+                    $arr = $r->toArray();
+                    $arr['user_feedback'] = isset($feedbacks[$r->id()]) ? $feedbacks[$r->id()]->toArray() : null;
+                    return $arr;
+                },
                 $activeRecommendations
             ),
             'count' => count($activeRecommendations),
@@ -156,9 +176,37 @@ final class RecommendationController
         ]);
     }
 
+    /**
+     * POST /api/v1/recommendations/{id}/feedback
+     */
+    public function submitFeedback(Request $request, array $params = []): Response
+    {
+        $householdId = $this->requireHouseholdId($request);
+        $this->assertNoCrossHouseholdClaim($request, $householdId);
+        $account = Authorization::requireAccount($request);
+
+        $id = (string) ($params['id'] ?? $this->extractId($request->path()) ?? '');
+        if ($id === '') {
+            throw new AppException('VALIDATION_ERROR', 'Recommendation ID is required.', 422);
+        }
+
+        $body = $request->body();
+        if (!is_array($body)) {
+            throw new AppException('VALIDATION_ERROR', 'Invalid JSON payload.', 422);
+        }
+
+        $feedback = $this->service->submitFeedback($householdId, $id, $account->id(), $body);
+
+        return Response::success([
+            'feedback' => $feedback->toArray(),
+            'recommendation_id' => $id,
+            'submitted' => true,
+        ]);
+    }
+
     private function extractId(string $path): ?string
     {
-        if (preg_match('#^/api/v1/recommendations/([^/]+)(?:/dismiss)?$#', $path, $matches) === 1) {
+        if (preg_match('#^/api/v1/recommendations/([^/]+)(?:/(?:dismiss|feedback))?$#', $path, $matches) === 1) {
             return $matches[1];
         }
 

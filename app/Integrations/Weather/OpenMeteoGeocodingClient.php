@@ -104,11 +104,21 @@ final class OpenMeteoGeocodingClient
             return $fileCacheResult;
         }
 
-        // Extract primary city query and region hints
-        [$searchQuery, $regionHints] = $this->parseLocationQuery($cleaned);
+        // Extract candidate city queries and region hints
+        [$candidates, $regionHints] = $this->parseLocationQuery($cleaned);
 
         try {
-            $results = $this->fetchGeocodingResults($searchQuery);
+            $results = [];
+            $searchQuery = $candidates[0];
+            foreach ($candidates as $candidate) {
+                $candidateResults = $this->fetchGeocodingResults($candidate);
+                if (!empty($candidateResults)) {
+                    $results = $candidateResults;
+                    $searchQuery = $candidate;
+                    break;
+                }
+            }
+
             if ($results === []) {
                 $failure = [
                     'resolved' => false,
@@ -153,35 +163,52 @@ final class OpenMeteoGeocodingClient
     }
 
     /**
-     * Parse location string into a clean search query and region hints.
-     * e.g. "Kodumur, Kurnool, Andhra Pradesh" -> ["Kodumur", ["kurnool", "andhra pradesh", "ap"]]
+     * Parse location string into clean search candidate queries and region hints.
+     * e.g. "H.no 4/111, Kodumur, Kurnool, Andhra Pradesh" -> [["Kodumur", "Kurnool"], ["kurnool", "andhra pradesh"]]
      *
-     * @return array{0: string, 1: list<string>}
+     * @return array{0: list<string>, 1: list<string>}
      */
     private function parseLocationQuery(string $raw): array
     {
-        $parts = array_map('trim', explode(',', $raw));
-        $primary = $parts[0];
-
+        $normalizedRaw = str_replace(['/', '|', ';'], ',', $raw);
+        $rawParts = array_map('trim', explode(',', $normalizedRaw));
+        $candidates = [];
         $hints = [];
-        for ($i = 1; $i < count($parts); $i++) {
-            $hint = strtolower($parts[$i]);
-            if ($hint !== '') {
-                $hints[] = $hint;
-                // Add abbreviations / expansions
-                if ($hint === 'ap' || $hint === 'a.p.') {
-                    $hints[] = 'andhra pradesh';
-                } elseif ($hint === 'ts' || $hint === 't.s.') {
-                    $hints[] = 'telangana';
-                } elseif ($hint === 'ka') {
-                    $hints[] = 'karnataka';
-                } elseif ($hint === 'tn') {
-                    $hints[] = 'tamil nadu';
-                }
+
+        foreach ($rawParts as $part) {
+            if ($part === '') {
+                continue;
+            }
+
+            // Clean parentheses & postal pin codes
+            $cleanPart = trim((string) preg_replace('/\s*\([^)]*\)/', '', $part));
+            $cleanPart = trim((string) preg_replace('/\b\d{6}\b/', '', $cleanPart));
+
+            $isStreetNoise = (bool) preg_match('/^(h\.?\s*no|plot|door|d\.?\s*no|near|flat|shop|bldg|building|road|street|opp|opposite)\b/i', $cleanPart)
+                || preg_match('/^\d+[\/\-]/', $cleanPart);
+
+            if ($cleanPart !== '' && !$isStreetNoise) {
+                $candidates[] = $cleanPart;
+            }
+
+            $hint = strtolower($cleanPart !== '' ? $cleanPart : $part);
+            $hints[] = $hint;
+            if ($hint === 'ap' || $hint === 'a.p.') {
+                $hints[] = 'andhra pradesh';
+            } elseif ($hint === 'ts' || $hint === 't.s.') {
+                $hints[] = 'telangana';
+            } elseif ($hint === 'ka') {
+                $hints[] = 'karnataka';
+            } elseif ($hint === 'tn') {
+                $hints[] = 'tamil nadu';
             }
         }
 
-        return [$primary, $hints];
+        if (empty($candidates)) {
+            $candidates[] = $rawParts[0];
+        }
+
+        return [$candidates, array_values(array_unique($hints))];
     }
 
     /**

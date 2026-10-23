@@ -26,6 +26,7 @@ final class RecommendationEvidence
      * @param list<array<string, mixed>> $insights
      * @param list<string> $limitations
      * @param list<string> $provenance
+     * @param array<string, mixed>|null $weather
      */
     public function __construct(
         public readonly ?array $solarForecast = null,
@@ -36,7 +37,8 @@ final class RecommendationEvidence
         public readonly array $limitations = [],
         public readonly array $provenance = [],
         public readonly ?string $quality = null,
-        public readonly ?string $dataNature = null
+        public readonly ?string $dataNature = null,
+        public readonly ?array $weather = null
     ) {
     }
 
@@ -50,6 +52,7 @@ final class RecommendationEvidence
             'consumption_forecast' => $this->consumptionForecast,
             'energy_balance' => $this->energyBalance,
             'cost' => $this->cost,
+            'weather' => $this->weather,
             'insights' => !empty($this->insights) ? $this->insights : null,
             'limitations' => !empty($this->limitations) ? $this->limitations : null,
             'provenance' => $this->provenance,
@@ -70,7 +73,10 @@ final class RecommendationEvidence
             cost: isset($data['cost']) && is_array($data['cost']) ? $data['cost'] : null,
             insights: isset($data['insights']) && is_array($data['insights']) ? $data['insights'] : [],
             limitations: isset($data['limitations']) && is_array($data['limitations']) ? $data['limitations'] : [],
-            provenance: isset($data['provenance']) && is_array($data['provenance']) ? $data['provenance'] : []
+            provenance: isset($data['provenance']) && is_array($data['provenance']) ? $data['provenance'] : [],
+            quality: $data['quality'] ?? null,
+            dataNature: $data['data_nature'] ?? null,
+            weather: isset($data['weather']) && is_array($data['weather']) ? $data['weather'] : null
         );
     }
 }

@@ -307,13 +307,19 @@ final class AccountService
     {
         $this->sessionsService->revoke($session, 'LOGOUT');
 
-        $this->events->record(
-            SecurityEventRepository::LOGOUT_SUCCEEDED,
-            null,
-            (string) $session['account_id'],
-            null,
-            null
-        );
+        $accountId = isset($session['account_id']) && is_string($session['account_id']) && trim($session['account_id']) !== ''
+            ? trim($session['account_id'])
+            : null;
+
+        if ($accountId !== null) {
+            $this->events->record(
+                SecurityEventRepository::LOGOUT_SUCCEEDED,
+                null,
+                $accountId,
+                null,
+                null
+            );
+        }
     }
 
     /**

@@ -74,7 +74,7 @@ describe('F8 — AssistantDrawer Component', () => {
         expect(onSendMessage).toHaveBeenCalledWith('How accurate is my forecast?')
     })
 
-    it('renders conversation messages with metadata badges and limitations', () => {
+    it('renders conversation messages with friendly provenance and retains limitations', () => {
         const messages = [
             {
                 id: '1',
@@ -102,10 +102,95 @@ describe('F8 — AssistantDrawer Component', () => {
         expect(
             screen.getByText('Your day-ahead forecast shows 16.292 kWh solar and 2.581 kWh consumption.')
         ).toBeInTheDocument()
-        expect(screen.getByText('PREDICTED')).toBeInTheDocument()
-        expect(screen.getByText('Confidence: MODERATE')).toBeInTheDocument()
-        expect(screen.getByText('gemini')).toBeInTheDocument()
+        // Household-friendly label instead of raw PREDICTED enum
+        expect(screen.getByText('Forecast projection')).toBeInTheDocument()
+        // Essential limitations remain visible under clear heading
+        expect(screen.getByText('Important Data Notes')).toBeInTheDocument()
         expect(screen.getByText('Solar telemetry delay of 12 minutes')).toBeInTheDocument()
+    })
+
+    it('hides internal provider metadata, fallback labels, and confidence badges from ordinary users', () => {
+        const messages = [
+            {
+                id: '1',
+                role: 'assistant',
+                content: 'Solar output is 4.1 kW.',
+                provider: 'OPENROUTER',
+                model: 'meta-llama/llama-3.3-70b',
+                dataNature: 'ACTUAL',
+                confidence: 'HIGH',
+                fallbackUsed: true,
+                limitations: [],
+                createdAt: new Date().toISOString(),
+            },
+        ]
+
+        renderDrawer({ messages })
+
+        // Internal technical artifacts must NOT appear in user UI
+        expect(screen.queryByText('OPENROUTER')).not.toBeInTheDocument()
+        expect(screen.queryByText(/meta-llama/i)).not.toBeInTheDocument()
+        expect(screen.queryByText(/^Confidence:/i)).not.toBeInTheDocument()
+        expect(screen.queryByText(/Fallback Provider/i)).not.toBeInTheDocument()
+        expect(screen.queryByText('ACTUAL')).not.toBeInTheDocument()
+
+        // Friendly label is displayed
+        expect(screen.getByText('Actual reading')).toBeInTheDocument()
+    })
+
+    it('distinguishes measured actual readings from predicted forecasts and simulated data', () => {
+        const messages = [
+            { id: '1', role: 'assistant', content: 'Actual msg', dataNature: 'ACTUAL' },
+            { id: '2', role: 'assistant', content: 'Predicted msg', dataNature: 'PREDICTED' },
+            { id: '3', role: 'assistant', content: 'Simulated msg', dataNature: 'SIMULATED' },
+            { id: '4', role: 'assistant', content: 'Stale msg', dataNature: 'STALE' },
+            { id: '5', role: 'assistant', content: 'Unavailable msg', dataNature: 'UNAVAILABLE' },
+        ]
+
+        renderDrawer({ messages })
+
+        expect(screen.getByText('Actual reading')).toBeInTheDocument()
+        expect(screen.getByText('Forecast projection')).toBeInTheDocument()
+        expect(screen.getByText('Simulated data')).toBeInTheDocument()
+        expect(screen.getByText('Data may be outdated')).toBeInTheDocument()
+        expect(screen.getByText('Not enough data to answer this yet')).toBeInTheDocument()
+    })
+
+    it('applies responsive drawer sizing classes targeting ~48-50% desktop width and 800px max', () => {
+        const { container } = renderDrawer({ isOpen: true })
+        const drawerCard = container.querySelector('.solarai-drawer-card')
+
+        expect(drawerCard).toBeInTheDocument()
+        // Responsive classes for mobile full-width and desktop ~48% width with 800px ceiling
+        expect(drawerCard.className).toContain('w-full')
+        expect(drawerCard.className).toContain('sm:w-[80vw]')
+        expect(drawerCard.className).toContain('md:w-[60vw]')
+        expect(drawerCard.className).toContain('lg:w-[48vw]')
+        expect(drawerCard.className).toContain('max-w-[800px]')
+    })
+
+    it('handles concise direct answers and longer explanatory answers cleanly without truncation', () => {
+        const messages = [
+            {
+                id: '1',
+                role: 'assistant',
+                content: 'Yes, your generation peaked at 3.8 kW today.',
+                dataNature: 'ACTUAL',
+            },
+            {
+                id: '2',
+                role: 'assistant',
+                content:
+                    '### Generation Summary\n- Peak: **3.8 kW** at 12:45 PM\n- Total: **18.4 kWh**\n\nConditions were predominantly clear.',
+                dataNature: 'ACTUAL',
+            },
+        ]
+
+        renderDrawer({ messages })
+
+        expect(screen.getByText('Yes, your generation peaked at 3.8 kW today.')).toBeInTheDocument()
+        expect(screen.getByText('Generation Summary')).toBeInTheDocument()
+        expect(screen.getByText(/Conditions were predominantly clear/i)).toBeInTheDocument()
     })
 
     it('renders loading state with animated indicator', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BillsWorkspace } from './BillsWorkspace'
 
@@ -557,7 +557,7 @@ describe('BillsWorkspace lifecycle states', () => {
 
             // Statement navigator should render period labels (Month + Year)
             expect(screen.getByRole('navigation', { name: /billing statement navigation/i }) ||
-                   screen.getByLabelText(/billing statement navigation/i)).toBeInTheDocument()
+                screen.getByLabelText(/billing statement navigation/i)).toBeInTheDocument()
             expect(screen.getAllByText('Sep 2026').length).toBeGreaterThanOrEqual(1)
             expect(screen.getAllByText('Aug 2026').length).toBeGreaterThanOrEqual(1)
 
@@ -803,8 +803,8 @@ describe('BillsWorkspace lifecycle states', () => {
                 },
             })
 
-            // Card 2: Labeled as "Solar units credited"
-            expect(screen.getByText('Solar units credited')).toBeInTheDocument()
+            // Card 2: Labeled as "Solar export"
+            expect(screen.getAllByText('Solar export').length).toBeGreaterThanOrEqual(1)
             expect(screen.getAllByText('402 kWh').length).toBeGreaterThanOrEqual(1)
 
             // Card 3: Energy balance card
@@ -861,6 +861,141 @@ describe('BillsWorkspace lifecycle states', () => {
             expect(screen.getAllByText('Energy balance').length).toBeGreaterThanOrEqual(1)
             expect(screen.getByText('0 kWh balanced')).toBeInTheDocument()
             expect(screen.getByText('Solar units matched household grid consumption')).toBeInTheDocument()
+        })
+
+        it('18. October regression: separate unmapped solar balance discloses exact unmapped text', () => {
+            const values = {
+                ...extractedValues(),
+                consumption_kwh: '203.000',
+                solar_units_kwh: '303.000',
+                net_units_kwh: '-100.000',
+                bill_amount: '149.00',
+                energy_charges: '0.00',
+            }
+
+            renderWorkspace({
+                bills: [{ bill_id: 'oct-2026', status: 'EXTRACTED', billing_period_start: '2026-09-01', billing_period_end: '2026-10-01' }],
+                detail: {
+                    ...detailFor('EXTRACTED', values, { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'oct-2026',
+                    source_metadata: {
+                        solar_export_units_kwh: 303.0,
+                        other_solar_balance_or_adjustment_kwh: 177.0,
+                        other_solar_balance_status: 'AMBIGUOUS_UNMAPPED',
+                    },
+                },
+            })
+
+            expect(screen.getByText(/Separate solar balance:/i)).toBeInTheDocument()
+            expect(screen.getByText(/Preserved from the bill as an unmapped source value; not used in current-period solar export or net-energy calculations/i)).toBeInTheDocument()
+            expect(screen.getByText('100 kWh surplus')).toBeInTheDocument()
+        })
+
+        it('19. selecting a historical statement invokes onSelectBill and triggers scroll to review section', async () => {
+            const user = userEvent.setup()
+            const onSelectBill = vi.fn()
+            const scrollIntoViewMock = vi.fn()
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+            const bills = [
+                {
+                    bill_id: 'bill-1',
+                    status: 'VERIFIED',
+                    billing_period_start: '2026-08-01',
+                    billing_period_end: '2026-09-01',
+                    consumption_kwh: '145.000',
+                    solar_units_kwh: '322.000',
+                    net_units_kwh: '-177.000',
+                    bill_amount: '180.00',
+                    verified_at: '2026-09-10',
+                },
+                {
+                    bill_id: 'bill-2',
+                    status: 'VERIFIED',
+                    billing_period_start: '2026-07-01',
+                    billing_period_end: '2026-08-01',
+                    consumption_kwh: '200.000',
+                    solar_units_kwh: null,
+                    net_units_kwh: '200.000',
+                    bill_amount: '250.00',
+                    verified_at: '2026-08-10',
+                },
+            ]
+
+            renderWorkspace({
+                bills,
+                detail: {
+                    ...detailFor('VERIFIED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'bill-1',
+                },
+                onSelectBill,
+            })
+
+            const historyRows = screen.getAllByRole('button', { name: /verified/i })
+            await user.click(historyRows[1])
+
+            expect(onSelectBill).toHaveBeenCalledWith('bill-2')
+            expect(scrollIntoViewMock).toHaveBeenCalled()
+        })
+
+        it('20. nested button clicks inside history do not accidentally trigger row selection', async () => {
+            const user = userEvent.setup()
+            const onSelectBill = vi.fn()
+
+            const bills = Array.from({ length: 10 }, (_, i) => ({
+                bill_id: `bill-${i + 1}`,
+                status: 'VERIFIED',
+                billing_period_start: `2026-0${Math.min(9, i + 1)}-01`,
+                billing_period_end: `2026-0${Math.min(9, i + 2)}-01`,
+                consumption_kwh: '150.000',
+                solar_units_kwh: '100.000',
+                net_units_kwh: '50.000',
+                bill_amount: '200.00',
+            }))
+
+            renderWorkspace({
+                bills,
+                detail: {
+                    ...detailFor('VERIFIED', extractedValues(), { validations: CLEAN_VALIDATIONS }),
+                    bill_id: 'bill-1',
+                },
+                onSelectBill,
+            })
+
+            // Clicking the 'Show all' pagination toggle does not trigger onSelectBill
+            const showAllBtn = screen.getByRole('button', { name: /show all/i })
+            await user.click(showAllBtn)
+            expect(onSelectBill).not.toHaveBeenCalled()
+        })
+
+        it('21. extraction details renders bounded scroll container and compact validation checklist', async () => {
+            const user = userEvent.setup()
+
+            renderWorkspace({
+                bills: [{ bill_id: 'bill-1', status: 'EXTRACTED' }],
+                detail: detailFor('EXTRACTED', extractedValues(), {
+                    extraction: extraction(),
+                    validations: CLEAN_VALIDATIONS,
+                    provenance: AI_ALL,
+                }),
+            })
+
+            // Open extraction details disclosure
+            const disclosureBtn = screen.getByRole('button', { name: /extraction details/i })
+            await user.click(disclosureBtn)
+
+            // Extraction details has bounded scroll container with overflow-y-auto
+            await waitFor(() => expect(screen.getByText('Billing period start')).toBeInTheDocument())
+            const scrollContainer = screen.getByText('Billing period start').closest('.overflow-y-auto')
+            expect(scrollContainer).toBeInTheDocument()
+            expect(scrollContainer.className).toContain('overflow-y-auto')
+            expect(scrollContainer.className).toContain('max-h-')
+
+            // Compact validation checklist renders without redundant explanatory text
+            expect(screen.getByRole('heading', { name: /bill validation/i })).toBeInTheDocument()
+            expect(screen.getByText('Validation checks passed')).toBeInTheDocument()
+            expect(screen.queryByText(/cross-reading consistency checks before verification/i)).not.toBeInTheDocument()
+            expect(screen.queryByText(/consistent values still need your review — internal validation does not mean a bill is verified/i)).not.toBeInTheDocument()
         })
     })
 })

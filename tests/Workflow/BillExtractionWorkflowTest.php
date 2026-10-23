@@ -24,6 +24,9 @@ use App\Domain\Household\HouseholdService;
 use App\Repositories\BillRepository;
 use App\Repositories\BillTempDocumentRepository;
 use App\Security\AuthMiddleware;
+use App\Services\BillExtraction\BillDocumentExtractionProviderInterface;
+use App\Services\BillExtraction\BillExtractionFailure;
+use App\Services\BillExtraction\BillExtractionGateway;
 use App\Services\Files\LocalPrivateBillStorage;
 use App\Services\Mistral\MistralOcrClient;
 use App\Support\AppException;
@@ -205,6 +208,10 @@ final class BillExtractionWorkflowTest
     }
 
     /**
+     * Process via a Mistral OCR fake-queue (original helper — builds a
+     * gateway with only a fake Mistral provider so existing tests remain
+     * unchanged).
+     *
      * @param array<int, array{status:int, body:string}> $queue
      * @return array{0: array<string, mixed>, 1: \ArrayObject<int, mixed>}
      */
@@ -212,14 +219,36 @@ final class BillExtractionWorkflowTest
     {
         [$ocr, $calls] = self::fakeOcrClient($queue);
 
+        // Wrap the fake Mistral client in a MistralBillExtractionProvider adapter
+        // and inject into the gateway so the workflow test has the same seam.
+        $mistralProvider = new \App\Services\BillExtraction\MistralBillExtractionProvider($ocr);
+        $gateway = new BillExtractionGateway([$mistralProvider]);
+
         $service = new BillProcessingService(
             new BillService(),
             new BillTempDocumentRepository(),
             $fixtureCtx['storage'],
-            $ocr
+            $gateway
         );
 
         return [$service->process($fixtureCtx['account'], $fixtureCtx['bill']), $calls];
+    }
+
+    /**
+     * Process via an explicit gateway (for fallback/multi-provider tests).
+     *
+     * @return array<string, mixed>
+     */
+    private static function processViaGateway(array $fixtureCtx, BillExtractionGateway $gateway): array
+    {
+        $service = new BillProcessingService(
+            new BillService(),
+            new BillTempDocumentRepository(),
+            $fixtureCtx['storage'],
+            $gateway
+        );
+
+        return $service->process($fixtureCtx['account'], $fixtureCtx['bill']);
     }
 
     private static function billRow(string $billId): ?array
@@ -1046,6 +1075,252 @@ final class BillExtractionWorkflowTest
                 Assert::same(null, $result['import_summary'], 'Mistral path must not emit import_summary');
             }),
 
+            // ================================================================
+            // GATEWAY FALLBACK REGRESSION TESTS
+            // These exercise the full BillProcessingService → BillExtractionGateway
+            // pipeline with injected fake providers. No real network calls.
+            // ================================================================
+
+            TestResult::check('GATEWAY FALLBACK: Mistral 429 → Gemini succeeds → bill EXTRACTED', function (): void {
+                $ctx = self::processingBill('gw-fallback');
+
+                // Build a fake annotation shaped like a valid bill.
+                $annotation = self::liveShape();
+
+                // Provider 1: fake Mistral that returns 429 (transient).
+                $mistralCalled = 0;
+                $mistralProvider = new class($mistralCalled) implements BillDocumentExtractionProviderInterface {
+                    public function __construct(private int &$c) {}
+                    public function isConfigured(): bool { return true; }
+                    public function providerName(): string { return 'mistral'; }
+                    public function modelId(): ?string { return 'mistral-ocr-test'; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        $this->c++;
+                        throw BillExtractionFailure::transient('mistral', 'Rate limit (HTTP 429).', 429);
+                    }
+                };
+
+                // Provider 2: fake Gemini that succeeds.
+                $geminiCalled = 0;
+                $ann = $annotation;
+                $geminiProvider = new class($geminiCalled, $ann) implements BillDocumentExtractionProviderInterface {
+                    public function __construct(private int &$c, private array $annotation) {}
+                    public function isConfigured(): bool { return true; }
+                    public function providerName(): string { return 'gemini'; }
+                    public function modelId(): ?string { return 'gemini-1.5-flash'; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        $this->c++;
+                        return ['annotation' => $this->annotation, 'model' => 'gemini-1.5-flash', 'provider' => 'gemini'];
+                    }
+                };
+
+                $gateway = new BillExtractionGateway([$mistralProvider, $geminiProvider]);
+                $result  = self::processViaGateway($ctx, $gateway);
+
+                Assert::same(1, $mistralCalled, 'Mistral attempted once');
+                Assert::same(1, $geminiCalled, 'Gemini attempted once as fallback');
+
+                // Bill should have been extracted (EXTRACTED or UNCERTAIN depending on annotation quality).
+                $row = self::billRow($ctx['bill']);
+                Assert::true(
+                    in_array($row['status'], [BillStatus::EXTRACTED, BillStatus::UNCERTAIN], true),
+                    'Bill status must be EXTRACTED or UNCERTAIN after fallback success'
+                );
+
+                // Provenance must show gemini.
+                $draft = self::draftRow($ctx['bill']);
+                Assert::same('gemini', $draft['extraction_provider'], 'Draft provider must be gemini');
+            }),
+
+            TestResult::check('GATEWAY FALLBACK: Mistral success → Gemini NOT called', function (): void {
+                $ctx = self::processingBill('gw-primary');
+                $annotation = self::liveShape();
+
+                $geminiCalled = 0;
+                $ann = $annotation;
+                $mistralProvider = new class($ann) implements BillDocumentExtractionProviderInterface {
+                    public function __construct(private array $a) {}
+                    public function isConfigured(): bool { return true; }
+                    public function providerName(): string { return 'mistral'; }
+                    public function modelId(): ?string { return 'mistral-ocr-test'; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        return ['annotation' => $this->a, 'model' => 'mistral-ocr-test', 'provider' => 'mistral'];
+                    }
+                };
+                $geminiProvider = new class($geminiCalled) implements BillDocumentExtractionProviderInterface {
+                    public function __construct(private int &$c) {}
+                    public function isConfigured(): bool { return true; }
+                    public function providerName(): string { return 'gemini'; }
+                    public function modelId(): ?string { return null; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        $this->c++;
+                        return ['annotation' => [], 'model' => null, 'provider' => 'gemini'];
+                    }
+                };
+
+                $gateway = new BillExtractionGateway([$mistralProvider, $geminiProvider]);
+                self::processViaGateway($ctx, $gateway);
+
+                Assert::same(0, $geminiCalled, 'Gemini must NOT be called when Mistral succeeds');
+
+                $draft = self::draftRow($ctx['bill']);
+                Assert::same('mistral', $draft['extraction_provider'], 'Draft must show mistral when it succeeded');
+            }),
+
+            TestResult::check('GATEWAY FALLBACK: all providers fail → PROCESSING_FAILED, honest error', function (): void {
+                $ctx = self::processingBill('gw-allfail');
+
+                $p1 = new class implements BillDocumentExtractionProviderInterface {
+                    public function isConfigured(): bool { return true; }
+                    public function providerName(): string { return 'mistral'; }
+                    public function modelId(): ?string { return 'mistral-ocr-test'; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        throw BillExtractionFailure::transient('mistral', 'Rate limit (429)', 429);
+                    }
+                };
+                $p2 = new class implements BillDocumentExtractionProviderInterface {
+                    public function isConfigured(): bool { return true; }
+                    public function providerName(): string { return 'gemini'; }
+                    public function modelId(): ?string { return null; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        throw BillExtractionFailure::transient('gemini', 'Timeout', null);
+                    }
+                };
+
+                $gateway = new BillExtractionGateway([$p1, $p2]);
+                $threw = false;
+                try {
+                    self::processViaGateway($ctx, $gateway);
+                } catch (AppException $e) {
+                    $threw = true;
+                    Assert::same('EXTRACTION_FAILED', $e->errorCode(), 'AppException code must be EXTRACTION_FAILED');
+                }
+                Assert::true($threw, 'Expected AppException when all providers fail');
+
+                $row = self::billRow($ctx['bill']);
+                Assert::same(BillStatus::PROCESSING_FAILED, $row['status'], 'Bill must be PROCESSING_FAILED when all providers exhaust');
+            }),
+
+            TestResult::check('GATEWAY FALLBACK: Gemini unconfigured → only Mistral used', function (): void {
+                $ctx = self::processingBill('gw-gemini-unconfigured');
+                $annotation = self::liveShape();
+                $ann = $annotation;
+
+                $geminiCalled = 0;
+                $mistralProvider = new class($ann) implements BillDocumentExtractionProviderInterface {
+                    public function __construct(private array $a) {}
+                    public function isConfigured(): bool { return true; }
+                    public function providerName(): string { return 'mistral'; }
+                    public function modelId(): ?string { return 'mistral-ocr-test'; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        return ['annotation' => $this->a, 'model' => 'mistral-ocr-test', 'provider' => 'mistral'];
+                    }
+                };
+                $geminiUnconfigured = new class($geminiCalled) implements BillDocumentExtractionProviderInterface {
+                    public function __construct(private int &$c) {}
+                    public function isConfigured(): bool { return false; }  // NOT configured
+                    public function providerName(): string { return 'gemini'; }
+                    public function modelId(): ?string { return null; }
+                    public function supportedMimeTypes(): array { return ['application/pdf','image/jpeg','image/png']; }
+                    public function extract(string $fp, string $m, array $s, string $pr): array {
+                        $this->c++;
+                        return ['annotation' => [], 'model' => null, 'provider' => 'gemini'];
+                    }
+                };
+
+                $gateway = new BillExtractionGateway([$mistralProvider, $geminiUnconfigured]);
+                self::processViaGateway($ctx, $gateway);
+
+                Assert::same(0, $geminiCalled, 'Unconfigured Gemini must never be called');
+                $draft = self::draftRow($ctx['bill']);
+                Assert::same('mistral', $draft['extraction_provider']);
+            }),
+
+            TestResult::check('October real bill data integrity: solar export 303, net -100, 177 preserved as unmapped, no false conflicts', function (): void {
+                $ctx = self::processingBill('oct', 'png', '8623310010998');
+
+                // Genuine October extracted readings:
+                // Meter: 1460 -> 1663 (consumption = 203)
+                // Solar: 2200 -> 2503 (solar delta = 303, solar export = 303)
+                // Net: consumption(203) - solar_export(303) = -100
+                // Separate bottom-of-bill figure: 177 (stored in other_solar_balance_or_adjustment_kwh)
+                $octoberAnnotation = self::liveShape([
+                    'billing_period' => ['start' => '2026-09-01', 'end' => '2026-10-01', 'confidence' => 0.95],
+                    'meter_evidence' => ['previous_meter_reading' => 1460, 'present_meter_reading' => 1663, 'confidence' => 0.99],
+                    'consumption' => ['consumption_kwh' => 203, 'confidence' => 0.98],
+                    'solar' => [
+                        'previous_solar_reading' => 2200,
+                        'present_solar_reading' => 2503,
+                        'solar_units_kwh' => 177, // candidate extracted from bottom of bill
+                        'net_units_kwh' => -100,
+                        'confidence' => 0.97,
+                    ],
+                    'cost' => [
+                        'bill_amount' => 149, 'arrears' => 0, 'total_due' => 149, 'energy_charges' => 0,
+                        'fixed_charges' => 30, 'customer_service_charges' => 25, 'other_charges' => 45,
+                        'taxes_adjustments' => 49, 'confidence' => 0.9,
+                    ],
+                    'context' => [
+                        'utility_provider' => 'APSPDCL', 'tariff_category' => 'LT1 SUB CAT:0 PH :1',
+                        'meter_type' => 'SMART SOLAR', 'contracted_load' => '3',
+                        'service_number' => '8623310010998', 'confidence' => 0.95,
+                    ],
+                ]);
+
+                [$result] = self::process($ctx, [['status' => 200, 'body' => self::ocrBody($octoberAnnotation)]]);
+
+                // Status must be EXTRACTED (clean, ready for review/verification; not forced to NEEDS_REVIEW)
+                Assert::same(BillStatus::EXTRACTED, $result['bill']->status());
+
+                // Assessment is VALID (clean deterministic validation)
+                Assert::same(DocumentAssessment::VALID, $result['assessment']);
+
+                // Bill row has authoritative solar export 303, consumption 203, net -100
+                $bill = self::billRow($ctx['bill']);
+                Assert::same('203.000', $bill['consumption_kwh']);
+                Assert::same('303.000', $bill['solar_units_kwh']);
+                Assert::same('-100.000', $bill['net_units_kwh']);
+                Assert::same('149.00', $bill['bill_amount']);
+
+                // Metadata preserves unmapped 177 and charge reconciliation
+                $meta = json_decode((string) $bill['source_metadata_json'], true);
+                Assert::same('177.000', $meta['other_solar_balance_or_adjustment_kwh']);
+                Assert::same('AMBIGUOUS_UNMAPPED', $meta['other_solar_balance_status']);
+                Assert::same('303.000', $meta['solar_meter_delta_kwh']);
+                Assert::same('303.000', $meta['solar_export_units_kwh']);
+                Assert::true($meta['charge_breakdown']['reconciled']);
+
+                // Draft keeps authoritative values
+                $draft = self::draftRow($ctx['bill']);
+                Assert::same('VALID', $draft['document_assessment']);
+                Assert::same('303.000', $draft['solar_units_kwh']);
+                Assert::same('-100.000', $draft['net_units_kwh']);
+
+                // Validations: METER PASS, SOLAR PASS, NET PASS
+                $validations = self::validationRows($ctx['bill']);
+                Assert::same(ValidationStatus::PASS, $validations[ValidationRule::METER_CONSUMPTION]['status']);
+                Assert::same('203.000', $validations[ValidationRule::METER_CONSUMPTION]['expected']);
+                Assert::same('203.000', $validations[ValidationRule::METER_CONSUMPTION]['extracted']);
+
+                Assert::same(ValidationStatus::PASS, $validations[ValidationRule::SOLAR_PRODUCTION]['status']);
+                Assert::same('303.000', $validations[ValidationRule::SOLAR_PRODUCTION]['expected']);
+                Assert::same('303.000', $validations[ValidationRule::SOLAR_PRODUCTION]['extracted']);
+
+                Assert::same(ValidationStatus::PASS, $validations[ValidationRule::NET_UNITS]['status']);
+                Assert::same('-100.000', $validations[ValidationRule::NET_UNITS]['expected']);
+                Assert::same('-100.000', $validations[ValidationRule::NET_UNITS]['extracted']);
+
+                // Quality flags: ZERO false conflict flags
+                $flags = self::flagCodes($ctx['bill']);
+                Assert::same([], $flags);
+            }),
         ];
 
 

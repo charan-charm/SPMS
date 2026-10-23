@@ -22,6 +22,8 @@ use App\Repositories\AccountRepository;
 use App\Repositories\BillRepository;
 use App\Repositories\BillTempDocumentRepository;
 use App\Repositories\HouseholdRepository;
+use App\Services\BillExtraction\BillExtractionGateway;
+use App\Services\BillExtraction\MistralBillExtractionProvider;
 use App\Services\Files\LocalPrivateBillStorage;
 use App\Services\Mistral\MistralOcrClient;
 use App\Support\AppException;
@@ -94,6 +96,16 @@ final class BillProcessingFailureAndRetryRegressionTest
         };
 
         return [new MistralOcrClient('mk_FAKE_REGRESSION', 'mistral-ocr-test', $handler), $calls];
+    }
+
+    /**
+     * Wrap a MistralOcrClient in the extraction gateway abstraction
+     * (Mistral-only; no fallback provider — keeps existing regression
+     * semantics identical to before the gateway was introduced).
+     */
+    private static function makeGateway(MistralOcrClient $ocr): BillExtractionGateway
+    {
+        return new BillExtractionGateway([new MistralBillExtractionProvider($ocr)]);
     }
 
     private static function ocrBody(array $annotation): string
@@ -186,7 +198,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocr] = self::fakeOcrClient([
                 ['status' => 200, 'body' => self::ocrBody(self::validBillAnnotation())],
             ]);
-            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocr);
+            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocr));
 
             $result = $service->process($ctx['account'], $ctx['bill'], self::now());
             Assert::same(BillStatus::EXTRACTED, $result['bill']->status());
@@ -207,7 +219,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocr] = self::fakeOcrClient([
                 ['status' => 429, 'body' => '{"object":"error","message":"Rate limit exceeded","type":"rate_limited","code":"1300"}'],
             ]);
-            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocr);
+            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocr));
 
             try {
                 $service->process($ctx['account'], $ctx['bill'], self::now());
@@ -215,8 +227,9 @@ final class BillProcessingFailureAndRetryRegressionTest
             } catch (AppException $e) {
                 Assert::same('EXTRACTION_FAILED', $e->errorCode());
                 Assert::same(502, $e->httpStatus());
-                Assert::same('rate_limit', $e->context()['category'] ?? null);
-                Assert::same('EXTRACTION_RATE_LIMITED', $e->context()['reason'] ?? null);
+                // Gateway maps Mistral 429 → BillExtractionFailure::TRANSIENT, then all-failed → gateway throws
+                // BillProcessingService catches it and maps TRANSIENT → default → EXTRACTION_PROVIDER_ERROR.
+                Assert::same('EXTRACTION_PROVIDER_ERROR', $e->context()['reason'] ?? null);
             }
 
             $repo = new BillRepository();
@@ -231,14 +244,15 @@ final class BillProcessingFailureAndRetryRegressionTest
             $broken = new MistralOcrClient('mk_FAKE', 'm', static function (): array {
                 throw new \RuntimeException('Operation timed out after 30000 milliseconds');
             });
-            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $broken);
+            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($broken));
 
             try {
                 $service->process($ctx['account'], $ctx['bill'], self::now());
                 Assert::true(false, 'expected EXTRACTION_FAILED');
             } catch (AppException $e) {
                 Assert::same('EXTRACTION_FAILED', $e->errorCode());
-                Assert::same('EXTRACTION_TIMEOUT', $e->context()['reason'] ?? null);
+                // Network/transport error → BillExtractionFailure::TRANSIENT → EXTRACTION_PROVIDER_ERROR
+                Assert::same('EXTRACTION_PROVIDER_ERROR', $e->context()['reason'] ?? null);
             }
 
             $repo = new BillRepository();
@@ -252,7 +266,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocr] = self::fakeOcrClient([
                 ['status' => 200, 'body' => '{"pages":[],"document_annotation":"{not valid json"'],
             ]);
-            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocr);
+            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocr));
 
             try {
                 $service->process($ctx['account'], $ctx['bill'], self::now());
@@ -272,7 +286,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocr] = self::fakeOcrClient([
                 ['status' => 500, 'body' => '{"message":"provider error"}'],
             ]);
-            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocr);
+            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocr));
 
             try {
                 $service->process($ctx['account'], $ctx['bill'], self::now());
@@ -361,7 +375,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocrFail] = self::fakeOcrClient([
                 ['status' => 500, 'body' => '{"message":"transient error"}'],
             ]);
-            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocrFail);
+            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocrFail));
 
             try {
                 $service->process($ctx['account'], $ctx['bill'], self::now());
@@ -375,7 +389,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocrFail2] = self::fakeOcrClient([
                 ['status' => 500, 'body' => '{"message":"still down"}'],
             ]);
-            $service2 = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocrFail2);
+            $service2 = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocrFail2));
             try {
                 $service2->process($ctx['account'], $ctx['bill'], self::now());
             } catch (AppException) {
@@ -392,7 +406,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocrFail] = self::fakeOcrClient([
                 ['status' => 500, 'body' => '{"message":"transient error"}'],
             ]);
-            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocrFail);
+            $service = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocrFail));
 
             try {
                 $service->process($ctx['account'], $ctx['bill'], self::now());
@@ -407,7 +421,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             [$ocrSuccess] = self::fakeOcrClient([
                 ['status' => 200, 'body' => self::ocrBody(self::validBillAnnotation())],
             ]);
-            $serviceSuccess = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], $ocrSuccess);
+            $serviceSuccess = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $ctx['storage'], self::makeGateway($ocrSuccess));
 
             $result = $serviceSuccess->process($ctx['account'], $ctx['bill'], self::now());
             Assert::same(BillStatus::EXTRACTED, $result['bill']->status());
@@ -483,7 +497,7 @@ final class BillProcessingFailureAndRetryRegressionTest
             self::trackBill($result['bill']->id());
 
             [$ocr] = self::fakeOcrClient([]);
-            $procService = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $storage, $ocr);
+            $procService = new BillProcessingService(new BillService(), new BillTempDocumentRepository(), $storage, self::makeGateway($ocr));
 
             $procResult = $procService->process($fixture['account'], $result['bill']->id(), self::now());
             Assert::true(($procResult['import_summary'] ?? null) !== null);

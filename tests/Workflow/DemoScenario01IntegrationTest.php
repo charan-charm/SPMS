@@ -242,8 +242,8 @@ final class DemoScenario01IntegrationTest
                 Assert::true(in_array(InsightTaxonomy::TYPE_DATA_LIMITATION, $types, true), 'Must produce DATA_LIMITATION');
 
                 foreach ($insights as $insight) {
-                    if ($insight['type'] === InsightTaxonomy::TYPE_DATA_LIMITATION) {
-                        Assert::same(null, $insight['data_nature'], 'DATA_LIMITATION insight has null data_nature (no analytical value)');
+                    if ($insight['type'] === InsightTaxonomy::TYPE_DATA_LIMITATION || $insight['type'] === InsightTaxonomy::TYPE_WEATHER_DATA_UNAVAILABLE) {
+                        Assert::same(null, $insight['data_nature'], 'Limitation / unavailable insight has null data_nature (no analytical value)');
                     } else {
                         Assert::same('SIMULATED', $insight['data_nature'], 'Analytical insights must preserve SIMULATED nature');
                     }
@@ -280,7 +280,7 @@ final class DemoScenario01IntegrationTest
                 }
 
                 Assert::true($shiftRec !== null, 'Shift recommendation must exist');
-                Assert::same('Shift Flexible Electricity to Solar Window', $shiftRec['title']);
+                Assert::same('Use flexible appliances during solar hours', $shiftRec['title']);
                 Assert::true(str_contains($shiftRec['summary'], 'Potential solar-window opportunity'), 'Summary must use potential opportunity wording');
             }),
 

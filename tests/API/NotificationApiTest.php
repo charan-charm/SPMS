@@ -7,8 +7,19 @@ namespace Tests\API;
 use App\Controllers\NotificationController;
 use App\Domain\Notification\Notification;
 use App\Domain\Notification\NotificationService;
+use App\Domain\Recommendation\Recommendation;
+use App\Domain\Recommendation\RecommendationCandidate;
+use App\Domain\Recommendation\RecommendationConfidence;
+use App\Domain\Recommendation\RecommendationEngine;
+use App\Domain\Recommendation\RecommendationEvidence;
+use App\Domain\Recommendation\RecommendationImpact;
+use App\Domain\Recommendation\RecommendationService;
+use App\Domain\Recommendation\RecommendationTaxonomy;
+use App\Domain\Recommendation\RecommendationThresholds;
 use App\Repositories\NotificationRepository;
+use App\Repositories\RecommendationRepository;
 use App\Support\AppException;
+
 use App\Support\Database;
 use App\Support\Request;
 use App\Support\RequestId;
@@ -262,6 +273,151 @@ final class NotificationApiTest
                     Assert::same('NOT_FOUND', $e->errorCode());
                 }
             }),
+
+            TestResult::check('Recommendation notification deduplication: Scenarios A, B, C, D, E', function (): void {
+                RequestId::set(RequestId::new());
+                $h1 = AuthTesting::householdFixture();
+                $h2 = AuthTesting::householdFixture();
+                $h1Id = $h1['household_id'];
+                $h2Id = $h2['household_id'];
+
+                $now = new DateTimeImmutable('2026-10-09 10:00:00', new DateTimeZone('UTC'));
+                $tomorrow = new DateTimeImmutable('2026-10-10 10:00:00', new DateTimeZone('UTC'));
+
+                $makeCandidate = static function (
+                    string $type,
+                    string $priority,
+                    string $title,
+                    string $action,
+                    ?string $periodStart,
+                    DateTimeImmutable $refTime
+                ): RecommendationCandidate {
+                    return new RecommendationCandidate(
+                        type: $type,
+                        priority: $priority,
+                        title: $title,
+                        summary: 'Summary for ' . $title,
+                        action: $action,
+                        reason: 'Reason for ' . $title,
+                        timingWindow: '10:00-14:00',
+                        impact: RecommendationImpact::informational('Impact notice'),
+                        evidence: new RecommendationEvidence(),
+                        confidence: RecommendationConfidence::CONFIDENCE_HIGH,
+                        quality: 'GOOD',
+                        dataNature: 'PREDICTED',
+                        provenance: ['Test'],
+                        limitations: [],
+                        relevantPeriodStart: $periodStart,
+                        relevantPeriodEnd: $periodStart,
+                        validFrom: $refTime,
+                        validUntil: $refTime->modify('+24 hours')
+                    );
+                };
+
+                $cShiftToday = $makeCandidate(
+                    RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW,
+                    Recommendation::PRIORITY_HIGH,
+                    'Shift Flexible Electricity to Solar Window',
+                    'Run washing machine during midday peak solar.',
+                    '2026-10-09T06:00:00Z',
+                    $now
+                );
+
+                $cShiftTomorrow = $makeCandidate(
+                    RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW,
+                    Recommendation::PRIORITY_HIGH,
+                    'Shift Flexible Electricity to Solar Window',
+                    'Run washing machine during midday peak solar.',
+                    '2026-10-10T06:00:00Z',
+                    $tomorrow
+                );
+
+                $cHighDemandToday = $makeCandidate(
+                    RecommendationTaxonomy::TYPE_HIGH_DEMAND_REDUCTION,
+                    Recommendation::PRIORITY_HIGH,
+                    'High Demand Reduction Notice',
+                    'Reduce heavy appliance usage to avoid peak tariff.',
+                    '2026-10-09T06:00:00Z',
+                    $now
+                );
+
+                $cLowPriority = $makeCandidate(
+                    RecommendationTaxonomy::TYPE_AVOID_DEFICIT_WINDOW,
+                    Recommendation::PRIORITY_LOW,
+                    'Low Priority Avoid Deficit',
+                    'Turn off idle lighting.',
+                    '2026-10-09T06:00:00Z',
+                    $now
+                );
+
+                $fakeEngine = new class extends RecommendationEngine {
+                    public array $candidatesToReturn = [];
+                    public function __construct() {
+                        parent::__construct(new RecommendationThresholds());
+                    }
+                    public function evaluate(
+                        array|string|null $forecastOrHouseholdId = null,
+                        \App\Domain\Recommendation\RecommendationEvidence|array|null $solarLatestOrEvidence = null,
+                        DateTimeImmutable|array $verifiedBillsOrNow = [],
+                        array $insights = [],
+                        ?DateTimeImmutable $now = null
+                    ): array {
+                        return $this->candidatesToReturn;
+                    }
+                };
+
+                $service = new RecommendationService(engine: $fakeEngine);
+                $notifRepo = new NotificationRepository();
+
+                // A. Same logical high-priority recommendation generated twice -> exactly one notification
+                $fakeEngine->candidatesToReturn = [$cShiftToday];
+                $service->generate($h1Id, $now);
+                $h1Notifs1 = $notifRepo->listForHousehold($h1Id);
+                Assert::same(1, count($h1Notifs1), 'Scenario A: first generation must create exactly 1 notification');
+
+                $service->generate($h1Id, $now);
+                $h1Notifs2 = $notifRepo->listForHousehold($h1Id);
+                Assert::same(1, count($h1Notifs2), 'Scenario A: second generation of same logical rec must NOT duplicate notification');
+
+                // B. Same logical recommendation generated repeatedly -> still exactly one notification
+                for ($i = 0; $i < 5; $i++) {
+                    $service->generate($h1Id, $now);
+                }
+                $h1NotifsRepeated = $notifRepo->listForHousehold($h1Id);
+                Assert::same(1, count($h1NotifsRepeated), 'Scenario B: repeated generations must yield still exactly 1 notification');
+
+                // B2. UUID churn across recommendation expiration -> still exactly one notification
+                $recRepo = new RecommendationRepository();
+                $recRepo->expirePast($h1Id, $now->modify('+48 hours'));
+                $service->generate($h1Id, $now);
+                $h1NotifsAfterChurn = $notifRepo->listForHousehold($h1Id);
+                Assert::same(1, count($h1NotifsAfterChurn), 'Scenario B2: recommendation UUID churn must not create duplicate notification');
+
+                // C. Different high-priority recommendation -> separate notification
+                $fakeEngine->candidatesToReturn = [$cShiftToday, $cHighDemandToday];
+                $service->generate($h1Id, $now);
+                $h1NotifsDiff = $notifRepo->listForHousehold($h1Id);
+                Assert::same(2, count($h1NotifsDiff), 'Scenario C: different high-priority rec must create separate notification');
+
+                // D. Same recommendation in a genuinely new valid occurrence -> new notification
+                $fakeEngine->candidatesToReturn = [$cShiftTomorrow];
+                $service->generate($h1Id, $tomorrow);
+                $h1NotifsNewOcc = $notifRepo->listForHousehold($h1Id);
+                Assert::same(3, count($h1NotifsNewOcc), 'Scenario D: new day occurrence must create notification according to recurrence semantics');
+
+                // E. Household A cannot affect Household B deduplication
+                $fakeEngine->candidatesToReturn = [$cShiftToday];
+                $service->generate($h2Id, $now);
+                $h2Notifs = $notifRepo->listForHousehold($h2Id);
+                Assert::same(1, count($h2Notifs), 'Scenario E: Household B must receive its own notification independently of Household A');
+
+                // Non-high priority suppression
+                $fakeEngine->candidatesToReturn = [$cLowPriority];
+                $service->generate($h2Id, $now);
+                $h2NotifsAfterLow = $notifRepo->listForHousehold($h2Id);
+                Assert::same(1, count($h2NotifsAfterLow), 'Low-priority recommendations must remain suppressed from notifications');
+            }),
         ];
     }
 }
+

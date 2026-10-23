@@ -49,17 +49,17 @@ export const TERMINAL_OUTCOME = {
     UNREADABLE: {
         icon: ImageOff,
         title: "SPMS couldn't read this bill",
-        body: 'Try uploading a clearer image or a higher-quality PDF.',
+        body: 'Try uploading a clearer image or a higher-quality PDF, or enter your bill details manually.',
     },
     UNCERTAIN: {
         icon: CircleHelp,
         title: "SPMS couldn't confidently identify this document",
-        body: 'Please upload a clearer electricity bill.',
+        body: 'Please upload a clearer electricity bill, or enter your bill details manually.',
     },
     PROCESSING_FAILED: {
         icon: TriangleAlert,
         title: "We couldn't finish analyzing this bill",
-        body: 'The analysis stopped before it could read your bill. Please upload the bill again.',
+        body: 'The analysis stopped before it could read your bill. Please upload the bill again or enter details manually.',
     },
 }
 
@@ -123,6 +123,7 @@ export const QUALITY_MESSAGE = {
     UNREADABLE_FIELD: 'Some values were hard to read',
     AMBIGUOUS_AMOUNT: 'Some amounts were ambiguous on the bill',
     CONFLICTING_METER_READINGS: 'The meter readings appear inconsistent',
+    CONFLICTING_SOLAR_READINGS: 'The solar readings appear inconsistent',
     INCONSISTENT_NET_UNITS: 'Net units do not match the other readings',
     INCOMPLETE_HISTORY: 'Gap in verified billing history acknowledged',
     BILLING_GAP_PRECEDING: 'An unbilled period precedes this statement',
@@ -351,7 +352,9 @@ export const FIELD_LABEL = {
     present_meter_reading: { label: 'Present meter reading', kind: 'energy', unit: 'kWh' },
     previous_solar_reading: { label: 'Previous solar reading', kind: 'energy', unit: 'kWh' },
     present_solar_reading: { label: 'Present solar reading', kind: 'energy', unit: 'kWh' },
-    solar_units_kwh: { label: 'Solar units', kind: 'energy', unit: 'kWh' },
+    solar_units_kwh: { label: 'Solar export', kind: 'energy', unit: 'kWh' },
+    solar_export_units_kwh: { label: 'Solar export', kind: 'energy', unit: 'kWh' },
+    other_solar_balance_or_adjustment_kwh: { label: 'Separate solar balance / adjustment (unmapped)', kind: 'energy', unit: 'kWh' },
     net_units_kwh: { label: 'Net units', kind: 'energy', unit: 'kWh', signed: true },
     opening_kvah: { label: 'Opening kVAh', kind: 'energy', unit: 'kVAh' },
     closing_kvah: { label: 'Closing kVAh', kind: 'energy', unit: 'kVAh' },
@@ -368,6 +371,45 @@ export const FIELD_LABEL = {
     tariff_category: { label: 'Tariff category', kind: 'text' },
     meter_type: { label: 'Meter type', kind: 'text' },
     contracted_load: { label: 'Contracted load', kind: 'energy', unit: 'kW' },
+}
+
+/** Canonical list of fields that users may directly correct/edit before verification. */
+export const EDITABLE_FIELDS = new Set([
+    'service_number',
+    'billing_period_start',
+    'billing_period_end',
+    'bill_date',
+    'due_date',
+    'consumption_kwh',
+    'previous_meter_reading',
+    'present_meter_reading',
+    'previous_solar_reading',
+    'present_solar_reading',
+    'solar_units_kwh',
+    'net_units_kwh',
+    'opening_kvah',
+    'closing_kvah',
+    'consumption_kvah',
+    'bill_amount',
+    'arrears',
+    'total_due',
+    'energy_charges',
+    'fixed_charges',
+    'customer_service_charges',
+    'other_charges',
+    'taxes_adjustments',
+    'tariff_category',
+    'contracted_load',
+    'utility_provider',
+    'meter_type',
+])
+
+/** Check if a field can be edited given bill lifecycle status. Verified bills are strictly locked. */
+export function isFieldEditable(field, billStatus) {
+    if (billStatus === 'VERIFIED') {
+        return false
+    }
+    return EDITABLE_FIELDS.has(field)
 }
 
 /**

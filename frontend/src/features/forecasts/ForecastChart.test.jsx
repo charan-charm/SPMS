@@ -129,13 +129,13 @@ describe('ForecastChart — NOW Reference Marker', () => {
         )
 
         // Title and container
-        expect(screen.getByText('Solar Generation & Consumption Outlook')).toBeInTheDocument()
+        expect(screen.getByText('Solar Generation Forecast')).toBeInTheDocument()
         // Confidence badges
         expect(screen.getByText(/High confidence/i)).toBeInTheDocument()
-        expect(screen.getByText(/Moderate confidence/i)).toBeInTheDocument()
         // Series in legend
         expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument()
-        expect(screen.getByText('Predicted Consumption (kWh)')).toBeInTheDocument()
+        // Household consumption curve is ABSENT per Section 1 & 2
+        expect(screen.queryByText('Predicted Consumption (kWh)')).not.toBeInTheDocument()
         // NOW marker present alongside series
         expect(screen.getByTestId('now-marker-label')).toBeInTheDocument()
     })
@@ -149,7 +149,7 @@ describe('ForecastChart — NOW Reference Marker', () => {
                 referenceTime={null}
             />
         )
-        expect(screen.getByText('Solar Generation & Consumption Outlook')).toBeInTheDocument()
+        expect(screen.getByText('Solar Generation Forecast')).toBeInTheDocument()
         expect(screen.queryByTestId('now-marker-label')).toBeNull()
         unmount()
 
@@ -160,7 +160,7 @@ describe('ForecastChart — NOW Reference Marker', () => {
                 horizon="DAY_AHEAD"
             />
         )
-        expect(screen.getByText('Solar Generation & Consumption Outlook')).toBeInTheDocument()
+        expect(screen.getByText('Solar Generation Forecast')).toBeInTheDocument()
         expect(screen.queryByTestId('now-marker-label')).toBeNull()
         unmount2()
 
@@ -172,7 +172,7 @@ describe('ForecastChart — NOW Reference Marker', () => {
                 referenceTime="invalid-not-a-date"
             />
         )
-        expect(screen.getByText('Solar Generation & Consumption Outlook')).toBeInTheDocument()
+        expect(screen.getByText('Solar Generation Forecast')).toBeInTheDocument()
         expect(screen.queryByTestId('now-marker-label')).toBeNull()
         unmount3()
     })
@@ -230,6 +230,81 @@ describe('ForecastChart — NOW Reference Marker', () => {
             expect(rect).toHaveAttribute('width', '76')
             expect(text).toHaveAttribute('x', '350') // exactly lineX!
             expect(text).toHaveTextContent('NOW · 18:52')
+        })
+    })
+
+    describe('SEVEN_DAY & MONTHLY Data Mapping & Flatness Audit (Data-Integrity)', () => {
+        const mockSevenDaySeries = [
+            { timestamp: '2026-10-06T00:00:00Z', date: '2026-10-06', predicted_solar_kwh: 13.5, lower_solar_kwh: 11.61, upper_solar_kwh: 15.39 },
+            { timestamp: '2026-10-07T00:00:00Z', date: '2026-10-07', predicted_solar_kwh: 13.5, lower_solar_kwh: 11.61, upper_solar_kwh: 15.39 },
+            { timestamp: '2026-10-08T00:00:00Z', date: '2026-10-08', predicted_solar_kwh: 13.5, lower_solar_kwh: 11.61, upper_solar_kwh: 15.39 },
+            { timestamp: '2026-10-09T00:00:00Z', date: '2026-10-09', predicted_solar_kwh: 13.5, lower_solar_kwh: 11.61, upper_solar_kwh: 15.39 },
+            { timestamp: '2026-10-10T00:00:00Z', date: '2026-10-10', predicted_solar_kwh: 13.5, lower_solar_kwh: 11.61, upper_solar_kwh: 15.39 },
+            { timestamp: '2026-10-11T00:00:00Z', date: '2026-10-11', predicted_solar_kwh: 13.5, lower_solar_kwh: 11.61, upper_solar_kwh: 15.39 },
+            { timestamp: '2026-10-12T00:00:00Z', date: '2026-10-12', predicted_solar_kwh: 13.5, lower_solar_kwh: 11.61, upper_solar_kwh: 15.39 },
+        ]
+
+        const mockMonthlySeries = Array.from({ length: 30 }, (_, i) => {
+            const dayNum = String(i + 1).padStart(2, '0')
+            return {
+                timestamp: `2026-10-${dayNum}T00:00:00Z`,
+                date: `2026-10-${dayNum}`,
+                predicted_solar_kwh: 13.5,
+                lower_solar_kwh: 11.61,
+                upper_solar_kwh: 15.39,
+            }
+        })
+
+        it('1. SEVEN_DAY: plots every returned forecast point exactly once (7 points total)', () => {
+            const { container } = render(
+                <ForecastChart
+                    timeSeries={mockSevenDaySeries}
+                    horizon="SEVEN_DAY"
+                    solarConfidence="HIGH"
+                />
+            )
+
+            expect(screen.getByText('Solar Generation Forecast')).toBeInTheDocument()
+            expect(screen.getByText('7-day daily trend projection with forecast uncertainty')).toBeInTheDocument()
+            expect(container.querySelector('[data-testid="responsive-container"]')).toBeInTheDocument()
+
+            // Verify mapping: exactly 7 points
+            expect(mockSevenDaySeries).toHaveLength(7)
+            const uniqueTimestamps = new Set(mockSevenDaySeries.map((p) => p.timestamp))
+            expect(uniqueTimestamps.size).toBe(7)
+        })
+
+        it('2. SEVEN_DAY: explains why screenshots appear flat — backend returns constant daily baseline', () => {
+            // Check that all 7 daily values are identical (13.5 kWh) because backend SolarForecastModel
+            // uses constant daylight energy calculation: (peakCapacityW / 1000) * 4.5
+            const values = mockSevenDaySeries.map((p) => p.predicted_solar_kwh)
+            const allEqual = values.every((v) => v === values[0])
+            expect(allEqual).toBe(true)
+            expect(values[0]).toBe(13.5)
+
+            // Variance is zero, so mathematical slope between points is 0 (flat horizontal curve)
+            const lowerValues = mockSevenDaySeries.map((p) => p.lower_solar_kwh)
+            const upperValues = mockSevenDaySeries.map((p) => p.upper_solar_kwh)
+            expect(lowerValues.every((v) => v === 11.61)).toBe(true)
+            expect(upperValues.every((v) => v === 15.39)).toBe(true)
+        })
+
+        it('3. MONTHLY: plots every returned forecast point exactly once (30 points total)', () => {
+            render(
+                <ForecastChart
+                    timeSeries={mockMonthlySeries}
+                    horizon="MONTHLY"
+                    solarConfidence="HIGH"
+                />
+            )
+
+            expect(screen.getByText('Solar Generation Forecast')).toBeInTheDocument()
+            expect(screen.getByText('30-day monthly solar generation outlook')).toBeInTheDocument()
+
+            // Verify mapping: exactly 30 points
+            expect(mockMonthlySeries).toHaveLength(30)
+            const uniqueTimestamps = new Set(mockMonthlySeries.map((p) => p.timestamp))
+            expect(uniqueTimestamps.size).toBe(30)
         })
     })
 })

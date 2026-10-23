@@ -18,6 +18,7 @@ final class InsightTaxonomy
     public const CATEGORY_CONSUMPTION = 'CONSUMPTION';
     public const CATEGORY_ENERGY = 'ENERGY';
     public const CATEGORY_COST = 'COST';
+    public const CATEGORY_WEATHER = 'WEATHER';
     public const CATEGORY_GENERAL = 'GENERAL';
 
     public const CATEGORIES = [
@@ -25,6 +26,7 @@ final class InsightTaxonomy
         self::CATEGORY_CONSUMPTION,
         self::CATEGORY_ENERGY,
         self::CATEGORY_COST,
+        self::CATEGORY_WEATHER,
         self::CATEGORY_GENERAL,
     ];
 
@@ -33,6 +35,14 @@ final class InsightTaxonomy
     public const TYPE_SOLAR_PRODUCTION_DECLINE = 'SOLAR_PRODUCTION_DECLINE';
     public const TYPE_SOLAR_PRODUCTION_IMPROVEMENT = 'SOLAR_PRODUCTION_IMPROVEMENT';
     public const TYPE_RECURRING_SOLAR_PATTERN = 'RECURRING_SOLAR_PATTERN';
+    public const TYPE_SOLAR_TELEMETRY_STALE = 'SOLAR_TELEMETRY_STALE';
+    public const TYPE_INVERTER_DISCONNECTED = 'INVERTER_DISCONNECTED';
+
+    // Weather
+    public const TYPE_CLOUDY_PRODUCTION_RISK = 'CLOUDY_PRODUCTION_RISK';
+    public const TYPE_WEATHER_PLANNING_WINDOW = 'WEATHER_PLANNING_WINDOW';
+    public const TYPE_WEATHER_VARIABILITY_RISK = 'WEATHER_VARIABILITY_RISK';
+    public const TYPE_WEATHER_DATA_UNAVAILABLE = 'WEATHER_DATA_UNAVAILABLE';
 
     // Consumption
     public const TYPE_CONSUMPTION_CHANGE = 'CONSUMPTION_CHANGE';
@@ -79,6 +89,30 @@ final class InsightTaxonomy
         self::TYPE_RECURRING_SOLAR_PATTERN => [
             'category' => self::CATEGORY_SOLAR,
             'description' => 'Solar production stayed within a stable band across at least three observed periods.',
+        ],
+        self::TYPE_SOLAR_TELEMETRY_STALE => [
+            'category' => self::CATEGORY_SOLAR,
+            'description' => 'Inverter telemetry has not updated within the configured freshness threshold; real-time power cannot be verified.',
+        ],
+        self::TYPE_INVERTER_DISCONNECTED => [
+            'category' => self::CATEGORY_SOLAR,
+            'description' => 'Solar hardware communication is offline or reporting a fault status.',
+        ],
+        self::TYPE_CLOUDY_PRODUCTION_RISK => [
+            'category' => self::CATEGORY_WEATHER,
+            'description' => 'Forecast indicates elevated cloud cover or low solar irradiance during expected production hours.',
+        ],
+        self::TYPE_WEATHER_PLANNING_WINDOW => [
+            'category' => self::CATEGORY_WEATHER,
+            'description' => 'Forecast indicates clear skies and strong solar irradiance offering an optimal midday flexible load window.',
+        ],
+        self::TYPE_WEATHER_VARIABILITY_RISK => [
+            'category' => self::CATEGORY_WEATHER,
+            'description' => 'Forecast indicates potential precipitation or variable cloud cover that may create fluctuations in solar generation.',
+        ],
+        self::TYPE_WEATHER_DATA_UNAVAILABLE => [
+            'category' => self::CATEGORY_WEATHER,
+            'description' => 'Atmospheric weather forecast or location coordinates are unavailable; clear-sky physical baseline applies.',
         ],
         self::TYPE_CONSUMPTION_CHANGE => [
             'category' => self::CATEGORY_CONSUMPTION,

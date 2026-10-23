@@ -14,6 +14,7 @@ import {
 import { useAuth } from '../../features/auth/AuthContext'
 import { useSolar } from '../../features/solar/useSolar'
 import { NotificationBellPopover } from '../../features/notifications'
+import { DemoScenarioSwitcher } from './DemoScenarioSwitcher'
 
 /**
  * AppHeader (docs/04 §11) — answers "where am I, what is happening?"
@@ -45,18 +46,18 @@ export function AppHeader({ onOpenNavigation }) {
         navigate('/login')
     }
 
-    const isDemo = account?.mode === 'DEMO_TEST' || account?.environment === 'DEMO'
+    const isDemo = account?.mode === 'DEMO_TEST'
 
     const renderSolarStatusBadge = () => {
         switch (connectionStatus) {
             case 'CONNECTED':
                 return (
                     <span
-                        className="hidden items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300 md:inline-flex"
-                        title="Solar inverter connected and active"
+                        className={`hidden items-center gap-1.5 rounded-full border ${isDemo ? 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'} px-2.5 py-1 text-xs font-medium md:inline-flex`}
+                        title={isDemo ? 'Simulated solar generation profile for active DEMO scenario' : 'Solar inverter connected and active'}
                     >
-                        <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
-                        Solar: Connected
+                        <span className={`size-1.5 rounded-full ${isDemo ? 'bg-sky-500' : 'bg-emerald-500'} animate-pulse`} aria-hidden="true" />
+                        {isDemo ? 'Solar: Simulated (DEMO)' : 'Solar: Connected'}
                     </span>
                 )
             case 'OFFLINE':
@@ -73,10 +74,10 @@ export function AppHeader({ onOpenNavigation }) {
                 return (
                     <span
                         className="hidden items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 md:inline-flex"
-                        title="Solar telemetry degraded"
+                        title={isDemo ? 'Simulated solar telemetry degraded (SCEN-04)' : 'Solar telemetry degraded'}
                     >
                         <AlertTriangle className="size-3 text-amber-500" aria-hidden="true" />
-                        Solar: Degraded
+                        {isDemo ? 'Solar: Degraded (DEMO)' : 'Solar: Degraded'}
                     </span>
                 )
             case 'AUTHENTICATION_ERROR':
@@ -179,12 +180,13 @@ export function AppHeader({ onOpenNavigation }) {
                     </p>
                     {isDemo && (
                         <div className="flex items-center gap-2">
-                            <span className="rounded-full border border-chart-demo/50 bg-chart-demo/10 px-2.5 py-0.5 font-body text-xs font-semibold text-chart-demo">
+                            <span className="hidden md:inline-flex rounded-full border border-chart-demo/50 bg-chart-demo/10 px-2.5 py-0.5 font-body text-xs font-semibold text-chart-demo">
                                 DEMO — Simulated Demonstration Data
                             </span>
+                            <DemoScenarioSwitcher />
                             <Link
                                 to="/onboarding?preview=demo"
-                                className="hidden sm:inline-flex items-center gap-1 rounded-full border border-chart-demo/40 bg-surface px-2.5 py-0.5 text-[11px] font-medium text-chart-demo hover:bg-chart-demo/15 transition-colors"
+                                className="hidden lg:inline-flex items-center gap-1 rounded-full border border-chart-demo/40 bg-surface px-2.5 py-0.5 text-[11px] font-medium text-chart-demo hover:bg-chart-demo/15 transition-colors"
                                 title="Inspect 5-step onboarding flow in DEMO sandbox"
                             >
                                 <Sparkles className="size-3" aria-hidden="true" />

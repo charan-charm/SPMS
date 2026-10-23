@@ -101,7 +101,7 @@ export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}
                                     <tr>
                                         <th scope="col" className="px-4 py-2.5">Billing period</th>
                                         <th scope="col" className="px-3 py-2.5 text-right">Consumption</th>
-                                        <th scope="col" className="px-3 py-2.5 text-right">Solar credited</th>
+                                        <th scope="col" className="px-3 py-2.5 text-right">Solar export</th>
                                         <th scope="col" className="px-3 py-2.5 text-right">Energy balance</th>
                                         <th scope="col" className="px-3 py-2.5 text-right">Bill amount</th>
                                         <th scope="col" className="px-3 py-2.5 text-left">Source</th>
@@ -128,18 +128,24 @@ export function BillHistory({ bills = [], selectedId = null, onSelect = () => {}
                                                 key={bill.bill_id}
                                                 tabIndex={0}
                                                 role="button"
+                                                aria-selected={isSelected}
                                                 aria-current={isSelected ? 'row' : undefined}
-                                                onClick={() => onSelect(bill.bill_id)}
+                                                onClick={(e) => {
+                                                    // Guard against clicks on nested buttons, links or inputs
+                                                    if (e.target.closest('button, a, input, select')) return
+                                                    onSelect(bill.bill_id)
+                                                }}
                                                 onKeyDown={(e) => {
                                                     if (e.key === 'Enter' || e.key === ' ') {
+                                                        if (e.target.closest('button, a, input, select')) return
                                                         e.preventDefault()
                                                         onSelect(bill.bill_id)
                                                     }
                                                 }}
                                                 className={cn(
-                                                    'cursor-pointer transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                                                    'cursor-pointer transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset select-none',
                                                     isSelected
-                                                        ? 'bg-primary/8 ring-1 ring-inset ring-primary/25 font-medium text-heading'
+                                                        ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 font-semibold text-heading'
                                                         : 'hover:bg-surface-alt'
                                                 )}
                                             >

@@ -396,6 +396,18 @@ final class BillService
             throw new AppException('VALIDATION_ERROR', 'At least one corrected field is required.', 422);
         }
 
+        // 1. Enforce Canonical Field Policy (Requirement 8): Only USER_EDITABLE fields can be corrected
+        foreach (array_keys($values) as $field) {
+            if (!BillField::isEditable((string) $field)) {
+                throw new AppException(
+                    'READ_ONLY_FIELD',
+                    "The field '{$field}' is read-only and cannot be manually edited.",
+                    422,
+                    ['field' => $field]
+                );
+            }
+        }
+
         $newStart = array_key_exists(BillField::BILLING_PERIOD_START, $values)
             ? $values[BillField::BILLING_PERIOD_START]
             : $bill->value(BillField::BILLING_PERIOD_START);
@@ -425,7 +437,88 @@ final class BillService
             $provenance[$field] = ['source' => ProvenanceSource::USER_CORRECTION, 'confidence' => null];
         }
 
-        $this->bills->saveCorrections($updated, $provenance);
+        // 2. Canonical Revalidation & Quality Flag Refresh (§6 & §7):
+        $annotation = [
+            'billing_period' => [
+                'start' => $updated->value(BillField::BILLING_PERIOD_START),
+                'end' => $updated->value(BillField::BILLING_PERIOD_END),
+            ],
+            'consumption' => [
+                'consumption_kwh' => $updated->value(BillField::CONSUMPTION_KWH),
+            ],
+            'meter_evidence' => [
+                'previous_meter_reading' => $updated->value(BillField::PREVIOUS_METER_READING),
+                'present_meter_reading' => $updated->value(BillField::PRESENT_METER_READING),
+            ],
+            'solar' => [
+                'previous_solar_reading' => $updated->value(BillField::PREVIOUS_SOLAR_READING),
+                'present_solar_reading' => $updated->value(BillField::PRESENT_SOLAR_READING),
+                'solar_units_kwh' => $updated->value(BillField::SOLAR_UNITS_KWH),
+                'net_units_kwh' => $updated->value(BillField::NET_UNITS_KWH),
+            ],
+            'cost' => [
+                'bill_amount' => $updated->value(BillField::BILL_AMOUNT),
+                'arrears' => $updated->value(BillField::ARREARS),
+                'total_due' => $updated->value(BillField::TOTAL_DUE),
+                'energy_charges' => $updated->value(BillField::ENERGY_CHARGES),
+                'fixed_charges' => $updated->value(BillField::FIXED_CHARGES),
+                'customer_service_charges' => $updated->value(BillField::CUSTOMER_SERVICE_CHARGES),
+                'other_charges' => $updated->value(BillField::OTHER_CHARGES),
+                'taxes_adjustments' => $updated->value(BillField::TAXES_ADJUSTMENTS),
+            ],
+            'context' => [
+                'utility_provider' => $updated->value(BillField::UTILITY_PROVIDER),
+                'tariff_category' => $updated->value(BillField::TARIFF_CATEGORY),
+                'meter_type' => $updated->value(BillField::METER_TYPE),
+                'contracted_load' => $updated->value(BillField::CONTRACTED_LOAD),
+                'service_number' => $updated->value(BillField::SERVICE_NUMBER),
+            ],
+        ];
+
+        $validations = \App\Services\Mistral\BillAnnotationNormalizer::validations($annotation);
+        $normData = ['assessment' => 'VALID', 'values' => $updated->values()];
+        $dataFlags = \App\Services\Mistral\BillAnnotationNormalizer::qualityFlags($normData, $validations);
+
+        // Derive ownership quality flags against household registered service number
+        $household = $this->requireHouseholdContext($account);
+        $ownershipFlags = self::ownershipFlags($household->serviceNumber(), $updated->value(BillField::SERVICE_NUMBER));
+
+        $allFlags = [...$dataFlags, ...$ownershipFlags];
+
+        // 3. Reconcile review status
+        $hasConflicts = false;
+        foreach ($validations as $v) {
+            if ($v->status() === \App\Domain\Bill\ValidationStatus::CONFLICT) {
+                $hasConflicts = true;
+                break;
+            }
+        }
+
+        $criticalFlagCodes = [
+            QualityCode::CONFLICTING_METER_READINGS,
+            QualityCode::CONFLICTING_SOLAR_READINGS,
+            QualityCode::INCONSISTENT_NET_UNITS,
+            QualityCode::SERVICE_NUMBER_MISMATCH,
+            QualityCode::MISSING_CONSUMPTION,
+            QualityCode::MISSING_BILLING_PERIOD,
+        ];
+        $hasCriticalFlag = false;
+        foreach ($allFlags as $f) {
+            if (in_array($f->code(), $criticalFlagCodes, true)) {
+                $hasCriticalFlag = true;
+                break;
+            }
+        }
+
+        $desiredStatus = ($hasConflicts || $hasCriticalFlag)
+            ? BillStatus::NEEDS_REVIEW
+            : BillStatus::EXTRACTED;
+
+        if ($updated->status() !== $desiredStatus && BillLifecycle::can($updated->status(), $desiredStatus)) {
+            $updated = $updated->transitionTo($desiredStatus, $now);
+        }
+
+        $this->bills->saveCorrections($updated, $provenance, $validations, $allFlags);
 
         return $updated;
     }

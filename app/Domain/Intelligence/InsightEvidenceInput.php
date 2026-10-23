@@ -38,6 +38,8 @@ final class InsightEvidenceInput
      * @param array<string, mixed> $historical
      * @param array<string, mixed> $qualityContext
      * @param array<string, mixed> $provenanceContext
+     * @param array<string, mixed>|null $weather
+     * @param array<string, mixed>|null $solarConnection
      */
     private function __construct(
         private readonly array $solarPeriods,
@@ -48,7 +50,9 @@ final class InsightEvidenceInput
         private readonly array $historical,
         private readonly ?string $householdId,
         private readonly array $qualityContext,
-        private readonly array $provenanceContext
+        private readonly array $provenanceContext,
+        private readonly ?array $weather = null,
+        private readonly ?array $solarConnection = null
     ) {
     }
 
@@ -64,6 +68,8 @@ final class InsightEvidenceInput
 
         $qualityContext = self::validatedQualityContext($evidence['quality'] ?? null);
         $provenanceContext = self::validatedProvenanceContext($evidence['provenance'] ?? null);
+        $weather = isset($evidence['weather']) && is_array($evidence['weather']) ? $evidence['weather'] : null;
+        $solarConnection = isset($evidence['solar_connection']) && is_array($evidence['solar_connection']) ? $evidence['solar_connection'] : null;
 
         return new self(
             self::validatedPeriods($evidence['solar'] ?? null, 'solar'),
@@ -74,13 +80,27 @@ final class InsightEvidenceInput
             self::validatedHistorical($evidence['historical'] ?? null),
             $householdId,
             $qualityContext,
-            $provenanceContext
+            $provenanceContext,
+            $weather,
+            $solarConnection
         );
     }
 
     public function householdId(): ?string
     {
         return $this->householdId;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function weather(): ?array
+    {
+        return $this->weather;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function solarConnection(): ?array
+    {
+        return $this->solarConnection;
     }
 
     /** @return array<int, array<string, mixed>> */

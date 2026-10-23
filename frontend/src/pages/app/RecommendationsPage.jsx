@@ -1,20 +1,21 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router'
 import {
     Sparkles,
     RefreshCw,
     AlertTriangle,
     Lightbulb,
-    CheckCircle,
     SlidersHorizontal,
+    Filter,
 } from 'lucide-react'
-import {
-    getRecommendations,
-    generateRecommendations,
-    dismissRecommendation,
-} from '../../services/api/recommendations'
+import * as recommendationsApi from '../../services/api/recommendations'
 import { RecommendationCard } from '../../features/recommendations/RecommendationCard'
 import { RecommendationLimitationsCard } from '../../features/recommendations/RecommendationLimitationsCard'
+import {
+    CATEGORY_FILTERS,
+    RECOMMENDATION_CATEGORIES,
+    getRecommendationCategory,
+} from '../../features/recommendations/recommendationCategories'
 import { SPMSLoadingState } from '../../components/feedback/SPMSLoadingState'
 import { EmptyState } from '../../components/feedback/EmptyState'
 import { ErrorState } from '../../components/feedback/ErrorState'
@@ -28,6 +29,7 @@ const STATUS_FILTERS = [
 
 export function RecommendationsPage() {
     const [statusFilter, setStatusFilter] = useState('ACTIVE')
+    const [categoryFilter, setCategoryFilter] = useState('ALL')
     const [recommendations, setRecommendations] = useState([])
     const [isLoading, setIsLoading] = useState(true)
     const [isRefreshing, setIsRefreshing] = useState(false)
@@ -42,13 +44,13 @@ export function RecommendationsPage() {
 
         try {
             if (forceFresh) {
-                const genRes = await generateRecommendations()
+                const genRes = await recommendationsApi.generateRecommendations()
                 const recList = Array.isArray(genRes?.data?.recommendations)
                     ? genRes.data.recommendations
                     : (Array.isArray(genRes?.recommendations) ? genRes.recommendations : [])
                 setRecommendations(recList)
             } else {
-                const res = await getRecommendations({ status })
+                const res = await recommendationsApi.getRecommendations({ status })
                 const recList = Array.isArray(res?.data?.recommendations)
                     ? res.data.recommendations
                     : (Array.isArray(res?.recommendations) ? res.recommendations : [])
@@ -67,7 +69,7 @@ export function RecommendationsPage() {
         const load = async () => {
             setError(null)
             try {
-                const res = await getRecommendations({ status: statusFilter })
+                const res = await recommendationsApi.getRecommendations({ status: statusFilter })
                 if (mounted) {
                     const recList = Array.isArray(res?.data?.recommendations)
                         ? res.data.recommendations
@@ -98,7 +100,7 @@ export function RecommendationsPage() {
     const handleDismiss = async (id) => {
         setDismissingId(id)
         try {
-            await dismissRecommendation(id)
+            await recommendationsApi.dismissRecommendation(id)
             // Remove from active list locally
             setRecommendations((prev) => prev.filter((r) => r.id !== id))
         } catch (err) {
@@ -109,8 +111,58 @@ export function RecommendationsPage() {
     }
 
     // Separate actionable recommendations from limitation notices
-    const actionableRecommendations = recommendations.filter((r) => r.type !== 'DATA_LIMITATION')
-    const limitationNotices = recommendations.filter((r) => r.type === 'DATA_LIMITATION')
+    const rawActionable = recommendations.filter((r) => r.type !== 'DATA_LIMITATION')
+    const rawLimitations = recommendations.filter((r) => r.type === 'DATA_LIMITATION')
+
+    // Safeguard deduplication for ACTIVE view so re-evaluations never render duplicates
+    const actionableRecommendations = statusFilter === 'ACTIVE'
+        ? rawActionable.reduce((acc, rec) => {
+            const key = rec.type
+            if (!acc.some((existing) => existing.type === key)) {
+                acc.push(rec)
+            }
+            return acc
+        }, [])
+        : rawActionable
+
+    const limitationNotices = statusFilter === 'ACTIVE'
+        ? rawLimitations.reduce((acc, notice) => {
+            const key = notice.title || notice.type
+            if (!acc.some((existing) => (existing.title || existing.type) === key)) {
+                acc.push(notice)
+            }
+            return acc
+        }, [])
+        : rawLimitations
+
+    // Calculate category counts across justified recommendations
+    const categoryCounts = useMemo(() => {
+        const acc = { ALL: actionableRecommendations.length + limitationNotices.length }
+        for (const rec of actionableRecommendations) {
+            const cat = getRecommendationCategory(rec).id
+            acc[cat] = (acc[cat] || 0) + 1
+        }
+        for (const notice of limitationNotices) {
+            const cat = getRecommendationCategory(notice).id
+            acc[cat] = (acc[cat] || 0) + 1
+        }
+        return acc
+    }, [actionableRecommendations, limitationNotices])
+
+    // Filter by selected purpose category
+    const filteredActionable = useMemo(() => {
+        if (categoryFilter === 'ALL') return actionableRecommendations
+        return actionableRecommendations.filter((rec) => getRecommendationCategory(rec).id === categoryFilter)
+    }, [actionableRecommendations, categoryFilter])
+
+    const filteredLimitations = useMemo(() => {
+        if (categoryFilter === 'ALL') return limitationNotices
+        return limitationNotices.filter((notice) => getRecommendationCategory(notice).id === categoryFilter)
+    }, [limitationNotices, categoryFilter])
+
+    const totalFilteredCount = filteredActionable.length + filteredLimitations.length
+    const totalUnfilteredCount = actionableRecommendations.length + limitationNotices.length
+
     const hasDegraded = recommendations.some((r) => r.quality === 'DEGRADED' || r.quality === 'STALE')
 
     return (
@@ -170,95 +222,146 @@ export function RecommendationsPage() {
                         />
                     )}
 
-            {/* Degraded Evidence Notice Banner */}
-            {hasDegraded && (
-                <div
-                    role="status"
-                    className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-warning/10 p-3.5 text-sm text-warning"
-                >
-                    <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                    <div>
-                        <span className="font-semibold">Degraded Evidence Notice: </span>
-                        <span>
-                            Some recommendations reflect stale telemetry or partial billing history. Values and confidence are honestly marked and degrade gracefully.
-                        </span>
-                    </div>
-                </div>
-            )}
-
-            {/* Status Filter Tabs */}
-            <div className="flex items-center justify-between gap-2 overflow-x-auto border-b border-border pb-2">
-                <div className="flex items-center gap-1.5">
-                    <SlidersHorizontal className="size-4 text-muted" aria-hidden="true" />
-                    <span className="text-xs font-semibold uppercase tracking-wider text-muted">Filter:</span>
-                </div>
-                <div className="flex items-center gap-1">
-                    {STATUS_FILTERS.map((tab) => (
-                        <button
-                            key={tab.id}
-                            type="button"
-                            onClick={() => setStatusFilter(tab.id)}
-                            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                                statusFilter === tab.id
-                                    ? 'bg-primary-soft font-semibold text-primary-active'
-                                    : 'text-muted hover:bg-surface-alt hover:text-heading'
-                            }`}
+                    {/* Degraded Evidence Notice Banner */}
+                    {hasDegraded && (
+                        <div
+                            role="status"
+                            className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-warning/10 p-3.5 text-sm text-warning"
                         >
-                            {tab.label}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {/* Data Limitation Notices if any */}
-            {limitationNotices.length > 0 && (
-                <div className="space-y-3">
-                    {limitationNotices.map((notice) => (
-                        <RecommendationLimitationsCard key={notice.id} notice={notice} />
-                    ))}
-                </div>
-            )}
-
-            {/* Actionable Recommendations List */}
-            {actionableRecommendations.length > 0 ? (
-                <div className="space-y-4">
-                    {actionableRecommendations.map((rec) => (
-                        <RecommendationCard
-                            key={rec.id}
-                            recommendation={rec}
-                            onDismiss={handleDismiss}
-                            isDismissing={dismissingId === rec.id}
-                        />
-                    ))}
-                </div>
-            ) : (
-                limitationNotices.length === 0 && (
-                    <EmptyState
-                        variant="noInsight"
-                        icon={Sparkles}
-                        title="No Active Recommendations"
-                        explanation="Your energy profile is currently balanced. Check back as new solar forecasts or bill cycles become available."
-                        limitation="Advisory recommendations require verified bills and active solar telemetry to support evidence-backed guidance."
-                        action={
-                            <div className="flex items-center gap-3">
-                                <Button
-                                    variant="secondary"
-                                    size="sm"
-                                    onClick={handleRefresh}
-                                    disabled={isRefreshing}
-                                >
-                                    Check Now
-                                </Button>
-                                <Link to="/forecasts">
-                                    <Button variant="tertiary" size="sm">
-                                        View Energy Outlook
-                                    </Button>
-                                </Link>
+                            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                            <div>
+                                <span className="font-semibold">Notice on Solar &amp; Bill Data: </span>
+                                <span>
+                                    Some recommendations reflect estimated demand or recent forecast data because live inverter telemetry or verified bills are still updating.
+                                </span>
                             </div>
-                        }
-                    />
-                )
-            )}
+                        </div>
+                    )}
+
+                    {/* Status & Lifecycle Filter Tabs */}
+                    <div className="flex items-center justify-between gap-2 overflow-x-auto border-b border-border pb-2">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                            <SlidersHorizontal className="size-4 text-muted" aria-hidden="true" />
+                            <span className="text-xs font-semibold uppercase tracking-wider text-muted">Status:</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            {STATUS_FILTERS.map((tab) => (
+                                <button
+                                    key={tab.id}
+                                    type="button"
+                                    onClick={() => setStatusFilter(tab.id)}
+                                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                                        statusFilter === tab.id
+                                            ? 'bg-primary-soft font-semibold text-primary-active'
+                                            : 'text-muted hover:bg-surface-alt hover:text-heading'
+                                    }`}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Category Purpose Filter Tabs (Part B) */}
+                    {totalUnfilteredCount > 0 && (
+                        <div
+                            className="flex items-center justify-between gap-2 overflow-x-auto border-b border-border pb-2"
+                            data-testid="category-filter-tabs"
+                        >
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                <Filter className="size-3.5 text-muted" aria-hidden="true" />
+                                <span className="text-xs font-semibold uppercase tracking-wider text-muted">Purpose:</span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1">
+                                {CATEGORY_FILTERS.map((tab) => {
+                                    const count = categoryCounts[tab.id] || 0
+                                    // Use only categories justified by existing recommendation types
+                                    if (tab.id !== 'ALL' && count === 0) return null
+                                    const Icon = tab.icon
+                                    return (
+                                        <button
+                                            key={tab.id}
+                                            type="button"
+                                            onClick={() => setCategoryFilter(tab.id)}
+                                            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                                                categoryFilter === tab.id
+                                                    ? 'bg-primary-soft font-semibold text-primary-active'
+                                                    : 'text-muted hover:bg-surface-alt hover:text-heading'
+                                            }`}
+                                        >
+                                            {Icon && <Icon className="size-3.5" aria-hidden="true" />}
+                                            <span>{tab.label}</span>
+                                            <span className="ml-0.5 opacity-75">({count})</span>
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Data Limitation Notices if any */}
+                    {filteredLimitations.length > 0 && (
+                        <div className="space-y-3" data-testid="limitation-notices-container">
+                            {filteredLimitations.map((notice) => (
+                                <RecommendationLimitationsCard key={notice.id} notice={notice} />
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Actionable Recommendations List */}
+                    {filteredActionable.length > 0 ? (
+                        <div className="space-y-4" data-testid="actionable-recommendations-container">
+                            {filteredActionable.map((rec) => (
+                                <RecommendationCard
+                                    key={rec.id}
+                                    recommendation={rec}
+                                    onDismiss={handleDismiss}
+                                    isDismissing={dismissingId === rec.id}
+                                    isHistorical={statusFilter !== 'ACTIVE' || rec.status !== 'ACTIVE'}
+                                />
+                            ))}
+                        </div>
+                    ) : totalFilteredCount === 0 && totalUnfilteredCount > 0 ? (
+                        /* Filtered category has 0 results */
+                        <EmptyState
+                            variant="noResults"
+                            title="No matching recommendations"
+                            explanation={`There are no active recommendations in the "${RECOMMENDATION_CATEGORIES[categoryFilter]?.label || categoryFilter}" category.`}
+                            action={
+                                <Button variant="secondary" size="sm" onClick={() => setCategoryFilter('ALL')}>
+                                    Show all recommendations
+                                </Button>
+                            }
+                        />
+                    ) : (
+                        /* Entire list is empty */
+                        totalUnfilteredCount === 0 && (
+                            <EmptyState
+                                variant="noInsight"
+                                icon={Sparkles}
+                                title="No Active Recommendations"
+                                explanation="Your energy profile is currently balanced. Check back as new solar forecasts or bill cycles become available."
+                                limitation="Advisory recommendations require verified bills and active solar telemetry to support evidence-backed guidance."
+                                action={
+                                    <div className="flex items-center gap-3">
+                                        <Button
+                                            variant="secondary"
+                                            size="sm"
+                                            onClick={handleRefresh}
+                                            disabled={isRefreshing}
+                                        >
+                                            Check Now
+                                        </Button>
+                                        <Link to="/forecasts">
+                                            <Button variant="tertiary" size="sm">
+                                                View Energy Outlook
+                                            </Button>
+                                        </Link>
+                                    </div>
+                                }
+                            />
+                        )
+                    )}
                 </>
             )}
         </div>

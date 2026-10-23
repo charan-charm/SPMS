@@ -183,6 +183,53 @@ describe('BillsPage container', () => {
         expect(await screen.findByText(/sign in to upload electricity bills/i)).toBeInTheDocument()
         expect(listBills).not.toHaveBeenCalled()
     })
+
+    it('synchronizes selected statement from history and updates URL deep link', async () => {
+        const user = userEvent.setup()
+        const rows = [
+            billRow('VERIFIED'),
+            {
+                ...billRow('VERIFIED'),
+                bill_id: 'bill-2',
+                billing_period_start: '2026-07-01',
+                billing_period_end: '2026-08-01',
+            },
+        ]
+        listBills.mockResolvedValue({ data: { bills: rows } })
+        getBill
+            .mockResolvedValueOnce({ data: { bill: { ...extractedDetail(), bill_id: 'bill-1' } } })
+            .mockResolvedValue({ data: { bill: { ...extractedDetail(), bill_id: 'bill-2', values: { ...extractedDetail().values, consumption_kwh: '200.000' } } } })
+
+        render(<BillsPage />)
+        await waitFor(() => expect(listBills).toHaveBeenCalled())
+        expect(await screen.findByRole('heading', { name: /bill information extracted/i })).toBeInTheDocument()
+
+        // Click second statement row in history table
+        const historyRows = screen.getAllByRole('button', { name: /verified/i })
+        await user.click(historyRows[1])
+
+        await waitFor(() => expect(getBill).toHaveBeenCalledWith('bill-2', expect.anything()))
+        expect(window.location.search).toContain('billId=bill-2')
+    })
+
+    it('restores specified bill when opening deep link with billId query param', async () => {
+        window.history.replaceState({}, '', '/bills?billId=bill-2')
+        const rows = [
+            billRow('VERIFIED'),
+            {
+                ...billRow('VERIFIED'),
+                bill_id: 'bill-2',
+                billing_period_start: '2026-07-01',
+                billing_period_end: '2026-08-01',
+            },
+        ]
+        listBills.mockResolvedValue({ data: { bills: rows } })
+        getBill.mockResolvedValue({ data: { bill: { ...extractedDetail(), bill_id: 'bill-2' } } })
+
+        render(<BillsPage />)
+        await waitFor(() => expect(listBills).toHaveBeenCalled())
+        await waitFor(() => expect(getBill).toHaveBeenCalledWith('bill-2', expect.anything()))
+    })
 })
 
 function sleep(ms) {

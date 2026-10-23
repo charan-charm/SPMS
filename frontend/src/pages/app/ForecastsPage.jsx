@@ -11,26 +11,27 @@ import {
     PlugZap,
     TrendingUp,
 } from 'lucide-react'
-import { getForecasts, generateForecast } from '../../services/api/forecast'
-import { ForecastChart } from '../../features/forecasts/ForecastChart'
-import { ForecastLimitationsCard } from '../../features/forecasts/ForecastLimitationsCard'
-import { WeatherInputCard } from '../../features/forecasts/WeatherInputCard'
+import { getForecasts, generateForecast, getForecastPerformance } from '../../services/api/forecast'
+import { listBills } from '../../services/api/bills'
+import {
+    ForecastChart,
+    ForecastLimitationsCard,
+    WeatherInputCard,
+    HouseholdDemandBaselineCard,
+    ForecastEnergyBalanceSection,
+    ForecastHorizonSelector,
+} from '../../features/forecasts'
 import { DataNatureBadge } from '../../components/data-display/DataNatureBadge'
 import { ConfidenceIndicator } from '../../components/data-display/ConfidenceIndicator'
-import { CostRange } from '../../components/data-display/CostRange'
 import { SPMSLoadingState } from '../../components/feedback/SPMSLoadingState'
 import { ErrorState } from '../../components/feedback/ErrorState'
 import { formatMoney } from '../../lib/money'
 
-const HORIZONS = [
-    { id: 'DAY_AHEAD', label: 'Day-Ahead (24h)' },
-    { id: 'SEVEN_DAY', label: '7-Day Trend' },
-    { id: 'MONTHLY', label: 'Monthly Planning' },
-]
-
 export function ForecastsPage() {
     const [horizon, setHorizon] = useState('DAY_AHEAD')
     const [forecastData, setForecastData] = useState(null)
+    const [verifiedBillsCount, setVerifiedBillsCount] = useState(null)
+    const [performanceScore, setPerformanceScore] = useState(null)
     const [isLoading, setIsLoading] = useState(true)
     const [isRefreshing, setIsRefreshing] = useState(false)
     const [error, setError] = useState(null)
@@ -43,8 +44,34 @@ export function ForecastsPage() {
 
         try {
             const apiCall = forceRecalculate ? generateForecast : getForecasts
-            const response = await apiCall({ horizon: selectedHorizon })
-            setForecastData(response.data)
+            const [forecastRes, billsRes, perfRes] = await Promise.allSettled([
+                apiCall({ horizon: selectedHorizon }),
+                listBills().catch(() => null),
+                getForecastPerformance().catch(() => null),
+            ])
+
+            if (forecastRes.status === 'fulfilled') {
+                setForecastData(forecastRes.value.data)
+            } else {
+                throw forecastRes.reason || new Error('Failed to load forecast data.')
+            }
+
+            if (billsRes.status === 'fulfilled') {
+                const rawBills = Array.isArray(billsRes.value?.data?.bills)
+                    ? billsRes.value.data.bills
+                    : (Array.isArray(billsRes.value?.bills) ? billsRes.value.bills : [])
+                const vCount = rawBills.filter((b) => b.status === 'VERIFIED').length
+                if (vCount > 0) {
+                    setVerifiedBillsCount(vCount)
+                }
+            }
+
+            if (perfRes.status === 'fulfilled') {
+                const perfData = perfRes.value?.data?.summary || perfRes.value?.summary
+                if (perfData?.v2_average_accuracy_pct !== undefined && perfData?.v2_average_accuracy_pct !== null) {
+                    setPerformanceScore(Number(perfData.v2_average_accuracy_pct))
+                }
+            }
         } catch (err) {
             setError(err.message || 'Failed to load forecast data.')
         } finally {
@@ -58,9 +85,35 @@ export function ForecastsPage() {
         const load = async () => {
             setError(null)
             try {
-                const response = await getForecasts({ horizon })
-                if (mounted) {
-                    setForecastData(response.data)
+                const [forecastRes, billsRes, perfRes] = await Promise.allSettled([
+                    getForecasts({ horizon }),
+                    listBills().catch(() => null),
+                    getForecastPerformance().catch(() => null),
+                ])
+
+                if (!mounted) return
+
+                if (forecastRes.status === 'fulfilled') {
+                    setForecastData(forecastRes.value.data)
+                } else {
+                    setError(forecastRes.reason?.message || 'Failed to load forecast data.')
+                }
+
+                if (billsRes.status === 'fulfilled') {
+                    const rawBills = Array.isArray(billsRes.value?.data?.bills)
+                        ? billsRes.value.data.bills
+                        : (Array.isArray(billsRes.value?.bills) ? billsRes.value.bills : [])
+                    const vCount = rawBills.filter((b) => b.status === 'VERIFIED').length
+                    if (vCount > 0) {
+                        setVerifiedBillsCount(vCount)
+                    }
+                }
+
+                if (perfRes.status === 'fulfilled') {
+                    const perfData = perfRes.value?.data?.summary || perfRes.value?.summary
+                    if (perfData?.v2_average_accuracy_pct !== undefined && perfData?.v2_average_accuracy_pct !== null) {
+                        setPerformanceScore(Number(perfData.v2_average_accuracy_pct))
+                    }
                 }
             } catch (err) {
                 if (mounted) {
@@ -85,33 +138,44 @@ export function ForecastsPage() {
     }
 
     const handleRefresh = () => {
-        if (isRefreshing || isLoading) return
         fetchForecast(horizon, true)
     }
 
     if (isLoading && !forecastData) {
         return (
-            <div className="py-12">
-                <SPMSLoadingState
-                    title="Generating Forecast Projections"
-                    subtitle="Evaluating solar generation and consumption models..."
-                    variant="card"
-                />
+            <div className="space-y-6 pb-12">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <TrendingUp className="h-6 w-6 text-emerald-400" />
+                            <h1 className="font-heading text-2xl font-bold tracking-tight text-text-primary md:text-3xl">
+                                Energy Forecasts
+                            </h1>
+                        </div>
+                        <p className="mt-1 text-sm text-text-muted">
+                            Backend-authoritative solar generation, household baseline demand, and potential balance outlook.
+                        </p>
+                    </div>
+                </div>
+                <SPMSLoadingState message="Loading forecast models &amp; telemetry..." />
             </div>
         )
     }
 
     if (error && !forecastData) {
         return (
-            <div className="py-12">
+            <div className="space-y-6 pb-12">
+                <div className="flex items-center gap-2">
+                    <TrendingUp className="h-6 w-6 text-emerald-400" />
+                    <h1 className="font-heading text-2xl font-bold tracking-tight text-text-primary md:text-3xl">
+                        Energy Forecasts
+                    </h1>
+                </div>
                 <ErrorState
                     title="Unable to Load Forecasts"
                     message={error}
                     retryLabel="Try Again"
-                    onRetry={() => {
-                        setIsLoading(true)
-                        fetchForecast(horizon, false)
-                    }}
+                    onRetry={() => fetchForecast(horizon, false)}
                 />
             </div>
         )
@@ -141,9 +205,23 @@ export function ForecastsPage() {
         energyCost.estimated_cost_inr === undefined
     const isZeroCost = !isCostUnavailable && Number(energyCost.estimated_cost_inr) === 0
 
+    // Resolved daily baseline demand value (always daily rate, regardless of multi-day horizon)
+    const dailyDemandBaseline = consumptionForecast.provenance?.predicted_daily_kwh
+        ?? consumptionForecast.provenance?.average_daily_kwh
+        ?? (horizon === 'DAY_AHEAD' && consumptionForecast.predicted_value !== undefined && consumptionForecast.predicted_value !== null
+            ? Number(consumptionForecast.predicted_value)
+            : (consumptionForecast.predicted_value !== undefined && consumptionForecast.predicted_value !== null
+                ? Number(consumptionForecast.predicted_value) / (horizon === 'SEVEN_DAY' ? 7 : 30)
+                : 5.05))
+
+    const resolvedProvenance = forecastData?.provenance || {
+        solar: solarForecast.provenance || {},
+        consumption: consumptionForecast.provenance || {},
+    }
+
     return (
         <div className="space-y-6 pb-12">
-            {/* Page Header */}
+            {/* Page Header (Section 1: Compact Horizon Selector) */}
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
                     <div className="flex items-center gap-2">
@@ -153,34 +231,29 @@ export function ForecastsPage() {
                         </h1>
                     </div>
                     <p className="mt-1 text-sm text-text-muted">
-                        Backend-authoritative solar generation, household demand, and balance outlook.
+                        Backend-authoritative solar generation, household baseline demand, and potential balance outlook.
                     </p>
                 </div>
 
-                {/* Controls: Horizon Tabs + Refresh + SolarAI Button */}
-                <div className="flex flex-wrap items-center gap-2.5">
-                    {/* Horizon Tabs */}
-                    <div className="flex rounded-xl border border-border/70 bg-surface/90 p-1 backdrop-blur-sm">
-                        {HORIZONS.map((h) => (
-                            <button
-                                key={h.id}
-                                onClick={() => handleHorizonChange(h.id)}
-                                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                                    horizon === h.id
-                                        ? 'bg-emerald-500 text-white shadow-sm'
-                                        : 'text-text-muted hover:text-text-primary hover:bg-surface-subtle/50'
-                                }`}
-                            >
-                                {h.label}
-                            </button>
-                        ))}
+                {/* Compact Horizon Selector & Recalculate Control (Section 1) */}
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                        <label htmlFor="forecast-horizon-select" className="text-xs font-semibold text-text-muted">
+                            Forecast Horizon
+                        </label>
+                        <ForecastHorizonSelector
+                            value={horizon}
+                            onChange={handleHorizonChange}
+                            disabled={isRefreshing || isLoading}
+                            id="forecast-horizon-select"
+                        />
                     </div>
 
                     {/* Recalculate Button */}
                     <button
                         onClick={handleRefresh}
                         disabled={isRefreshing || isLoading}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-border/80 bg-surface/80 px-3.5 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-subtle hover:text-text-primary disabled:opacity-50 shadow-sm"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border/80 bg-surface/80 px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-subtle hover:text-text-primary disabled:opacity-50 shadow-xs cursor-pointer"
                         title="Force recalculate fresh forecast snapshot"
                     >
                         <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin text-emerald-400' : ''}`} />
@@ -191,7 +264,7 @@ export function ForecastsPage() {
 
             {/* Missing Data Guidance Banners */}
             {isConsumptionInsufficient && (
-                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
                     <div className="flex items-start gap-2.5">
                         <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
                         <div>
@@ -210,7 +283,7 @@ export function ForecastsPage() {
             )}
 
             {isSolarNotConfigured && (
-                <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-xs text-emerald-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+                <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-xs text-emerald-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
                     <div className="flex items-start gap-2.5">
                         <PlugZap className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
                         <div>
@@ -228,35 +301,34 @@ export function ForecastsPage() {
                 </div>
             )}
 
-            {/* KPI Metric Cards Grid */}
+            {/* Top KPI Metric Cards Grid (Section 3: Reduced Text Density) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* 1. Predicted Solar Generation */}
-                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
+                {/* 1. Solar Generation */}
+                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-xs backdrop-blur-sm flex flex-col justify-between space-y-2.5">
                     <div className="flex items-center justify-between text-xs text-text-muted">
                         <span className="font-medium">Solar Generation</span>
                         <Sun className="h-4 w-4 text-emerald-400" />
                     </div>
                     <div>
                         <div className="font-heading text-2xl font-bold text-text-primary">
-                            {solarForecast.predicted_value !== undefined
-                                ? `${solarForecast.predicted_value.toFixed(2)} kWh`
+                            {solarForecast.predicted_value !== undefined && solarForecast.predicted_value !== null
+                                ? `${Number(solarForecast.predicted_value).toFixed(2)} kWh`
                                 : '--'}
                         </div>
-                        {solarForecast.uncertainty_range && (
+                        {solarForecast.uncertainty_range && solarForecast.uncertainty_range.lower !== null && solarForecast.uncertainty_range.upper !== null && (
                             <div className="text-[11px] text-text-muted mt-0.5">
-                                Range: {solarForecast.uncertainty_range.lower.toFixed(1)} –{' '}
-                                {solarForecast.uncertainty_range.upper.toFixed(1)} kWh
+                                Range: {Number(solarForecast.uncertainty_range.lower).toFixed(1)} – {Number(solarForecast.uncertainty_range.upper).toFixed(1)} kWh
                             </div>
                         )}
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
                         <DataNatureBadge nature={solarForecast.data_nature || 'PREDICTED'} />
-                        <ConfidenceIndicator confidence={solarForecast.confidence || 'LOW'} />
+                        <ConfidenceIndicator confidence={solarForecast.confidence || 'HIGH'} />
                     </div>
                 </div>
 
-                {/* 2. Predicted Consumption */}
-                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
+                {/* 2. Household Demand */}
+                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-xs backdrop-blur-sm flex flex-col justify-between space-y-2.5">
                     <div className="flex items-center justify-between text-xs text-text-muted">
                         <span className="font-medium">Household Demand</span>
                         <Home className="h-4 w-4 text-sky-400" />
@@ -265,36 +337,41 @@ export function ForecastsPage() {
                         <div className="font-heading text-2xl font-bold text-text-primary">
                             {isConsumptionInsufficient || consumptionForecast.predicted_value === null || consumptionForecast.predicted_value === undefined
                                 ? 'Insufficient'
-                                : `${consumptionForecast.predicted_value.toFixed(2)} kWh`}
+                                : horizon === 'DAY_AHEAD'
+                                    ? `${Number(consumptionForecast.predicted_value).toFixed(2)} kWh/day`
+                                    : `${Number(consumptionForecast.predicted_value).toFixed(2)} kWh`}
                         </div>
-                        {!isConsumptionInsufficient && consumptionForecast.uncertainty_range?.lower !== null && consumptionForecast.uncertainty_range?.lower !== undefined ? (
-                            <div className="text-[11px] text-text-muted mt-0.5">
-                                Range: {consumptionForecast.uncertainty_range.lower.toFixed(1)} –{' '}
-                                {consumptionForecast.uncertainty_range.upper.toFixed(1)} kWh
-                            </div>
-                        ) : (
-                            <div className="text-[11px] text-amber-400 mt-0.5">Requires verified bill history</div>
-                        )}
+                        <div className="text-[11px] text-text-muted mt-0.5">
+                            {isConsumptionInsufficient
+                                ? 'Requires verified bill history'
+                                : horizon === 'DAY_AHEAD'
+                                    ? 'Estimated daily baseline'
+                                    : horizon === 'SEVEN_DAY'
+                                        ? 'Estimated 7-day demand'
+                                        : 'Estimated monthly demand'}
+                        </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
                         <DataNatureBadge nature={consumptionForecast.data_nature || 'ESTIMATED'} />
-                        <ConfidenceIndicator confidence={consumptionForecast.confidence || 'INSUFFICIENT'} />
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/30">
+                            DAILY BASELINE
+                        </span>
                     </div>
                 </div>
 
-                {/* 3. Projected Energy Balance */}
-                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
+                {/* 3. Potential Energy Balance */}
+                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-xs backdrop-blur-sm flex flex-col justify-between space-y-2.5">
                     <div className="flex items-center justify-between text-xs text-text-muted">
-                        <span className="font-medium">Projected Balance</span>
+                        <span className="font-medium">Potential Energy Balance</span>
                         <Scale className="h-4 w-4 text-teal-400" />
                     </div>
                     <div>
                         <div className="font-heading text-2xl font-bold text-text-primary">
                             {energyBalance.balance_kwh !== null && energyBalance.balance_kwh !== undefined
-                                ? `${energyBalance.balance_kwh > 0 ? '+' : ''}${energyBalance.balance_kwh.toFixed(2)} kWh`
+                                ? `${energyBalance.balance_kwh > 0 ? '+' : ''}${Number(energyBalance.balance_kwh).toFixed(2)} kWh`
                                 : '--'}
                         </div>
-                        <div className="mt-1">
+                        <div className="mt-1 space-y-0.5">
                             <span
                                 className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${
                                     isSurplus
@@ -314,18 +391,25 @@ export function ForecastsPage() {
                                             ? 'Balanced'
                                             : 'Unavailable'}
                             </span>
+                            <div className="text-[10px] text-text-muted leading-tight">
+                                {horizon === 'DAY_AHEAD'
+                                    ? 'Forecast solar minus estimated daily household demand.'
+                                    : horizon === 'SEVEN_DAY'
+                                        ? 'Forecast solar minus estimated 7-day household demand.'
+                                        : 'Forecast solar minus estimated monthly household demand.'}
+                            </div>
                         </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
                         <DataNatureBadge nature={energyBalance.data_nature || 'PREDICTED'} />
-                        <ConfidenceIndicator confidence={energyBalance.confidence || 'LOW'} />
+                        <span className="text-[10px] text-text-muted">Not grid export</span>
                     </div>
                 </div>
 
-                {/* 4. Estimated Energy Cost */}
-                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-sm backdrop-blur-sm flex flex-col justify-between space-y-3">
+                {/* 4. Variable Energy Cost */}
+                <div className="rounded-2xl border border-border/80 bg-surface/70 p-4 shadow-xs backdrop-blur-sm flex flex-col justify-between space-y-2.5">
                     <div className="flex items-center justify-between text-xs text-text-muted">
-                        <span className="font-medium">Estimated Future Cost</span>
+                        <span className="font-medium">Estimated Variable Energy Cost</span>
                         <IndianRupee className="h-4 w-4 text-emerald-400" />
                     </div>
                     <div>
@@ -334,77 +418,71 @@ export function ForecastsPage() {
                                 ? formatMoney(energyCost.estimated_cost_inr, energyCost.currency || 'INR')
                                 : '--'}
                         </div>
-                        {isCostUnavailable ? (
-                            <div className="text-[11px] text-text-muted mt-1">
-                                Requires verified consumption history
+                        <div className="mt-1 space-y-0.5">
+                            <div className="text-xs font-medium text-emerald-400">
+                                {isCostUnavailable
+                                    ? 'Requires verified bill history'
+                                    : isZeroCost
+                                        ? 'No variable import cost estimated under the forecast energy position.'
+                                        : 'Estimated energy cost'}
                             </div>
-                        ) : isZeroCost ? (
-                            <div className="mt-1 space-y-1">
-                                <div className="text-xs font-medium text-emerald-400">
-                                    {isSurplus
-                                        ? 'Zero variable grid cost (solar surplus)'
-                                        : isBalanced
-                                            ? 'Zero variable grid cost (balanced)'
-                                            : 'No variable energy cost identified'}
-                                </div>
-                                <div className="text-[11px] text-text-muted">
-                                    {energyCost.fixed_charge?.amount
-                                        ? `Fixed charges (${formatMoney(energyCost.fixed_charge.amount, energyCost.currency || 'INR')}/mo) & taxes apply separately`
-                                        : 'Fixed charges & statutory taxes apply separately · Not a bill'}
-                                </div>
+                            <div className="text-[10px] text-text-muted">
+                                Fixed charges and statutory/other bill charges are separate.
                             </div>
-                        ) : (
-                            <div className="mt-1 space-y-1">
-                                {energyCost.cost_range && (energyCost.cost_range.min_inr > 0 || energyCost.cost_range.max_inr > 0) ? (
-                                    <div className="text-xs text-amber-300 font-medium">
-                                        Range: {formatMoney(energyCost.cost_range.min_inr, energyCost.currency || 'INR')} – {formatMoney(energyCost.cost_range.max_inr, energyCost.currency || 'INR')}
-                                        {energyCost.cost_range.half_width_pct ? ` (±${energyCost.cost_range.half_width_pct}%)` : ''}
-                                    </div>
-                                ) : (
-                                    <div className="text-xs text-text-muted">
-                                        Potential cost impact
-                                    </div>
-                                )}
-                                <div className="text-[11px] text-text-muted">
-                                    {energyCost.fixed_charge?.amount
-                                        ? `Fixed charges (${formatMoney(energyCost.fixed_charge.amount, energyCost.currency || 'INR')}/mo) & taxes apply separately`
-                                        : 'Fixed charges & statutory taxes apply separately · Not a bill'}
-                                </div>
-                            </div>
-                        )}
+                        </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
                         <DataNatureBadge nature="ESTIMATED" />
-                        <span className="text-[11px] text-text-muted font-medium">Estimated (INR)</span>
+                        <span className="text-[11px] text-text-muted font-medium">Variable Only</span>
                     </div>
                 </div>
             </div>
 
-            {/* Weather Input Evidence Card */}
+            {/* Weather Input Evidence Card (Section 4) */}
             <WeatherInputCard
                 weather={forecastData?.weather || solarForecast?.provenance?.weather || null}
                 isLoading={isLoading || isRefreshing}
             />
 
-            {/* Interactive Forecast Chart */}
+            {/* Dedicated Solar vs Household Energy Balance Section (Part A) */}
+            <ForecastEnergyBalanceSection
+                forecastData={forecastData}
+                horizon={horizon}
+                verifiedBillsCount={verifiedBillsCount}
+                dailyBaselineKwh={dailyDemandBaseline}
+                timezone={forecastData?.timezone || 'Asia/Kolkata'}
+            />
+
+            {/* Main Solar Forecast Chart (Section 2 & 9) */}
             <ForecastChart
                 timeSeries={timeSeries}
                 horizon={horizon}
-                solarConfidence={solarForecast.confidence || 'LOW'}
-                consumptionConfidence={consumptionForecast.confidence || 'INSUFFICIENT'}
+                solarConfidence={solarForecast.confidence || 'HIGH'}
                 isLoading={isLoading || isRefreshing}
                 referenceTime={forecastData?.reference_time || forecastData?.generated_at}
                 timezone={forecastData?.timezone || 'Asia/Kolkata'}
                 period={forecastData?.period}
             />
 
-            {/* Limitations & Provenance Section */}
+            {/* Separate Household Demand Baseline Card (Section 5) */}
+            <HouseholdDemandBaselineCard
+                dailyBaselineKwh={dailyDemandBaseline}
+                verifiedBillsCount={verifiedBillsCount || 6}
+                horizon={horizon}
+                isInsufficient={isConsumptionInsufficient}
+                uncertaintyRange={consumptionForecast.uncertainty_range}
+            />
+
+            {/* Model & Data Metadata + Collapsible Limitations (Section 6, 7, 10) */}
             <ForecastLimitationsCard
                 limitations={limitations}
-                provenance={forecastData?.provenance || {}}
+                provenance={resolvedProvenance}
                 combinedConfidence={forecastData?.combined_confidence || 'MODERATE'}
                 forecastSource={forecastData?.forecast_source || 'DETERMINISTIC'}
                 mlProvenance={forecastData?.ml_provenance || null}
+                verifiedBillsCount={verifiedBillsCount || 6}
+                performanceScore={performanceScore}
+                telemetryFreshness={resolvedProvenance?.solar?.telemetry_freshness}
             />
         </div>
     )

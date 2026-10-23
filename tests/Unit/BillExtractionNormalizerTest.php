@@ -355,6 +355,156 @@ final class BillExtractionNormalizerTest
                 );
                 Assert::same([], $nsFlags, 'missing solar alone never manufactures review pressure');
             }),
+
+            TestResult::check('regression 1-3: meter, solar, and net readings reconcile when values are consistent', function (): void {
+                $consistent = self::liveShape([
+                    'meter_evidence' => ['previous_meter_reading' => 1460, 'present_meter_reading' => 1663],
+                    'consumption' => ['consumption_kwh' => 203],
+                    'solar' => [
+                        'previous_solar_reading' => 2200,
+                        'present_solar_reading' => 2503,
+                        'solar_units_kwh' => 303,
+                        'net_units_kwh' => -100,
+                    ],
+                ]);
+
+                $validations = BillAnnotationNormalizer::validations($consistent);
+                $byRule = [];
+                foreach ($validations as $v) {
+                    $byRule[$v->rule()] = $v;
+                }
+
+                // 1. Meter readings reconcile: 1663 - 1460 = 203
+                Assert::same(ValidationStatus::PASS, $byRule[ValidationRule::METER_CONSUMPTION]->status());
+                Assert::same('203.000', $byRule[ValidationRule::METER_CONSUMPTION]->expectedValue());
+                Assert::same('203.000', $byRule[ValidationRule::METER_CONSUMPTION]->extractedValue());
+
+                // 2. Solar readings reconcile: 2503 - 2200 = 303
+                Assert::same(ValidationStatus::PASS, $byRule[ValidationRule::SOLAR_PRODUCTION]->status());
+                Assert::same('303.000', $byRule[ValidationRule::SOLAR_PRODUCTION]->expectedValue());
+                Assert::same('303.000', $byRule[ValidationRule::SOLAR_PRODUCTION]->extractedValue());
+
+                // 3. Net units reconcile: 203 - 303 = -100
+                Assert::same(ValidationStatus::PASS, $byRule[ValidationRule::NET_UNITS]->status());
+                Assert::same('-100.000', $byRule[ValidationRule::NET_UNITS]->expectedValue());
+                Assert::same('-100.000', $byRule[ValidationRule::NET_UNITS]->extractedValue());
+
+                $flags = BillAnnotationNormalizer::qualityFlags(BillAnnotationNormalizer::normalize($consistent), $validations);
+                Assert::same([], $flags);
+
+                [$assessment, $reason] = BillAnnotationNormalizer::reconcileAssessment(
+                    DocumentAssessment::VALID,
+                    'Clean consistent bill',
+                    $validations,
+                    $flags
+                );
+                Assert::same(DocumentAssessment::VALID, $assessment);
+            }),
+
+            TestResult::check('regression: October bill disambiguates 303 solar export, preserves unmapped 177, passes validations cleanly', function (): void {
+                // Real October extracted data: meter 1460->1663 (203), solar 2200->2503 (303), ambiguous solar_units=177, net_units=-100
+                $octoberAnnotation = self::liveShape([
+                    'meter_evidence' => ['previous_meter_reading' => 1460, 'present_meter_reading' => 1663],
+                    'consumption' => ['consumption_kwh' => 203],
+                    'solar' => [
+                        'previous_solar_reading' => 2200,
+                        'present_solar_reading' => 2503,
+                        'solar_units_kwh' => 177,
+                        'net_units_kwh' => -100,
+                    ],
+                    'cost' => [
+                        'bill_amount' => 149, 'energy_charges' => 0, 'fixed_charges' => 30,
+                        'customer_service_charges' => 25, 'other_charges' => 45, 'taxes_adjustments' => 49,
+                    ],
+                ]);
+
+                $normalized = BillAnnotationNormalizer::normalize($octoberAnnotation);
+
+                // Authoritative solar export is 303.000, consumption 203.000, net -100.000
+                Assert::same('303.000', $normalized['values']['solar_units_kwh']);
+                Assert::same('-100.000', $normalized['values']['net_units_kwh']);
+                Assert::same('203.000', $normalized['values']['consumption_kwh']);
+
+                // Ambiguous 177 is preserved in source_metadata_json as other_solar_balance_or_adjustment_kwh
+                $meta = json_decode((string) $normalized['values']['source_metadata_json'], true);
+                Assert::same('177.000', $meta['other_solar_balance_or_adjustment_kwh']);
+                Assert::same('AMBIGUOUS_UNMAPPED', $meta['other_solar_balance_status']);
+                Assert::same('303.000', $meta['solar_meter_delta_kwh']);
+                Assert::same('303.000', $meta['solar_export_units_kwh']);
+                Assert::true($meta['charge_breakdown']['reconciled']);
+                Assert::same('149.00', $meta['charge_breakdown']['bill_amount']);
+
+                $validations = BillAnnotationNormalizer::validations($octoberAnnotation);
+                $byRule = [];
+                foreach ($validations as $v) {
+                    $byRule[$v->rule()] = $v;
+                }
+
+                // All three validations PASS deterministically
+                Assert::same(ValidationStatus::PASS, $byRule[ValidationRule::METER_CONSUMPTION]->status());
+                Assert::same('203.000', $byRule[ValidationRule::METER_CONSUMPTION]->expectedValue());
+                Assert::same('203.000', $byRule[ValidationRule::METER_CONSUMPTION]->extractedValue());
+
+                Assert::same(ValidationStatus::PASS, $byRule[ValidationRule::SOLAR_PRODUCTION]->status());
+                Assert::same('303.000', $byRule[ValidationRule::SOLAR_PRODUCTION]->expectedValue());
+                Assert::same('303.000', $byRule[ValidationRule::SOLAR_PRODUCTION]->extractedValue());
+
+                Assert::same(ValidationStatus::PASS, $byRule[ValidationRule::NET_UNITS]->status());
+                Assert::same('-100.000', $byRule[ValidationRule::NET_UNITS]->expectedValue());
+                Assert::same('-100.000', $byRule[ValidationRule::NET_UNITS]->extractedValue());
+
+                // Zero false conflict flags
+                $flags = BillAnnotationNormalizer::qualityFlags($normalized, $validations);
+                Assert::same([], $flags);
+
+                // Document assessment remains cleanly VALID
+                [$reconciledAssessment, $reconciledReason] = BillAnnotationNormalizer::reconcileAssessment(
+                    $normalized['assessment'],
+                    $normalized['assessment_reason'],
+                    $validations,
+                    $flags
+                );
+                Assert::same(DocumentAssessment::VALID, $reconciledAssessment);
+            }),
+
+            TestResult::check('genuine solar and net conflicts are not suppressed when readings do not reconcile', function (): void {
+                // Meter delta 300, net implies 200, candidate solar 150 -> genuine irreconcilable conflict
+                $conflictAnnotation = self::liveShape([
+                    'meter_evidence' => ['previous_meter_reading' => 1000, 'present_meter_reading' => 1200],
+                    'consumption' => ['consumption_kwh' => 200],
+                    'solar' => [
+                        'previous_solar_reading' => 1000,
+                        'present_solar_reading' => 1300, // solar delta = 300
+                        'solar_units_kwh' => 150,
+                        'net_units_kwh' => 0, // consumption(200) - net(0) = 200 != 300
+                    ],
+                ]);
+
+                $normalized = BillAnnotationNormalizer::normalize($conflictAnnotation);
+                $validations = BillAnnotationNormalizer::validations($conflictAnnotation);
+
+                $byRule = [];
+                foreach ($validations as $v) {
+                    $byRule[$v->rule()] = $v;
+                }
+
+                // Solar and Net fail with CONFLICT
+                Assert::same(ValidationStatus::CONFLICT, $byRule[ValidationRule::SOLAR_PRODUCTION]->status());
+                Assert::same(ValidationStatus::CONFLICT, $byRule[ValidationRule::NET_UNITS]->status());
+
+                $flags = BillAnnotationNormalizer::qualityFlags($normalized, $validations);
+                $codes = array_map(static fn ($f) => $f->code(), $flags);
+                sort($codes);
+                Assert::same(['CONFLICTING_SOLAR_READINGS', 'INCONSISTENT_NET_UNITS'], $codes);
+
+                [$assessment] = BillAnnotationNormalizer::reconcileAssessment(
+                    $normalized['assessment'],
+                    $normalized['assessment_reason'],
+                    $validations,
+                    $flags
+                );
+                Assert::same(DocumentAssessment::VALID_WITH_LIMITATIONS, $assessment);
+            }),
         ];
     }
 }

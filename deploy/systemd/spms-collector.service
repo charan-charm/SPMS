@@ -1,0 +1,25 @@
+[Unit]
+Description=SPMS Real Solar Telemetry Collection Service
+After=network.target mysql.service php8.4-fpm.service
+Wants=mysql.service
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/spms
+Environment=SPMS_DATA_ENVIRONMENT=real
+Environment=APP_ENV=production
+ExecStart=/usr/bin/php /var/www/spms/scripts/collect-solar.php --env=real
+StandardOutput=append:/var/log/spms/collector.log
+StandardError=append:/var/log/spms/collector-error.log
+
+# Security & Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/spms/storage /var/log/spms
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -81,7 +81,7 @@ final class IntelligenceService
                         'resolution' => 'MONTH',
                     ],
                     'value_kwh' => $cons,
-                    'data_nature' => $vb->value('data_nature') ?? 'ACTUAL',
+                    'data_nature' => \App\Support\Config::get('SPMS_DATA_ENVIRONMENT') === 'demo' ? 'SIMULATED' : 'ACTUAL',
                     'data_status' => 'FRESH',
                     'quality' => 'VERIFIED',
                 ];
@@ -91,7 +91,7 @@ final class IntelligenceService
         $solarPeriods = [];
         try {
             $db = \App\Support\Database::connection();
-            $stmt = $db->prepare('SELECT DATE(measurement_time) as mdate, MAX(daily_generation_kwh) as daily_kwh, data_nature, data_status, data_quality FROM solar_readings WHERE household_id = :hid GROUP BY DATE(measurement_time), data_nature, data_status, data_quality ORDER BY mdate ASC');
+            $stmt = $db->prepare('SELECT DATE(measurement_time) as mdate, MAX(daily_generation_kwh) as daily_kwh, data_nature, data_status, data_quality FROM solar_readings WHERE household_id = :hid AND daily_generation_kwh IS NOT NULL GROUP BY DATE(measurement_time), data_nature, data_status, data_quality ORDER BY mdate ASC');
             $stmt->execute(['hid' => $householdId]);
             $dailyRows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
@@ -170,6 +170,41 @@ final class IntelligenceService
                     ],
                     'notes' => [],
                 ];
+            }
+
+            if (isset($fc['time_series']) && is_array($fc['time_series'])) {
+                foreach ($fc['time_series'] as $pt) {
+                    if (isset($pt['timestamp']) && isset($pt['projected_balance_kwh'])) {
+                        $balKwh = (float) $pt['projected_balance_kwh'];
+                        $class = $balKwh > 0.1 ? 'POTENTIAL_SURPLUS' : ($balKwh < -0.1 ? 'POTENTIAL_DEFICIT' : 'BALANCED');
+                        $balanceResults[] = [
+                            'analysis' => [
+                                'type' => 'INTERVAL',
+                                'formula' => 'predicted_solar_kwh - predicted_consumption_kwh',
+                                'period' => [
+                                    'start' => $pt['timestamp'],
+                                    'end' => $pt['timestamp'],
+                                    'resolution' => 'HOUR',
+                                ],
+                            ],
+                            'scope' => ['household_id' => $householdId],
+                            'inputs' => null,
+                            'result' => [
+                                'state' => 'CLASSIFIED',
+                                'classification' => $class,
+                                'balance_kwh' => $balKwh,
+                                'explanation' => "Hourly projected balance: {$balKwh} kWh ({$class}).",
+                                'data_nature' => $fc['data_nature'] ?? 'PREDICTED',
+                                'data_status' => 'FRESH',
+                                'measurement_context' => 'POTENTIAL',
+                                'confidence_level' => $fc['combined_confidence'] ?? null,
+                                'quality' => 'GOOD',
+                                'tolerance' => ['applied_kwh' => 0.1],
+                            ],
+                            'notes' => [],
+                        ];
+                    }
+                }
             }
 
             if (isset($fc['solar_forecast']) && isset($fc['solar_forecast']['predicted_value'])) {
@@ -256,6 +291,53 @@ final class IntelligenceService
             $sources[] = 'GOODWE_SOLAR_TELEMETRY';
         }
 
+        $weatherData = null;
+        try {
+            $weatherService = new \App\Domain\Weather\WeatherService();
+            $weatherData = $weatherService->getWeatherForHousehold($householdId, $now);
+            if ($weatherData !== null && !empty($weatherData['available'])) {
+                $sources[] = 'OPEN_METEO_WEATHER_FORECAST';
+            }
+        } catch (\Throwable) {
+            // Weather provider failure is non-blocking to solar/bill intelligence
+        }
+
+        $solarConnData = null;
+        try {
+            $connRepo = new \App\Repositories\SolarConnectionRepository();
+            $conn = $connRepo->findByHouseholdId($householdId);
+            if ($conn !== null) {
+                $readingsRepo = new \App\Repositories\SolarReadingRepository();
+                $latestReading = $readingsRepo->findLatestByHouseholdId($householdId);
+
+                $solarConnData = [
+                    'household_id' => $householdId,
+                    'station_id' => $conn['station_id'] ?? null,
+                    'status' => $conn['connection_status'] ?? $conn['status'] ?? 'CONNECTED',
+                    'inverter_status' => is_array($latestReading)
+                        ? ($latestReading['inverter_status'] ?? $conn['connection_status'] ?? 'ONLINE')
+                        : ($latestReading?->inverterStatus() ?? $conn['status'] ?? 'ONLINE'),
+                    'last_telemetry_at' => is_array($latestReading)
+                        ? ($latestReading['measurement_time'] ?? null)
+                        : ($latestReading?->measurementTime() ?? null),
+                    'power_w' => is_array($latestReading)
+                        ? (float) ($latestReading['power_w'] ?? 0.0)
+                        : ($latestReading?->powerW() ?? 0.0),
+                    'daily_generation_kwh' => is_array($latestReading)
+                        ? (float) ($latestReading['daily_generation_kwh'] ?? 0.0)
+                        : ($latestReading?->dailyGenerationKwh() ?? 0.0),
+                    'data_status' => is_array($latestReading)
+                        ? ($latestReading['data_status'] ?? 'FRESH')
+                        : ($latestReading?->dataStatus() ?? 'FRESH'),
+                    'data_nature' => is_array($latestReading)
+                        ? ($latestReading['data_nature'] ?? 'ACTUAL')
+                        : ($latestReading?->dataNature() ?? 'ACTUAL'),
+                ];
+            }
+        } catch (\Throwable) {
+            // Degrade gracefully
+        }
+
         $evidence = InsightEvidenceInput::fromArray([
             'household_id' => $householdId,
             'consumption' => $consumptionPeriods,
@@ -263,6 +345,8 @@ final class IntelligenceService
             'forecast' => $forecastPeriods,
             'balance' => $balanceResults,
             'cost' => $costResults,
+            'weather' => $weatherData,
+            'solar_connection' => $solarConnData,
             'quality' => [
                 'overall_status' => $overallStatus,
                 'overall_quality' => $overallQuality,
@@ -274,8 +358,46 @@ final class IntelligenceService
         ]);
 
         $persisted = [];
-        foreach ($this->engine->evaluate($evidence, $now) as $insight) {
+        $evaluated = $this->engine->evaluate($evidence, $now);
+        foreach ($evaluated as $insight) {
             $persisted[] = $this->repository->upsert($insight, $now);
+        }
+
+        // Safe Condition Resolution (CHECK 2):
+        // Only resolve ongoing conditions when the detector has successfully evaluated
+        // sufficient positive evidence establishing that the condition no longer applies.
+        $detectedTypes = array_map(static fn (Insight $i): string => $i->type(), $persisted);
+
+        // 1. Solar Telemetry Stale: Resolve only when fresh telemetry is confirmed received
+        if (
+            $solarConnData !== null
+            && ($solarConnData['data_status'] ?? '') === 'FRESH'
+            && !empty($solarConnData['last_telemetry_at'])
+            && !in_array(InsightTaxonomy::TYPE_SOLAR_TELEMETRY_STALE, $detectedTypes, true)
+        ) {
+            $this->repository->resolveCondition($householdId, InsightTaxonomy::TYPE_SOLAR_TELEMETRY_STALE, $now);
+        }
+
+        // 2. Inverter Disconnected: Resolve only when inverter communication is confirmed online
+        $inverterStatus = strtoupper(trim((string) ($solarConnData['inverter_status'] ?? $solarConnData['status'] ?? '')));
+        if (
+            $solarConnData !== null
+            && !in_array($inverterStatus, ['OFFLINE', 'FAULT', 'DISCONNECTED', ''], true)
+            && ($solarConnData['data_status'] ?? '') === 'FRESH'
+            && !in_array(InsightTaxonomy::TYPE_INVERTER_DISCONNECTED, $detectedTypes, true)
+        ) {
+            $this->repository->resolveCondition($householdId, InsightTaxonomy::TYPE_INVERTER_DISCONNECTED, $now);
+        }
+
+        // 3. Weather Data Unavailable: Resolve only when weather service is confirmed active with forecast
+        if (
+            $weatherData !== null
+            && !empty($weatherData['available'])
+            && ($weatherData['status'] ?? '') === 'ACTIVE'
+            && !empty($weatherData['hourly'])
+            && !in_array(InsightTaxonomy::TYPE_WEATHER_DATA_UNAVAILABLE, $detectedTypes, true)
+        ) {
+            $this->repository->resolveCondition($householdId, InsightTaxonomy::TYPE_WEATHER_DATA_UNAVAILABLE, $now);
         }
 
         return $persisted;

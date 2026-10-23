@@ -187,18 +187,30 @@ final class RecommendationImpact
     /**
      * Factory for cost-aware shift.
      */
-    public static function costAwareShift(float $shiftKwh, float $estimatedSavingsInr): self
+    public static function costAwareShift(float $shiftKwh, ?float $estimatedSavingsInr = null): self
     {
         $roundedKwh = round($shiftKwh, 1);
-        $roundedInr = round($estimatedSavingsInr, 2);
-        $desc = sprintf('Estimated variable-cost exposure reduction of up to ₹%.2f by shifting ≈%.1f kWh', $roundedInr, $roundedKwh);
+        if ($estimatedSavingsInr !== null && $estimatedSavingsInr > 0) {
+            $roundedInr = round($estimatedSavingsInr, 2);
+            $desc = sprintf('Estimated variable-cost exposure reduction of up to ₹%.2f by shifting ≈%.1f kWh', $roundedInr, $roundedKwh);
+
+            return new self(
+                type: self::TYPE_COST_EXPOSURE_REDUCTION,
+                description: $desc,
+                energyKwh: $roundedKwh,
+                costInr: $roundedInr,
+                context: ['estimated_savings_inr' => $roundedInr, 'shift_kwh' => $roundedKwh]
+            );
+        }
+
+        $desc = sprintf('Potential variable-cost exposure reduction by shifting ≈%.1f kWh into solar hours', $roundedKwh);
 
         return new self(
             type: self::TYPE_COST_EXPOSURE_REDUCTION,
             description: $desc,
             energyKwh: $roundedKwh,
-            costInr: $roundedInr,
-            context: ['estimated_savings_inr' => $roundedInr, 'shift_kwh' => $roundedKwh]
+            costInr: null,
+            context: ['estimated_savings_inr' => null, 'shift_kwh' => $roundedKwh]
         );
     }
 

@@ -13,12 +13,11 @@ import {
     usePlotArea,
 } from 'recharts'
 import { ChartContainer } from '../../components/data-display/ChartContainer'
-import { DataNatureBadge } from '../../components/data-display/DataNatureBadge'
 import { ConfidenceIndicator } from '../../components/data-display/ConfidenceIndicator'
 import { getNowMarkerInfo, computePillX } from './forecastMarkerUtils'
 
 /**
- * Custom accessible tooltip for ForecastChart.
+ * Concise, accessible tooltip for ForecastChart (Section 9).
  */
 function ForecastTooltip({ active, payload, label }) {
     if (!active || !payload || payload.length === 0) {
@@ -26,84 +25,59 @@ function ForecastTooltip({ active, payload, label }) {
     }
 
     const dataPoint = payload[0]?.payload || {}
+    const solarVal = dataPoint.predicted_solar_kwh !== null && dataPoint.predicted_solar_kwh !== undefined
+        ? Number(dataPoint.predicted_solar_kwh).toFixed(2)
+        : null
+    const lowerVal = dataPoint.lower_solar_kwh !== null && dataPoint.lower_solar_kwh !== undefined
+        ? Number(dataPoint.lower_solar_kwh).toFixed(2)
+        : null
+    const upperVal = dataPoint.upper_solar_kwh !== null && dataPoint.upper_solar_kwh !== undefined
+        ? Number(dataPoint.upper_solar_kwh).toFixed(2)
+        : null
 
     return (
-        <div className="rounded-xl border border-border/80 bg-surface/95 p-3.5 shadow-xl backdrop-blur-md text-xs space-y-2 min-w-[220px]">
-            <div className="font-semibold text-text-primary border-b border-border/50 pb-1.5 flex items-center justify-between">
-                <span>{label}</span>
-                {dataPoint.hour !== undefined && dataPoint.hour !== null && (
-                    <span className="text-text-muted font-normal">Hour {dataPoint.hour}:00</span>
-                )}
+        <div className="rounded-xl border border-border/80 bg-surface/95 p-2.5 shadow-xl backdrop-blur-md text-xs space-y-1 min-w-[140px]">
+            <div className="font-semibold text-text-primary border-b border-border/40 pb-1 flex items-center justify-between">
+                <span>{label}{label && label.includes(':') ? ' IST' : ''}</span>
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    PREDICTED
+                </span>
             </div>
 
-            {/* Solar Forecast details */}
-            {dataPoint.predicted_solar_kwh !== null && dataPoint.predicted_solar_kwh !== undefined && (
+            {solarVal !== null && (
                 <div className="space-y-0.5">
-                    <div className="flex items-center justify-between font-medium text-emerald-400">
-                        <span>Solar Forecast:</span>
-                        <span>{dataPoint.predicted_solar_kwh.toFixed(3)} kWh</span>
+                    <div className="flex items-center justify-between gap-3 text-emerald-400 font-medium">
+                        <span>Solar forecast</span>
+                        <span className="font-mono">{solarVal} kWh</span>
                     </div>
-                    {dataPoint.lower_solar_kwh !== null && dataPoint.upper_solar_kwh !== null && (
-                        <div className="flex items-center justify-between text-[11px] text-text-muted">
-                            <span>Uncertainty Range:</span>
-                            <span>{dataPoint.lower_solar_kwh.toFixed(2)} – {dataPoint.upper_solar_kwh.toFixed(2)} kWh</span>
+                    {lowerVal !== null && upperVal !== null && (
+                        <div className="text-[11px] text-text-muted">
+                            Range: {lowerVal}–{upperVal} kWh
                         </div>
                     )}
                 </div>
             )}
-
-            {/* Consumption Forecast details */}
-            {dataPoint.predicted_consumption_kwh !== null && dataPoint.predicted_consumption_kwh !== undefined && (
-                <div className="space-y-0.5">
-                    <div className="flex items-center justify-between font-medium text-sky-400">
-                        <span>Consumption Forecast:</span>
-                        <span>{dataPoint.predicted_consumption_kwh.toFixed(3)} kWh</span>
-                    </div>
-                    {dataPoint.lower_consumption_kwh !== null && dataPoint.upper_consumption_kwh !== null && (
-                        <div className="flex items-center justify-between text-[11px] text-text-muted">
-                            <span>Uncertainty Range:</span>
-                            <span>{dataPoint.lower_consumption_kwh.toFixed(2)} – {dataPoint.upper_consumption_kwh.toFixed(2)} kWh</span>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* Projected Net Balance / Deficit */}
-            {dataPoint.projected_balance_kwh !== null && dataPoint.projected_balance_kwh !== undefined && (
-                <div className="flex items-center justify-between font-medium border-t border-border/40 pt-1 text-text-secondary">
-                    <span>{dataPoint.projected_balance_kwh < 0 ? 'Projected Deficit:' : (dataPoint.projected_balance_kwh > 0 ? 'Projected Surplus:' : 'Projected Balance:')}</span>
-                    <span className={dataPoint.projected_balance_kwh >= 0 ? 'text-emerald-400' : 'text-amber-400'}>
-                        {`${Math.abs(dataPoint.projected_balance_kwh).toFixed(3)} kWh`}
-                    </span>
-                </div>
-            )}
-
-            {/* Data Nature and Status badges */}
-            <div className="flex items-center gap-1.5 pt-1 border-t border-border/40">
-                <DataNatureBadge nature={dataPoint.solar_data_nature || dataPoint.consumption_data_nature || 'PREDICTED'} />
-            </div>
         </div>
     )
 }
 
 /**
- * Compact pill label for the NOW reference marker (Requirement 2 & 7).
- * Renders a restrained teal pill near the top of the chart plot area,
- * horizontally centered over the reference line's actual X coordinate.
+ * Compact, visually secondary label for NOW reference marker (Section 2).
+ * Styled as a subtle, unobtrusive slate marker so it does not distort
+ * the calendar-day forecast interpretation.
  */
 export function NowMarkerLabel(props) {
     const plotArea = usePlotArea()
     const { viewBox, value } = props
     if (!value) return null
 
-    // Determine the reference line's X coordinate (x1 coord calculated by Recharts)
+    // Reference line X coordinate
     const lineX = props.x ?? viewBox?.x ?? 0
     const topY = props.y ?? viewBox?.y ?? (plotArea?.y ?? 12)
 
     const pillWidth = 76
     const pillHeight = 18
 
-    // Prefer plotArea for boundary clamping; otherwise viewBox if it has valid width > pillWidth
     const bounds = plotArea && typeof plotArea.width === 'number' && plotArea.width > pillWidth
         ? plotArea
         : (viewBox && typeof viewBox.width === 'number' && viewBox.width > pillWidth ? viewBox : null)
@@ -118,23 +92,21 @@ export function NowMarkerLabel(props) {
                 y={pillY}
                 width={pillWidth}
                 height={pillHeight}
-                rx={4}
-                fill="#0f172a"
-                fillOpacity="0.92"
-                stroke="#14b8a6"
+                rx={3}
+                fill="#1e293b"
+                fillOpacity="0.85"
+                stroke="#475569"
                 strokeWidth={1}
-                strokeOpacity={0.6}
             />
             <text
                 x={pillX + pillWidth / 2}
-                y={pillY + 12.5}
+                y={pillY + 11}
                 textAnchor="middle"
-                fill="#2dd4bf"
-                fontSize="10"
+                fill="#94a3b8"
+                fontSize="9"
                 fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
-                fontWeight="600"
-                letterSpacing="0.025em"
-                className="fill-teal-400 font-mono text-[10px] font-semibold"
+                fontWeight="500"
+                className="fill-slate-400 font-mono text-[9px]"
             >
                 {value}
             </text>
@@ -142,77 +114,125 @@ export function NowMarkerLabel(props) {
     )
 }
 
+function resolvePointHour(pt) {
+    if (pt.local_hour !== undefined && pt.local_hour !== null) {
+        return Number(pt.local_hour)
+    }
+    if (pt.local_time) {
+        try {
+            const h = parseInt(pt.local_time.split(' ')[1].split(':')[0], 10)
+            if (!isNaN(h)) return h
+        } catch {
+            // ignore
+        }
+    }
+    if (pt.hour !== undefined && pt.hour !== null) {
+        return Number(pt.hour)
+    }
+    if (pt.timestamp) {
+        try {
+            const d = new Date(pt.timestamp)
+            const istDate = new Date(d.getTime() + (5.5 * 3600 * 1000))
+            return istDate.getUTCHours()
+        } catch {
+            // ignore
+        }
+    }
+    return 0
+}
+
 /**
- * SPMS Forecast Chart (F3 — docs/04 §250, docs/04 §1495-1496).
+ * SPMS Forecast Chart (F3).
  *
  * Visual semantics:
- * - Actual = solid
+ * - Day-Ahead: Calendar-day solar forecast from 00:00 -> 23:00 (06:00–18:00 daylight generation window)
+ * - 7-Day: Weekly trend with clear day labels (Mon, Tue, Wed...)
+ * - Monthly: 30-day outlook
  * - Predicted = dashed ('6 4')
- * - Estimated = dotted ('2 4')
  * - Uncertainty = shaded area band (fillOpacity 0.12)
- * - Solar = #86EFAC / Emerald
- * - Consumption = #93C5FD / Sky
- * - NOW reference marker = #14B8A6 / Subtle Teal dashed vertical line with compact pill
+ * - Solar = #10B981 / Emerald
+ * - NOW reference marker = visually secondary slate dashed line with compact pill
  */
 export function ForecastChart({
     timeSeries = [],
     horizon = 'DAY_AHEAD',
     solarConfidence = 'HIGH',
-    consumptionConfidence = 'MODERATE',
     isLoading = false,
     referenceTime = null,
     timezone = 'Asia/Kolkata',
     period = null,
 }) {
     const solarGradId = useId()
-    const consumptionGradId = useId()
 
-    // Format label based on horizon
-    const formattedData = timeSeries.map((pt) => {
+    // 1. For DAY_AHEAD, present as a calendar-day forecast (00:00 -> 23:00) using local daylight hours
+    let sortedSeries = [...timeSeries]
+    if (horizon === 'DAY_AHEAD' && sortedSeries.length > 0) {
+        sortedSeries.sort((a, b) => {
+            const hA = resolvePointHour(a)
+            const hB = resolvePointHour(b)
+            return hA - hB
+        })
+    }
+
+    // 2. Format labels based on horizon
+    const formattedData = sortedSeries.map((pt) => {
         let label = pt.timestamp
-        if (horizon === 'DAY_AHEAD' && pt.hour !== undefined && pt.hour !== null) {
-            label = `${String(pt.hour).padStart(2, '0')}:00`
-        } else if (pt.date) {
-            label = pt.date.slice(5) // MM-DD
-        } else if (pt.timestamp) {
-            label = pt.timestamp.slice(11, 16)
+        let localHour = undefined
+        if (horizon === 'DAY_AHEAD') {
+            const h = resolvePointHour(pt)
+            localHour = h
+            label = `${String(h).padStart(2, '0')}:00`
+        } else if (horizon === 'SEVEN_DAY') {
+            const d = pt.date ? new Date(pt.date + 'T00:00:00') : (pt.timestamp ? new Date(pt.timestamp) : null)
+            label = d && !isNaN(d.getTime())
+                ? d.toLocaleDateString('en-US', { weekday: 'short' })
+                : (pt.date ? pt.date.slice(5) : label)
+        } else {
+            // MONTHLY
+            const d = pt.date ? new Date(pt.date + 'T00:00:00') : (pt.timestamp ? new Date(pt.timestamp) : null)
+            label = d && !isNaN(d.getTime())
+                ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                : (pt.date ? pt.date.slice(5) : label)
         }
 
         return {
             ...pt,
+            hour: localHour ?? pt.hour,
             displayLabel: label,
             solarRange: [pt.lower_solar_kwh ?? 0, pt.upper_solar_kwh ?? 0],
-            consumptionRange: [pt.lower_consumption_kwh ?? 0, pt.upper_consumption_kwh ?? 0],
         }
     })
 
     const hasSolar = formattedData.some((d) => d.predicted_solar_kwh !== null && d.predicted_solar_kwh > 0)
-    const hasConsumption = formattedData.some((d) => d.predicted_consumption_kwh !== null && d.predicted_consumption_kwh > 0)
     const nowInfo = getNowMarkerInfo(referenceTime, horizon, formattedData, timezone, period)
+
+    // Expected calendar day ticks (every 2 hours) for clean DAY_AHEAD presentation
+    const dayAheadTicks = ['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00']
+    const hasAllDayTicks = horizon === 'DAY_AHEAD' && dayAheadTicks.every((t) => formattedData.some((d) => d.displayLabel === t))
 
     return (
         <ChartContainer
-            title="Solar Generation & Consumption Outlook"
+            title="Solar Generation Forecast"
             description={
                 horizon === 'DAY_AHEAD'
-                    ? '24-hour hourly projection with uncertainty intervals'
+                    ? 'Tomorrow · 24-hour solar forecast'
                     : horizon === 'SEVEN_DAY'
-                        ? '7-day daily trend projection'
-                        : '30-day monthly planning projection'
+                        ? '7-day daily trend projection with forecast uncertainty'
+                        : '30-day monthly solar generation outlook'
             }
             loading={isLoading}
             empty={!isLoading && formattedData.length === 0}
             actions={
                 <div className="flex items-center gap-3">
+                    {horizon === 'DAY_AHEAD' && (
+                        <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            Tomorrow · 24-hour solar forecast
+                        </span>
+                    )}
                     <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                         <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400" />
-                        <span>Solar</span>
+                        <span>Predicted Solar</span>
                         <ConfidenceIndicator level={solarConfidence} confidence={solarConfidence} />
-                    </div>
-                    <div className="flex items-center gap-1.5 text-xs text-text-secondary">
-                        <span className="inline-block w-2.5 h-2.5 rounded-full bg-sky-400" />
-                        <span>Consumption</span>
-                        <ConfidenceIndicator level={consumptionConfidence} confidence={consumptionConfidence} />
                     </div>
                 </div>
             }
@@ -225,10 +245,6 @@ export function ForecastChart({
                                 <stop offset="5%" stopColor="#86EFAC" stopOpacity={0.25} />
                                 <stop offset="95%" stopColor="#86EFAC" stopOpacity={0.02} />
                             </linearGradient>
-                            <linearGradient id={consumptionGradId} x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#93C5FD" stopOpacity={0.2} />
-                                <stop offset="95%" stopColor="#93C5FD" stopOpacity={0.02} />
-                            </linearGradient>
                         </defs>
 
                         <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-border/40" />
@@ -238,7 +254,8 @@ export function ForecastChart({
                             stroke="currentColor"
                             className="text-text-muted text-xs"
                             tickLine={false}
-                            interval="preserveStartEnd"
+                            ticks={hasAllDayTicks ? dayAheadTicks : undefined}
+                            interval={horizon === 'SEVEN_DAY' ? 0 : (hasAllDayTicks ? undefined : 'preserveStartEnd')}
                         />
                         <YAxis
                             stroke="currentColor"
@@ -256,23 +273,13 @@ export function ForecastChart({
                             )}
                         />
 
-                        {/* Uncertainty Bands as semi-transparent Areas */}
+                        {/* Solar Uncertainty Band as semi-transparent Area */}
                         {hasSolar && (
                             <Area
                                 name="Solar Uncertainty Interval"
                                 dataKey="upper_solar_kwh"
                                 stroke="none"
                                 fill={`url(#${solarGradId})`}
-                                legendType="none"
-                            />
-                        )}
-
-                        {hasConsumption && (
-                            <Area
-                                name="Consumption Uncertainty Interval"
-                                dataKey="upper_consumption_kwh"
-                                stroke="none"
-                                fill={`url(#${consumptionGradId})`}
                                 legendType="none"
                             />
                         )}
@@ -291,27 +298,14 @@ export function ForecastChart({
                             />
                         )}
 
-                        {/* Consumption Forecast curve (dashed per design system) */}
-                        {hasConsumption && (
-                            <Line
-                                type="monotone"
-                                name="Predicted Consumption (kWh)"
-                                dataKey="predicted_consumption_kwh"
-                                stroke="#3B82F6"
-                                strokeWidth={2.5}
-                                strokeDasharray="6 4"
-                                dot={false}
-                                activeDot={{ r: 5, strokeWidth: 2, fill: '#3B82F6' }}
-                            />
-                        )}
-
-                        {/* Backend-authoritative NOW reference marker (Requirement 2) */}
+                        {/* Backend-authoritative NOW reference marker (visually secondary) */}
                         {nowInfo && (
                             <ReferenceLine
                                 x={nowInfo.x}
-                                stroke="#14B8A6"
-                                strokeWidth={1.5}
+                                stroke="#64748b"
+                                strokeWidth={1}
                                 strokeDasharray="3 3"
+                                strokeOpacity={0.5}
                                 isFront={true}
                                 className="pointer-events-none"
                                 label={<NowMarkerLabel value={nowInfo.label} />}

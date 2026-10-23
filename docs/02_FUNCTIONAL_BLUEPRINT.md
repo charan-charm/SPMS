@@ -72,6 +72,14 @@ Responsibilities:
 
 Numerical prediction belongs to the prediction engine, not Bedrock.
 
+### Clear-Sky Baseline & Historical Validation Limitations
+
+Historical walk-forward validation records use a legacy solar-geometry calculation evaluated at integer-hour marks. The current clear-sky baseline uses astronomical geometry evaluated at hourly interval midpoints.
+
+Consequently, the historical comparison may show predicted power exceeding the theoretical clear-sky baseline during certain late-afternoon intervals. Daily totals remain consistent for the verified example.
+
+The displayed difference between clear-sky and weather-adjusted energy is model-estimated, not measured physical energy loss.
+
 ---
 
 ## F4 — Energy Balance & Situation Analysis
@@ -101,12 +109,21 @@ Responsibilities:
 ## F6 — Energy Intelligence & Insight Generation
 
 Responsibilities:
-- Interpret validated analytical facts.
-- Combine energy situation, cost impact, historical context, data quality, and confidence.
-- Detect meaningful patterns and opportunities.
-- Generate concise user-facing insights.
+- Interpret validated analytical facts from telemetry, weather, forecasts, and verified bills.
+- Combine energy situation, atmospheric conditions, cost impact, historical context, data quality, and confidence.
+- Detect meaningful patterns, opportunities, and risks through deterministic condition detectors.
+- Generate concise, user-facing insights with plain-language household titles and transparent evidence snapshots.
+- Run automatically via the scheduled `IntelligenceOrchestrator` without requiring manual user initiation.
 
-Bedrock may explain validated facts, but cannot invent numerical facts.
+### Controlled Taxonomy (26 Types across 6 Categories)
+1. **`WEATHER`**: `WEATHER_PLANNING_WINDOW`, `CLOUDY_PRODUCTION_RISK`, `WEATHER_VARIABILITY_RISK`, `WEATHER_DATA_UNAVAILABLE`.
+2. **`SOLAR`**: `SOLAR_TELEMETRY_STALE`, `INVERTER_DISCONNECTED`, `RECURRING_SOLAR_PATTERN`, `SOLAR_PRODUCTION_DECLINE`, `POTENTIAL_SOLAR_REDUCTION`, `BEST_SOLAR_DAY`.
+3. **`ENERGY`**: `SOLAR_DEMAND_MISMATCH`, `DAYTIME_SURPLUS_EVENING_DEFICIT`, `RECURRING_POTENTIAL_SURPLUS`, `RECURRING_POTENTIAL_DEFICIT`, `BALANCED_ENERGY_PROFILE`.
+4. **`CONSUMPTION`**: `UNUSUAL_CONSUMPTION_PATTERN`, `RECURRING_HIGH_DEMAND`, `EVENING_CONSUMPTION_PEAK`, `CONSUMPTION_INCREASE`, `CONSUMPTION_DECREASE`.
+5. **`COST`**: `COST_INCREASE`, `COST_DECREASE`, `COST_IMPACT_PATTERN`, `TARIFF_THRESHOLD_RISK`.
+6. **`GENERAL`**: `DATA_LIMITATION`, `WELCOME_BASELINE`.
+
+AI may explain validated facts, but cannot invent numerical facts or measurements.
 
 ---
 

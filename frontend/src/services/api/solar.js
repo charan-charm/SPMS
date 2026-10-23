@@ -74,12 +74,13 @@ export const solarApi = {
 
     /**
      * Fetch telemetry history for charts and tables.
-     * @param {{ from?: string, to?: string, limit?: number }} [params]
+     * @param {{ from?: string, to?: string, limit?: number, date?: string }} [params]
      * @param {AbortSignal} [signal]
      * @returns {Promise<{ history: Array<object>, count: number }>}
      */
     async getHistory(params = {}, signal = undefined) {
         const query = new URLSearchParams()
+        if (params.date) query.set('date', params.date)
         if (params.from) query.set('from', params.from)
         if (params.to) query.set('to', params.to)
         if (params.limit) query.set('limit', String(params.limit))
@@ -91,11 +92,31 @@ export const solarApi = {
     },
 
     /**
+     * Fetch real daily GoodWe telemetry summaries for date selection and history table.
+     * @param {AbortSignal} [signal]
+     * @returns {Promise<{ days: Array<object>, count: number }>}
+     */
+    async getDays(signal = undefined) {
+        const { data } = await apiClient.get('/solar/days', { signal })
+        return data
+    },
+
+    /**
      * Trigger manual telemetry ingestion synchronization.
      * @returns {Promise<{ synced: boolean, snapshot: object|null, latest: object|null }>}
      */
     async syncTelemetry() {
         const { data } = await apiClient.post('/solar/sync')
+        return data
+    },
+
+    /**
+     * Trigger opportunistic background visit synchronization.
+     * @param {AbortSignal} [signal]
+     * @returns {Promise<{ synced: boolean, status: string, snapshot?: object|null, latest?: object|null }>}
+     */
+    async autoSyncTelemetry(signal = undefined) {
+        const { data } = await apiClient.post('/solar/sync/auto', {}, { signal })
         return data
     },
 }

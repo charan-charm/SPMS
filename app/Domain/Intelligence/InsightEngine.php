@@ -10,8 +10,10 @@ use App\Domain\Intelligence\Detectors\CostPatternDetector;
 use App\Domain\Intelligence\Detectors\DataLimitationDetector;
 use App\Domain\Intelligence\Detectors\EnergySituationPatternDetector;
 use App\Domain\Intelligence\Detectors\InsightDetector;
+use App\Domain\Intelligence\Detectors\SolarHardwareDetector;
 use App\Domain\Intelligence\Detectors\SolarPatternDetector;
 use App\Domain\Intelligence\Detectors\SolarProductionChangeDetector;
+use App\Domain\Intelligence\Detectors\WeatherConditionDetector;
 
 /**
  * F6 — Deterministic intelligence engine (docs/10 D-043..D-045).
@@ -40,6 +42,8 @@ final class InsightEngine
         return [
             new SolarProductionChangeDetector(),
             new SolarPatternDetector(),
+            new SolarHardwareDetector(),
+            new WeatherConditionDetector(),
             new ConsumptionChangeDetector(),
             new ConsumptionPatternDetector(),
             new EnergySituationPatternDetector(),

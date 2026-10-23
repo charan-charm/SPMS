@@ -232,6 +232,24 @@ final class DemoScenarioWorkflowTest
                     }
                 }
             }),
+
+            TestResult::check('All seeded scenario households have strictly SIMULATED solar readings and never ACTUAL', function (): void {
+                $pdo = Database::connection();
+                foreach (DemoScenarioSeeder::SCENARIOS as $meta) {
+                    $stmt = $pdo->prepare('SELECT id FROM households WHERE label = :label');
+                    $stmt->execute(['label' => $meta['household_label']]);
+                    $householdId = (string) $stmt->fetchColumn();
+
+                    $stmt = $pdo->prepare('SELECT DISTINCT data_nature FROM solar_readings WHERE household_id = :hid');
+                    $stmt->execute(['hid' => $householdId]);
+                    $natures = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+                    Assert::true(count($natures) > 0, "Scenario {$meta['id']} must have solar readings");
+                    foreach ($natures as $nature) {
+                        Assert::same('SIMULATED', $nature, "Scenario {$meta['id']} reading data_nature must be SIMULATED, never ACTUAL");
+                    }
+                }
+            }),
         ];
     }
 }

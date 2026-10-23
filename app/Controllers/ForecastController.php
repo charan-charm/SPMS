@@ -25,7 +25,8 @@ final class ForecastController
 {
     public function __construct(
         private readonly ForecastService $forecastService = new ForecastService(),
-        private readonly HouseholdService $households = new HouseholdService()
+        private readonly HouseholdService $households = new HouseholdService(),
+        private readonly \App\Domain\Forecast\ForecastValidationService $validationService = new \App\Domain\Forecast\ForecastValidationService()
     ) {
     }
 
@@ -44,6 +45,40 @@ final class ForecastController
         }
 
         $result = $this->forecastService->getForecast($householdId, $validHorizon, forceFresh: false);
+
+        return Response::success($result);
+    }
+
+    /**
+     * GET /api/v1/forecasts/validation
+     *
+     * Retrieves Predicted vs Actual validation series and calculated metrics.
+     */
+    public function validation(Request $request): Response
+    {
+        $householdId = $this->requireHouseholdId($request);
+        $forecastId = $request->queryParam('forecast_id');
+        $date = $request->queryParam('date');
+
+        $result = $this->validationService->getForecastValidation(
+            $householdId,
+            forecastId: $forecastId !== null ? (string) $forecastId : null,
+            targetDate: $date !== null ? (string) $date : null
+        );
+
+        return Response::success($result);
+    }
+
+    /**
+     * GET /api/v1/forecasts/performance
+     *
+     * Retrieves aggregate historical validation metrics and completed forecast run history.
+     */
+    public function performance(Request $request): Response
+    {
+        $householdId = $this->requireHouseholdId($request);
+
+        $result = $this->validationService->getValidationPerformance($householdId);
 
         return Response::success($result);
     }
@@ -93,3 +128,4 @@ final class ForecastController
         return $householdId;
     }
 }
+

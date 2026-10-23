@@ -10,6 +10,8 @@ use App\Domain\Assistant\AssistantResponseValidator;
 use App\Domain\Assistant\Providers\AssistantProviderException;
 use App\Domain\Assistant\Providers\FakeAIProvider;
 use App\Domain\Assistant\SPMSContextBuilder;
+use App\Domain\Intelligence\Insight;
+use App\Repositories\InsightRepository;
 use Tests\Support\Assert;
 use Tests\TestResult;
 
@@ -273,6 +275,108 @@ final class AssistantSafetyAndIsolationTest
                 $solarDomains = $builder->detectDomains('Is my GoodWe inverter disconnected?', 'solar');
                 Assert::true(in_array(SPMSContextBuilder::DOMAIN_GOODWE, $solarDomains, true));
                 Assert::true(in_array(SPMSContextBuilder::DOMAIN_SOLAR, $solarDomains, true));
+            }),
+
+            TestResult::check('SPMSContextBuilder formats F6 insights context with title and summary from Insight domain objects', function (): void {
+                $mockInsightRepo = new class extends InsightRepository {
+                    public function __construct() {}
+                    public function list(array $filters = []): array
+                    {
+                        return [
+                            Insight::fromStorageRow([
+                                'id' => 'ins-001',
+                                'household_id' => 'hh-context-test',
+                                'category' => 'SOLAR',
+                                'type' => 'SOLAR_PEAK_SHIFT',
+                                'title' => 'Midday Peak Solar Shift',
+                                'summary' => 'Peak solar generation shifted by 1 hour later than baseline.',
+                                'significance' => 'HIGH',
+                                'confidence' => 'HIGH',
+                                'status' => 'DETECTED',
+                                'affected_period_start' => '2026-10-21 10:00:00',
+                                'affected_period_end' => '2026-10-21 14:00:00',
+                                'affected_period_resolution' => 'HOUR',
+                                'detected_at' => '2026-10-21 11:00:00',
+                                'first_detected_at' => '2026-10-21 11:00:00',
+                                'last_observed_at' => '2026-10-21 11:00:00',
+                                'updated_at' => '2026-10-21 11:00:00',
+                                'observation_count' => 1,
+                                'data_nature' => 'ACTUAL',
+                                'data_status' => 'FRESH',
+                                'quality' => 'GOOD',
+                                'explanation' => 'Test explanation',
+                                'explanation_source' => 'ENGINE',
+                                'evidence_summary' => 'Test evidence',
+                                'supporting_facts' => '[]',
+                                'limitations' => '[]',
+                                'provenance' => '{}',
+                            ]),
+                        ];
+                    }
+                };
+
+                $builder = new SPMSContextBuilder(insightRepository: $mockInsightRepo);
+                $context = $builder->build('hh-context-test', 'todays generation', 'insights');
+
+                Assert::true(in_array(SPMSContextBuilder::DOMAIN_INSIGHTS, $context['domains'], true));
+                Assert::true(str_contains($context['context_text'], '### F6 DETECTED PATTERNS & INSIGHTS'));
+                Assert::true(str_contains($context['context_text'], 'Midday Peak Solar Shift'));
+                Assert::true(str_contains($context['context_text'], 'Peak solar generation shifted by 1 hour later than baseline.'));
+                Assert::true(str_contains($context['context_text'], '[HIGH] Midday Peak Solar Shift'));
+            }),
+
+            TestResult::check('SPMSContextBuilder routes natural question variations across 14 categories', function (): void {
+                $builder = new SPMSContextBuilder();
+
+                $cases = [
+                    'this week generation' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'how much solar did we generate this week?' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'generation this month' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'compare this week with last week' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'what was our best generation day?' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'what was our lowest generation day?' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'last 7 days generation' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'power vs energy' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'can you turn off my AC to save power?' => [SPMSContextBuilder::DOMAIN_RECOMMENDATIONS],
+                    'is my inverter data current?' => [SPMSContextBuilder::DOMAIN_SOLAR],
+                    'what is the weather today?' => [SPMSContextBuilder::DOMAIN_WEATHER],
+                    'why is the forecast different from actual generation?' => [SPMSContextBuilder::DOMAIN_FORECAST, SPMSContextBuilder::DOMAIN_SOLAR],
+                    'how much of my bill is covered by solar?' => [SPMSContextBuilder::DOMAIN_BILLS, SPMSContextBuilder::DOMAIN_SOLAR],
+                    'do I have unverified bills?' => [SPMSContextBuilder::DOMAIN_BILLS],
+                    'why was this insight generated?' => [SPMSContextBuilder::DOMAIN_INSIGHTS],
+                    'recommendations for today' => [SPMSContextBuilder::DOMAIN_RECOMMENDATIONS],
+                ];
+
+                foreach ($cases as $query => $expectedDomains) {
+                    $ctx = $builder->build('hh-routing-test', $query);
+                    foreach ($expectedDomains as $expectedDomain) {
+                        Assert::true(
+                            in_array($expectedDomain, $ctx['domains'], true),
+                            "Query '{$query}' must detect domain '{$expectedDomain}'"
+                        );
+                    }
+                }
+            }),
+
+            TestResult::check('SPMSContextBuilder formats unavailable metrics honestly without crash or zero-filling', function (): void {
+                $builder = new SPMSContextBuilder();
+                $context = $builder->build('hh-empty-metrics-test', 'this week generation');
+
+                Assert::true(in_array(SPMSContextBuilder::DOMAIN_SOLAR, $context['domains'], true));
+                Assert::true(str_contains($context['context_text'], 'Weekly Generation: UNAVAILABLE'));
+                Assert::true(str_contains($context['context_text'], 'Rolling 7-Day Window: UNAVAILABLE'));
+                Assert::true(str_contains($context['context_text'], 'Best Generation Day on Record: UNAVAILABLE'));
+                Assert::true(str_contains($context['context_text'], 'Lowest Active Generation Day on Record: UNAVAILABLE'));
+                Assert::true(str_contains($context['context_text'], 'Today Cumulative Generation: UNAVAILABLE'));
+            }),
+
+            TestResult::check('SPMSContextBuilder includes weather context when weather domain is queried', function (): void {
+                $builder = new SPMSContextBuilder();
+                $context = $builder->build('hh-weather-test', 'what is the weather today?');
+
+                Assert::true(in_array(SPMSContextBuilder::DOMAIN_WEATHER, $context['domains'], true));
+                Assert::true(str_contains($context['context_text'], '### LOCAL WEATHER CONDITIONS & SOLAR IMPACT'));
+                Assert::true(str_contains($context['context_text'], 'Weather Outlook: UNAVAILABLE'));
             }),
         ];
     }

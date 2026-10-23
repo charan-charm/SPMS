@@ -289,6 +289,64 @@ class InsightRepository
         $statement->execute($row);
     }
 
+    /**
+     * Expire past active insights whose applicable period has elapsed.
+     */
+    public function expirePast(string $householdId, \DateTimeImmutable $now): int
+    {
+        $pdo = $this->connection();
+        $dateStr = $now->format('Y-m-d');
+
+        $stmt = $pdo->prepare(
+            'UPDATE insights SET status = :expired_status, updated_at = :now
+             WHERE household_id = :household_id
+               AND status IN (:s1, :s2, :s3, :s4)
+               AND affected_period_end IS NOT NULL
+               AND affected_period_end < :today'
+        );
+
+        $stmt->execute([
+            'expired_status' => InsightLifecycle::EXPIRED,
+            'now' => $now->format('Y-m-d H:i:s'),
+            'household_id' => $householdId,
+            's1' => InsightLifecycle::DETECTED,
+            's2' => InsightLifecycle::VALIDATED,
+            's3' => InsightLifecycle::ACTIVE,
+            's4' => InsightLifecycle::UPDATED,
+            'today' => $dateStr,
+        ]);
+
+        return $stmt->rowCount();
+    }
+
+    /**
+     * Transition active insights of a given type to RESOLVED when the condition clears.
+     */
+    public function resolveCondition(string $householdId, string $type, \DateTimeImmutable $now): int
+    {
+        $pdo = $this->connection();
+
+        $stmt = $pdo->prepare(
+            'UPDATE insights SET status = :resolved_status, updated_at = :now
+             WHERE household_id = :household_id
+               AND type = :type
+               AND status IN (:s1, :s2, :s3, :s4)'
+        );
+
+        $stmt->execute([
+            'resolved_status' => InsightLifecycle::RESOLVED,
+            'now' => $now->format('Y-m-d H:i:s'),
+            'household_id' => $householdId,
+            'type' => $type,
+            's1' => InsightLifecycle::DETECTED,
+            's2' => InsightLifecycle::VALIDATED,
+            's3' => InsightLifecycle::ACTIVE,
+            's4' => InsightLifecycle::UPDATED,
+        ]);
+
+        return $stmt->rowCount();
+    }
+
     private static function periodKey(Insight $insight): string
     {
         $period = $insight->affectedPeriod();

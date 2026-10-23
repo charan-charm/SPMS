@@ -404,6 +404,20 @@ button:hover > .solarai-av-container .solarai-av {
         0 -4px 20px -6px rgba(0, 0, 0, 0.20);
 }
 
+/* Responsive mobile layout for drawer card: full-bleed without edge margins or corner clipping */
+@media (max-width: 639px) {
+    .solarai-drawer-card {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        height: 100% !important;
+        border-radius: 0 !important;
+        border-top: none !important;
+        border-bottom: none !important;
+        border-left: none !important;
+        box-shadow: none !important;
+    }
+}
+
 
 .solarai-drawer-enter {
     animation: spms-slide-in-right 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;

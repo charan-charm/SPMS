@@ -326,11 +326,13 @@ final class BillController
                     'assessment_reason' => $draft->assessmentReason(),
                     'document_confidence' => $isStructuredXls ? null : $draft->documentConfidence(),
                     'extracted_at' => $draft->extractedAt(),
+                    'raw_values' => $draft->values(),
                 ],
                 'validations' => $validations,
                 'quality_flags' => $flags,
                 'ownership' => $ownership,
                 'sequence_validation' => $sequence->toArray(),
+                'source_metadata' => $sourceMeta,
             ],
         ]);
     }
@@ -439,11 +441,34 @@ final class BillController
             new DateTimeImmutable('now', new DateTimeZone('UTC'))
         );
 
+        $validations = array_map(
+            static fn (BillValidation $v): array => [
+                'rule' => $v->rule(),
+                'status' => $v->status(),
+                'expected_value' => $v->expectedValue(),
+                'extracted_value' => $v->extractedValue(),
+                'reason_code' => $v->reasonCode(),
+            ],
+            $this->billService->validationsFor($account, $updated->id())
+        );
+
+        $flagObjects = $this->billService->qualityFlagsFor($account, $updated->id());
+        $flags = array_map(
+            static fn (BillQualityFlag $f): array => [
+                'code' => $f->code(),
+                'field_name' => $f->fieldName(),
+            ],
+            $flagObjects
+        );
+
         return Response::success([
             'bill_id' => $updated->id(),
             'status' => $updated->status(),
             'values' => $updated->values(),
             'updated_at' => $updated->updatedAt(),
+            'validations' => $validations,
+            'quality_flags' => $flags,
+            'provenance' => $this->billService->provenanceFor($account, $updated->id()),
         ]);
     }
 

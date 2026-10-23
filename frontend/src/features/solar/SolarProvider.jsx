@@ -13,7 +13,9 @@ export function SolarProvider({ children }) {
     const [connection, setConnection] = useState(null)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState(null)
+    const [syncVersion, setSyncVersion] = useState(0)
     const mountedRef = useRef(true)
+    const lastAutoSyncRef = useRef(0)
 
     const fetchConnection = useCallback(async (signal = undefined) => {
         if (solarBootstrapPromise) {
@@ -68,6 +70,24 @@ export function SolarProvider({ children }) {
         }
     }, [isAuthenticated, hasHousehold, authStatus, householdStatus, fetchConnection])
 
+    // Opportunistic visit-triggered auto-synchronization
+    useEffect(() => {
+        if (!isAuthenticated || !hasHousehold || !connection?.configured) return
+
+        const now = Date.now()
+        if (now - lastAutoSyncRef.current < 300000) return
+        lastAutoSyncRef.current = now
+
+        if (typeof solarApi.autoSyncTelemetry === 'function') {
+            solarApi.autoSyncTelemetry().then((res) => {
+                if (mountedRef.current && res?.synced) {
+                    setSyncVersion((v) => v + 1)
+                    fetchConnection().catch(() => {})
+                }
+            }).catch(() => {})
+        }
+    }, [isAuthenticated, hasHousehold, connection?.configured, fetchConnection])
+
     const updateConnection = useCallback((newConnection) => {
         setConnection(newConnection)
     }, [])
@@ -79,6 +99,7 @@ export function SolarProvider({ children }) {
         connectionStatus,
         isLoading,
         error,
+        syncVersion,
         refreshConnection: fetchConnection,
         updateConnection,
     }

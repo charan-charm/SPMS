@@ -592,9 +592,15 @@ final class BillRepository
      * this method at all (§7/§12).
      *
      * @param array<string, array{source: string, confidence: string|null}> $provenance
+     * @param list<BillValidation> $validations
+     * @param list<BillQualityFlag> $qualityFlags
      */
-    public function saveCorrections(Bill $bill, array $provenance): void
-    {
+    public function saveCorrections(
+        Bill $bill,
+        array $provenance,
+        array $validations = [],
+        array $qualityFlags = []
+    ): void {
         $pdo = $this->connection();
 
         $pdo->beginTransaction();
@@ -605,6 +611,12 @@ final class BillRepository
 
             $this->upsertProvenance($bill->id(), $provenance, $bill->updatedAt());
 
+            foreach ($validations as $validation) {
+                $this->upsertValidation($bill->id(), $validation, $bill->updatedAt());
+            }
+
+            $this->syncAllQualityFlags($bill->id(), $bill->householdId(), $qualityFlags, $bill->updatedAt());
+
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -612,6 +624,26 @@ final class BillRepository
             }
 
             throw $e;
+        }
+    }
+
+    /**
+     * Atomically replace all quality flags for a bill.
+     * Scoped by household_id.
+     *
+     * @param list<BillQualityFlag> $flags
+     */
+    public function syncAllQualityFlags(string $billId, string $householdId, array $flags, string $now): void
+    {
+        $statement = $this->connection()->prepare(
+            'DELETE q FROM bill_quality_flags q
+             JOIN bills b ON b.id = q.bill_id
+             WHERE q.bill_id = :bill_id AND b.household_id = :household_id'
+        );
+        $statement->execute(['bill_id' => $billId, 'household_id' => $householdId]);
+
+        foreach ($flags as $flag) {
+            $this->recordQualityFlag($billId, $flag, $now);
         }
     }
 

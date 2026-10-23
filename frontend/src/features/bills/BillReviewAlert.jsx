@@ -66,6 +66,11 @@ function ConflictItem({ validation, currentValue }) {
                             <dt className="text-muted">Expected from bill readings:</dt>
                             <dd className="font-medium text-heading">
                                 {valueText(field, validation.expected_value) ?? 'Not available'}
+                                {validation.rule === 'SOLAR_PRODUCTION' && (
+                                    <span className="ml-1 text-xs text-muted font-normal">
+                                        (calculated from solar readings: present − previous)
+                                    </span>
+                                )}
                             </dd>
                         </div>
                         <div className="flex gap-2">
@@ -113,6 +118,11 @@ export function BillReviewAlert({ detail }) {
                     </CardTitle>
                     <CardDescription>
                         Some information from this bill needs your attention before it can be verified.
+                        {conflicts.length > 0 && (
+                            <span className="mt-1 block font-medium text-warning">
+                                Some reported values do not reconcile with the meter readings.
+                            </span>
+                        )}
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -179,22 +189,28 @@ export function BillValidationSummary({ validations }) {
     const HeadlineIcon = icon
 
     return (
-        <Card aria-labelledby="bill-validation-title">
-            <CardHeader>
-                <CardTitle id="bill-validation-title">Bill validation</CardTitle>
-                <CardDescription>
-                    SPMS checks related readings from your bill to identify inconsistencies before verification.
-                </CardDescription>
+        <Card aria-labelledby="bill-validation-title" className="shadow-2xs">
+            <CardHeader className="pb-2">
+                <CardTitle id="bill-validation-title" className="text-sm font-semibold">Bill validation</CardTitle>
             </CardHeader>
-            <CardContent>
-                <div className="flex items-start gap-2">
-                    <HeadlineIcon className={cn('mt-0.5 size-4 shrink-0', tone)} aria-hidden="true" />
-                    <div>
-                        <p className={cn('text-sm font-semibold', tone)}>{headline}</p>
-                        <p className="mt-0.5 text-sm text-body">{support}</p>
+            <CardContent className="flex flex-col gap-2.5 pt-0">
+                <div
+                    className={cn(
+                        'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs',
+                        conflicts > 0
+                            ? 'border-warning/40 bg-warning/10 text-warning'
+                            : notChecked > 0 && passed === 0
+                              ? 'border-border bg-surface-alt/40 text-muted'
+                              : 'border-primary/30 bg-primary/5 text-primary'
+                    )}
+                >
+                    <HeadlineIcon className={cn('size-4 shrink-0', tone)} aria-hidden="true" />
+                    <div className="flex flex-col min-w-0">
+                        <p className={cn('font-semibold text-xs leading-tight', tone)}>{headline}</p>
+                        <p className="text-[11px] text-muted leading-tight mt-0.5">{support}</p>
                     </div>
                 </div>
-                <ul className="mt-4 flex flex-col gap-2">
+                <ul className="flex flex-col divide-y divide-border/25 text-xs">
                     {validations.map((validation) => {
                         const rule = VALIDATION_RULE[validation.rule]
                         const Icon = VALIDATION_STATUS_ICON[validation.status] ?? CircleDashed
@@ -207,30 +223,44 @@ export function BillValidationSummary({ validations }) {
                         const result =
                             VALIDATION_RESULT_TEXT[validation.status] ??
                             (validation.status === 'CONFLICT' ? 'Needs review' : 'Not checked')
+                        const statusLabel =
+                            validation.status === 'NOT_CHECKED'
+                                ? validation.reason_code === 'BEFORE_SOLAR_INSTALLATION'
+                                    ? 'Pre-solar'
+                                    : (rule?.notChecked ?? result)
+                                : result
 
                         return (
-                            <li key={validation.rule} className="flex items-start gap-2">
-                                <Icon className={cn('mt-0.5 size-4 shrink-0', statusTone)} aria-hidden="true" />
-                                <div>
-                                    <p className="text-sm font-medium text-heading">
-                                        {rule?.short ?? validation.rule.replace(/_/g, ' ')}
-                                    </p>
-                                    <p className={cn('text-sm', statusTone)}>
-                                        {validation.status === 'NOT_CHECKED'
-                                            ? validation.reason_code === 'BEFORE_SOLAR_INSTALLATION'
-                                                ? 'Solar not active / not recorded for this billing period'
-                                                : (rule?.notChecked ?? result)
-                                            : result}
-                                    </p>
+                            <li key={validation.rule} className="flex flex-col gap-1 py-2 first:pt-1 last:pb-1">
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <Icon className={cn('size-3.5 shrink-0', statusTone)} aria-hidden="true" />
+                                        <span className="font-medium text-heading truncate">
+                                            {rule?.short ?? validation.rule.replace(/_/g, ' ')}
+                                        </span>
+                                    </div>
+                                    <span
+                                        className={cn(
+                                            'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold border',
+                                            validation.status === 'PASS'
+                                                ? 'bg-primary/10 border-primary/25 text-primary'
+                                                : validation.status === 'CONFLICT'
+                                                  ? 'bg-warning/10 border-warning/30 text-warning'
+                                                  : 'bg-surface-alt border-border text-muted'
+                                        )}
+                                    >
+                                        {statusLabel}
+                                    </span>
                                 </div>
+                                {validation.status === 'CONFLICT' && (
+                                    <p className="text-[11px] text-warning pl-5.5 font-medium">
+                                        Reported reading does not match expected calculation.
+                                    </p>
+                                )}
                             </li>
                         )
                     })}
                 </ul>
-                <p className="mt-4 text-xs text-muted">
-                    Consistent values still need your review — these checks compare the readings on the bill with
-                    each other, they do not verify it.
-                </p>
             </CardContent>
         </Card>
     )

@@ -234,6 +234,16 @@ final class Insight
         return $this->category;
     }
 
+    public function title(): string
+    {
+        return $this->title;
+    }
+
+    public function summary(): string
+    {
+        return $this->summary;
+    }
+
     public function status(): string
     {
         return $this->status;

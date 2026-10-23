@@ -17,7 +17,7 @@ use DateTimeZone;
  * - Enforces no-direct-appliance-control boundary (household-level advisory only).
  * - Avoids over-generation ("wall of cards") through prioritization and bounded selection.
  */
-final class RecommendationEngine
+class RecommendationEngine
 {
     public function __construct(
         private readonly RecommendationThresholds $thresholds = new RecommendationThresholds()
@@ -161,11 +161,11 @@ final class RecommendationEngine
             $candidates[] = new RecommendationCandidate(
                 type: RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW,
                 priority: Recommendation::PRIORITY_HIGH,
-                title: 'Shift Flexible Electricity to Solar Window',
+                title: 'Use flexible appliances during solar hours',
                 summary: sprintf('Potential solar-window opportunity of approximately %.1f kWh expected during daytime solar hours.', $balanceKwh),
-                action: 'Consider shifting flexible household electricity use (e.g. water heating, laundry, pump) to the midday solar window where practical.',
+                action: 'Run the washing machine, water pump or water heater during the higher-solar period.',
                 reason: sprintf('Solar generation is forecast to exceed estimated household consumption by approximately %.1f kWh during peak daylight. This is a forecast-derived potential opportunity, not guaranteed savings.', $balanceKwh),
-                timingWindow: 'Daytime solar window (11:00–15:00)',
+                timingWindow: '11:00–15:00',
                 impact: RecommendationImpact::solarSelfConsumption($balanceKwh),
                 evidence: $evidence,
                 confidence: $confidence,
@@ -189,15 +189,22 @@ final class RecommendationEngine
                     $evidence->quality ?? 'GOOD'
                 );
                 if ($insightType === 'RECURRING_POTENTIAL_SURPLUS') {
+                    $surplusKwh = isset($insight['context']['average_surplus_kwh']) && is_numeric($insight['context']['average_surplus_kwh'])
+                        ? (float) $insight['context']['average_surplus_kwh']
+                        : null;
+                    $impact = ($surplusKwh !== null && $surplusKwh > 0.0)
+                        ? RecommendationImpact::solarSelfConsumption($surplusKwh)
+                        : RecommendationImpact::informational('Run discretionary appliances during peak daylight hours to maximize solar self-consumption.');
+
                     $candidates[] = new RecommendationCandidate(
                         type: RecommendationTaxonomy::TYPE_USE_AVAILABLE_SOLAR,
                         priority: Recommendation::PRIORITY_MEDIUM,
-                        title: 'Utilize Consistent Daytime Solar Surplus',
-                        summary: 'Historical patterns demonstrate recurring midday surplus.',
-                        action: 'Consider shifting flexible household loads into peak daytime solar generation hours.',
+                        title: 'Use flexible appliances during solar hours',
+                        summary: 'Historical patterns demonstrate recurring midday solar surplus.',
+                        action: 'Run discretionary appliances during peak daylight hours to maximize solar self-consumption.',
                         reason: 'Consistently higher midday generation than consumption across past cycles.',
-                        timingWindow: 'Midday solar hours (11:00–14:00)',
-                        impact: RecommendationImpact::solarSelfConsumption(2.5),
+                        timingWindow: '11:00–14:00',
+                        impact: $impact,
                         evidence: $evidence,
                         confidence: $conf,
                         quality: $evidence->quality ?? 'GOOD',
@@ -213,11 +220,11 @@ final class RecommendationEngine
                     $candidates[] = new RecommendationCandidate(
                         type: RecommendationTaxonomy::TYPE_EVENING_DEFICIT_PREPARATION,
                         priority: Recommendation::PRIORITY_HIGH,
-                        title: 'Prepare for Recurring Evening Deficit Window',
+                        title: 'Prepare flexible loads before evening deficit',
                         summary: 'Household encounters energy deficit after sunset.',
-                        action: 'Consider completing flexible high-demand activities before sunset to minimize evening grid reliance.',
+                        action: 'Complete flexible electricity-intensive activities before sunset to minimize evening grid reliance.',
                         reason: 'Solar production drops sharply while household evening demand rises.',
-                        timingWindow: 'Evening (18:00–21:00)',
+                        timingWindow: '18:00–21:00',
                         impact: RecommendationImpact::gridImportReduction(),
                         evidence: $evidence,
                         confidence: $conf,
@@ -234,9 +241,9 @@ final class RecommendationEngine
                     $candidates[] = new RecommendationCandidate(
                         type: RecommendationTaxonomy::TYPE_HIGH_DEMAND_REDUCTION,
                         priority: Recommendation::PRIORITY_MEDIUM,
-                        title: 'Household Consumption Moderation',
+                        title: 'Moderate household electricity consumption',
                         summary: 'Recurring high household consumption observed across recent billing periods.',
-                        action: 'Review recurring household electricity consumption and reduce avoidable usage where practical.',
+                        action: 'Review discretionary household electricity consumption and reduce avoidable usage where practical.',
                         reason: 'Your last 3 verified bills show recurring household consumption above the current baseline.',
                         timingWindow: 'Ongoing billing cycle',
                         impact: RecommendationImpact::highDemandReduction(),
@@ -255,12 +262,12 @@ final class RecommendationEngine
                     $candidates[] = new RecommendationCandidate(
                         type: RecommendationTaxonomy::TYPE_COST_AWARE_SHIFT,
                         priority: Recommendation::PRIORITY_MEDIUM,
-                        title: 'Cost-Aware Load Timing Optimization',
+                        title: 'Shift discretionary usage to avoid peak cost',
                         summary: 'Electricity tariffs or slab rates indicate potential cost exposure.',
-                        action: 'Shift discretionary usage away from higher-rate evening consumption periods.',
+                        action: 'Shift flexible energy usage into peak daytime solar generation to lower variable grid energy charges.',
                         reason: 'Discretionary grid consumption during peak hours increases electricity expenditure.',
                         timingWindow: 'Before 17:00 or after 22:00',
-                        impact: RecommendationImpact::costAwareShift(1.5, 12.5),
+                        impact: RecommendationImpact::costAwareShift(1.5, null),
                         evidence: $evidence,
                         confidence: $conf,
                         quality: $evidence->quality ?? 'GOOD',
@@ -276,9 +283,9 @@ final class RecommendationEngine
                     $candidates[] = new RecommendationCandidate(
                         type: RecommendationTaxonomy::TYPE_SOLAR_DECLINE_RESPONSE,
                         priority: Recommendation::PRIORITY_MEDIUM,
-                        title: 'Solar Generation Decline Advisory',
+                        title: 'Adjust load expectations for solar decline',
                         summary: 'Observed solar output trend is lower than previous comparable periods.',
-                        action: 'Inspect panel cleanliness and reduce daytime discretionary load expectations.',
+                        action: 'Verify solar panel cleanliness and inverter telemetry, and plan flexible usage around lower expected solar yield.',
                         reason: 'Solar yields have diminished relative to baseline clear-sky performance.',
                         timingWindow: 'Daytime',
                         impact: RecommendationImpact::informational('Adjust daytime flexible load expectations to match reduced solar generation.'),
@@ -343,6 +350,16 @@ final class RecommendationEngine
         $surplusHours = $this->findSurplusHours($timeSeries);
         $deficitHours = $this->findDeficitHours($timeSeries);
 
+        $weatherEvidence = $this->buildWeatherEvidence(
+            $forecast['weather'] ?? null,
+            $forecast['period'] ?? null,
+            $timeSeries,
+            !empty($surplusHours) ? $surplusHours : null
+        );
+        if ($weatherEvidence !== null && in_array($weatherEvidence['status'] ?? '', ['ACTIVE', 'STALE'], true)) {
+            $provenance[] = 'OPEN_METEO';
+        }
+
         // Rule A: Daytime Solar Opportunity / Surplus
         // IF solar > consumption by threshold OR balance classification is SURPLUS / POTENTIAL_SURPLUS
         if (
@@ -350,8 +367,15 @@ final class RecommendationEngine
             && $balanceKwh !== null && $balanceKwh >= $this->thresholds->minSurplusKwh
         ) {
             $timingWindow = !empty($surplusHours)
-                ? sprintf('Today, %s', $surplusHours)
-                : 'Daytime solar window (10:00–15:00)';
+                ? $surplusHours
+                : '10:00–15:00';
+
+            $ruleAWeatherEvidence = $this->buildWeatherEvidence(
+                $forecast['weather'] ?? null,
+                $forecast['period'] ?? null,
+                $timeSeries,
+                $timingWindow
+            ) ?? $weatherEvidence;
 
             $candidateType = RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW;
 
@@ -381,13 +405,19 @@ final class RecommendationEngine
                 ],
                 cost: $costProj,
                 limitations: $limitations,
-                provenance: array_values(array_unique($provenance))
+                provenance: array_values(array_unique($provenance)),
+                weather: $ruleAWeatherEvidence
             );
 
-            $action = 'Consider shifting flexible household electricity use (e.g. water heating, laundry, pump) to the midday solar window where practical.';
+            $action = 'Run the washing machine, water pump or water heater during the higher-solar period.';
+            $weatherReasonPart = '';
+            if ($ruleAWeatherEvidence !== null && !empty($ruleAWeatherEvidence['explanation'])) {
+                $weatherReasonPart = ' ' . $ruleAWeatherEvidence['explanation'];
+            }
             $reason = sprintf(
-                'Solar generation is forecast to exceed estimated household consumption by approximately %.1f kWh during peak sunlight hours. This is a forecast-derived potential opportunity, not guaranteed savings.',
-                $balanceKwh
+                'Solar generation is forecast to exceed estimated household consumption by approximately %.1f kWh during peak sunlight hours.%s This is a forecast-derived potential opportunity, not guaranteed savings.',
+                $balanceKwh,
+                $weatherReasonPart
             );
 
             $dataNature = (($solarFc['data_nature'] ?? '') === 'SIMULATED' || ($forecast['data_nature'] ?? '') === 'SIMULATED')
@@ -397,7 +427,7 @@ final class RecommendationEngine
             $candidates[] = new RecommendationCandidate(
                 type: $candidateType,
                 priority: Recommendation::PRIORITY_HIGH,
-                title: 'Shift Flexible Electricity to Solar Window',
+                title: 'Use flexible appliances during solar hours',
                 summary: sprintf('Potential solar-window opportunity of approximately %.1f kWh expected during peak sunlight.', $balanceKwh),
                 action: $action,
                 reason: $reason,
@@ -424,11 +454,29 @@ final class RecommendationEngine
         ) {
             $deficitKwh = abs($balanceKwh);
             $timingWindow = !empty($deficitHours)
-                ? sprintf('Evening, %s', $deficitHours)
-                : 'Evening deficit period (18:00–22:00)';
+                ? $deficitHours
+                : '18:00–22:00';
 
             $unitRate = $this->extractUnitRate($costProj);
             $impact = RecommendationImpact::avoidedDeficit($deficitKwh, $unitRate);
+
+            $ruleBWeatherEvidence = $this->buildWeatherEvidence(
+                $forecast['weather'] ?? null,
+                $forecast['period'] ?? null,
+                $timeSeries,
+                $timingWindow
+            ) ?? $weatherEvidence;
+
+            $action = 'Postpone or reduce high-power appliance usage during the evening deficit period.';
+            $weatherReasonPart = '';
+            if ($ruleBWeatherEvidence !== null && !empty($ruleBWeatherEvidence['explanation'])) {
+                $weatherReasonPart = ' ' . $ruleBWeatherEvidence['explanation'];
+            }
+            $reason = sprintf(
+                'Household demand is expected to exceed solar availability by ≈%.1f kWh during this window, leading to potential grid reliance.%s',
+                $deficitKwh,
+                $weatherReasonPart
+            );
 
             $evidence = new RecommendationEvidence(
                 solarForecast: [
@@ -453,19 +501,14 @@ final class RecommendationEngine
                 ],
                 cost: $costProj,
                 limitations: $limitations,
-                provenance: array_values(array_unique($provenance))
-            );
-
-            $action = 'Consider reducing discretionary or flexible electricity usage during the expected deficit window.';
-            $reason = sprintf(
-                'Household demand is expected to exceed solar availability by ≈%.1f kWh during this window, leading to potential grid reliance.',
-                $deficitKwh
+                provenance: array_values(array_unique($provenance)),
+                weather: $ruleBWeatherEvidence
             );
 
             $candidates[] = new RecommendationCandidate(
                 type: RecommendationTaxonomy::TYPE_AVOID_DEFICIT_WINDOW,
                 priority: Recommendation::PRIORITY_MEDIUM,
-                title: 'Moderate Usage During Expected Deficit Window',
+                title: 'Reduce high-power appliances during evening deficit',
                 summary: sprintf('Expected net deficit of ≈%.1f kWh during evening or low-solar periods.', $deficitKwh),
                 action: $action,
                 reason: $reason,
@@ -496,8 +539,16 @@ final class RecommendationEngine
         ) {
             $costInr = (float) $costProj['estimated_cost_inr'];
             $shiftKwh = min(abs($balanceKwh), $solarVal ?? abs($balanceKwh));
-            $unitRate = $this->extractUnitRate($costProj) ?? 7.50;
-            $savingsInr = round($shiftKwh * $unitRate, 2);
+            $unitRate = $this->extractUnitRate($costProj);
+            $savingsInr = ($unitRate !== null && $unitRate > 0) ? round($shiftKwh * $unitRate, 2) : null;
+
+            $shiftWindow = !empty($surplusHours) ? $surplusHours : '10:00–15:00';
+            $ruleEWeatherEvidence = $this->buildWeatherEvidence(
+                $forecast['weather'] ?? null,
+                $forecast['period'] ?? null,
+                $timeSeries,
+                $shiftWindow
+            ) ?? $weatherEvidence;
 
             $impact = RecommendationImpact::costAwareShift($shiftKwh, $savingsInr);
             $costProvenance = array_merge($provenance, ['F5_COST']);
@@ -524,16 +575,24 @@ final class RecommendationEngine
                     'source' => 'F5_ENERGY_COST',
                 ],
                 limitations: $limitations,
-                provenance: array_values(array_unique($costProvenance))
+                provenance: array_values(array_unique($costProvenance)),
+                weather: $ruleEWeatherEvidence
             );
+
+            $candidateSummary = $savingsInr !== null
+                ? sprintf('Potential variable energy charge reduction of up to ₹%.2f.', $savingsInr)
+                : sprintf('Potential variable energy charge reduction by shifting ≈%.1f kWh into solar hours.', $shiftKwh);
+            $candidateReason = $savingsInr !== null
+                ? sprintf('Estimated variable energy cost is ₹%.2f. Maximizing solar self-consumption directly mitigates grid energy cost exposure.', $costInr)
+                : sprintf('Estimated variable energy cost is ₹%.2f. Maximizing daytime solar self-consumption mitigates grid energy cost exposure.', $costInr);
 
             $candidates[] = new RecommendationCandidate(
                 type: RecommendationTaxonomy::TYPE_COST_AWARE_SHIFT,
                 priority: Recommendation::PRIORITY_MEDIUM,
-                title: 'Cost-Aware Load Shifting',
-                summary: sprintf('Potential variable energy charge reduction of up to ₹%.2f.', $savingsInr),
-                action: 'Shift discretionary usage from evening hours into peak daytime solar generation.',
-                reason: sprintf('Estimated variable energy cost is ₹%.2f. Maximizing solar self-consumption directly mitigates grid energy cost exposure.', $costInr),
+                title: 'Shift discretionary usage to avoid peak cost',
+                summary: $candidateSummary,
+                action: 'Shift flexible energy usage into peak daytime solar generation to lower variable grid energy charges.',
+                reason: $candidateReason,
                 timingWindow: 'Upcoming billing period',
                 impact: $impact,
                 evidence: $evidence,
@@ -575,6 +634,8 @@ final class RecommendationEngine
             \App\Domain\Intelligence\InsightLifecycle::UPDATED,
         ];
 
+        $weatherEvidence = $this->buildWeatherEvidence($forecast['weather'] ?? null, $forecast['period'] ?? null);
+
         foreach ($insights as $insight) {
             $type = $insight['type'] ?? '';
             $confidence = RecommendationConfidence::normalize($insight['confidence'] ?? 'LOW');
@@ -585,6 +646,9 @@ final class RecommendationEngine
             }
 
             $provenance = ['F6_INSIGHTS'];
+            if ($weatherEvidence !== null && in_array($weatherEvidence['status'] ?? '', ['ACTIVE', 'STALE'], true)) {
+                $provenance[] = 'OPEN_METEO';
+            }
             $insightSummary = $insight['summary'] ?? '';
             $insightPeriodStart = $insight['affected_period_start'] ?? $now->format('Y-m-d');
             $insightPeriodEnd = $insight['affected_period_end'] ?? $now->format('Y-m-d');
@@ -594,16 +658,17 @@ final class RecommendationEngine
                 $candidates[] = new RecommendationCandidate(
                     type: RecommendationTaxonomy::TYPE_EVENING_DEFICIT_PREPARATION,
                     priority: Recommendation::PRIORITY_HIGH,
-                    title: 'Prepare Flexible Loads Before Evening Deficit',
+                    title: 'Prepare flexible loads before evening deficit',
                     summary: 'Recent pattern shows strong midday solar generation followed by high evening demand.',
-                    action: 'Complete flexible electricity-intensive activities (e.g. laundry, water pumping) before 16:00.',
+                    action: 'Complete flexible electricity-intensive activities (e.g. laundry, water pumping) before sunset to minimize evening grid reliance.',
                     reason: 'Your household consistently experiences potential surplus around midday and deficit after sunset. Shifting flexible loads earlier reduces evening grid dependency.',
                     timingWindow: 'Daily before 16:00',
                     impact: RecommendationImpact::loadShift(1.5, 'midday solar (11:00–15:00)'),
                     evidence: new RecommendationEvidence(
                         insights: [$insight],
                         limitations: $limitations,
-                        provenance: $provenance
+                        provenance: $provenance,
+                        weather: $weatherEvidence
                     ),
                     confidence: $confidence,
                     quality: $insight['quality'] ?? 'GOOD',
@@ -628,16 +693,17 @@ final class RecommendationEngine
                 $candidates[] = new RecommendationCandidate(
                     type: RecommendationTaxonomy::TYPE_HIGH_DEMAND_REDUCTION,
                     priority: Recommendation::PRIORITY_MEDIUM,
-                    title: 'Household Consumption Moderation',
+                    title: 'Moderate household electricity consumption',
                     summary: 'Recurring high household consumption observed across recent billing periods.',
-                    action: 'Review recurring household electricity consumption and reduce avoidable usage where practical.',
+                    action: 'Review discretionary household electricity consumption and reduce avoidable usage where practical.',
                     reason: $reason,
                     timingWindow: 'Ongoing billing cycle',
                     impact: RecommendationImpact::highDemandReduction($excessKwh),
                     evidence: new RecommendationEvidence(
                         insights: [$insight],
                         limitations: $limitations,
-                        provenance: $provenance
+                        provenance: $provenance,
+                        weather: $weatherEvidence
                     ),
                     confidence: $confidence,
                     quality: $insight['quality'] ?? 'GOOD',
@@ -656,7 +722,7 @@ final class RecommendationEngine
                 $candidates[] = new RecommendationCandidate(
                     type: RecommendationTaxonomy::TYPE_SOLAR_DECLINE_RESPONSE,
                     priority: Recommendation::PRIORITY_LOW,
-                    title: 'Adjust Load Expectations for Solar Decline',
+                    title: 'Adjust load expectations for solar decline',
                     summary: 'Observed solar production has declined relative to prior periods.',
                     action: 'Verify solar panel cleanliness and inverter telemetry, and plan flexible usage around lower expected solar yield.',
                     reason: sprintf('Solar production showed a noticeable decline (%s). Ensure hardware status is normal and adjust daytime usage expectations.', $insightSummary),
@@ -665,7 +731,8 @@ final class RecommendationEngine
                     evidence: new RecommendationEvidence(
                         insights: [$insight],
                         limitations: $limitations,
-                        provenance: $provenance
+                        provenance: $provenance,
+                        weather: $weatherEvidence
                     ),
                     confidence: $confidence,
                     quality: $insight['quality'] ?? 'GOOD',
@@ -674,6 +741,104 @@ final class RecommendationEngine
                     limitations: $limitations,
                     relevantPeriodStart: $insightPeriodStart,
                     relevantPeriodEnd: $insightPeriodEnd,
+                    validFrom: $now,
+                    validUntil: $validUntil
+                );
+            }
+
+            // Weather Planning Window Rule
+            if ($type === 'WEATHER_PLANNING_WINDOW') {
+                $projectedSurplusKwh = null;
+                if ($forecast !== null && isset($forecast['energy_balance_projection'])) {
+                    $eb = $forecast['energy_balance_projection'];
+                    if (($eb['state'] ?? '') === 'CLASSIFIED' && ($eb['classification'] ?? '') === 'POTENTIAL_SURPLUS') {
+                        $projectedSurplusKwh = (float) ($eb['balance_kwh'] ?? 0.0);
+                    }
+                }
+
+                $impact = ($projectedSurplusKwh !== null && $projectedSurplusKwh > 0.0)
+                    ? RecommendationImpact::solarSelfConsumption($projectedSurplusKwh)
+                    : RecommendationImpact::informational('Maximize solar self-consumption by scheduling flexible appliances during clear-sky midday hours.');
+
+                $candidates[] = new RecommendationCandidate(
+                    type: RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW,
+                    priority: Recommendation::PRIORITY_HIGH,
+                    title: 'Use flexible appliances during solar hours',
+                    summary: 'Potential solar-window opportunity: forecast indicates favorable solar production and low cloud cover during peak daytime hours.',
+                    action: 'Run washing machines, water pumps, water heaters, or EV charging during the 10:00–15:00 solar window.',
+                    reason: 'Clear skies and elevated solar irradiance are expected tomorrow. Running high-consumption loads during this window increases direct solar self-consumption and lowers grid energy costs.',
+                    timingWindow: '10:00–15:00 tomorrow',
+                    impact: $impact,
+                    evidence: new RecommendationEvidence(
+                        insights: [$insight],
+                        limitations: $limitations,
+                        provenance: array_unique(array_merge($provenance, ['OPEN_METEO_WEATHER_FORECAST'])),
+                        weather: $weatherEvidence
+                    ),
+                    confidence: $confidence,
+                    quality: $insight['quality'] ?? 'GOOD',
+                    dataNature: $insight['data_nature'] ?? 'PREDICTED',
+                    provenance: array_unique(array_merge($provenance, ['OPEN_METEO_WEATHER_FORECAST'])),
+                    limitations: $limitations,
+                    relevantPeriodStart: $insightPeriodStart,
+                    relevantPeriodEnd: $insightPeriodEnd,
+                    validFrom: $now,
+                    validUntil: $validUntil
+                );
+            }
+
+            // Cloudy Production Risk Rule
+            if ($type === 'CLOUDY_PRODUCTION_RISK') {
+                $candidates[] = new RecommendationCandidate(
+                    type: RecommendationTaxonomy::TYPE_SOLAR_DECLINE_RESPONSE,
+                    priority: Recommendation::PRIORITY_MEDIUM,
+                    title: 'Prepare for lower solar generation during cloudy conditions',
+                    summary: 'Forecast indicates increased cloud cover or low solar irradiance tomorrow.',
+                    action: 'Postpone flexible discretionary electricity usage or run essentials during the clearest daylight hours.',
+                    reason: 'Overcast conditions are forecast to attenuate solar irradiance. Reducing daytime flexible loads helps avoid unexpected grid reliance.',
+                    timingWindow: 'Tomorrow daytime',
+                    impact: RecommendationImpact::informational('Adjust daytime flexible load scheduling to match reduced solar generation.'),
+                    evidence: new RecommendationEvidence(
+                        insights: [$insight],
+                        limitations: $limitations,
+                        provenance: array_unique(array_merge($provenance, ['OPEN_METEO_WEATHER_FORECAST'])),
+                        weather: $weatherEvidence
+                    ),
+                    confidence: $confidence,
+                    quality: $insight['quality'] ?? 'GOOD',
+                    dataNature: $insight['data_nature'] ?? 'PREDICTED',
+                    provenance: array_unique(array_merge($provenance, ['OPEN_METEO_WEATHER_FORECAST'])),
+                    limitations: $limitations,
+                    relevantPeriodStart: $insightPeriodStart,
+                    relevantPeriodEnd: $insightPeriodEnd,
+                    validFrom: $now,
+                    validUntil: $validUntil
+                );
+            }
+
+            // Solar Telemetry Stale or Inverter Disconnected Rule
+            if ($type === 'SOLAR_TELEMETRY_STALE' || $type === 'INVERTER_DISCONNECTED') {
+                $candidates[] = new RecommendationCandidate(
+                    type: RecommendationTaxonomy::TYPE_DATA_LIMITATION,
+                    priority: Recommendation::PRIORITY_HIGH,
+                    title: 'Check solar inverter connectivity',
+                    summary: 'Inverter telemetry has not updated within the expected threshold or hardware is offline.',
+                    action: 'Verify your solar inverter Wi-Fi logger or network connection to ensure real-time telemetry reaches SPMS.',
+                    reason: 'Real-time solar monitoring and live power recommendations depend on current inverter measurements. Telemetry is currently stale or offline.',
+                    timingWindow: 'Immediate',
+                    impact: RecommendationImpact::informational('Verify inverter logger connectivity to restore real-time monitoring and recommendations.'),
+                    evidence: new RecommendationEvidence(
+                        insights: [$insight],
+                        limitations: array_merge(['INVERTER_TELEMETRY_STALE'], $limitations),
+                        provenance: array_unique(array_merge($provenance, ['GOODWE_SOLAR_TELEMETRY']))
+                    ),
+                    confidence: $confidence,
+                    quality: 'DEGRADED',
+                    dataNature: $insight['data_nature'] ?? 'ACTUAL',
+                    provenance: array_unique(array_merge($provenance, ['GOODWE_SOLAR_TELEMETRY'])),
+                    limitations: array_merge(['INVERTER_TELEMETRY_STALE'], $limitations),
+                    relevantPeriodStart: null,
+                    relevantPeriodEnd: null,
                     validFrom: $now,
                     validUntil: $validUntil
                 );
@@ -693,7 +858,7 @@ final class RecommendationEngine
         return new RecommendationCandidate(
             type: RecommendationTaxonomy::TYPE_DATA_LIMITATION,
             priority: Recommendation::PRIORITY_LOW,
-            title: 'Limited Consumption History Notice',
+            title: 'Limited consumption history notice',
             summary: 'Actionable consumption-based recommendations require verified electricity bills.',
             action: 'Upload your recent electricity bills to unlock personalized consumption and savings recommendations.',
             reason: 'Without verified billing history, household electricity demand cannot be accurately modeled, preventing reliable deficit and cost shift advice.',
@@ -724,19 +889,29 @@ final class RecommendationEngine
     private function buildStaleSolarLimitationCandidate(DateTimeImmutable $now, ?array $solarLatest, array $limitations): RecommendationCandidate
     {
         $validUntil = $now->modify('+6 hours');
-        $lastObserved = $solarLatest['received_at'] ?? $solarLatest['measurement_time'] ?? $solarLatest['timestamp'] ?? 'Unknown';
+        $lastObservedRaw = (string) ($solarLatest['received_at'] ?? $solarLatest['measurement_time'] ?? $solarLatest['timestamp'] ?? 'Unknown');
+        $lastObservedDisplay = $lastObservedRaw;
+        if ($lastObservedRaw !== 'Unknown') {
+            try {
+                $dt = new DateTimeImmutable($lastObservedRaw, new DateTimeZone('UTC'));
+                $dtIst = $dt->setTimezone(new DateTimeZone('Asia/Kolkata'));
+                $lastObservedDisplay = $dtIst->format('H:i') . ' IST';
+            } catch (\Throwable) {
+                $lastObservedDisplay = $lastObservedRaw;
+            }
+        }
 
         return new RecommendationCandidate(
             type: RecommendationTaxonomy::TYPE_DATA_LIMITATION,
             priority: Recommendation::PRIORITY_MEDIUM,
-            title: 'Inverter Telemetry Stale: Check Connection',
+            title: 'Solar data is out of date',
             summary: 'Live solar inverter readings are currently delayed or unavailable.',
-            action: 'Check inverter Wi-Fi connection or SEMS Portal sync status.',
-            reason: sprintf('Solar inverter data was last refreshed at %s (>15 minutes ago). Solar recommendations degrade until fresh readings resume.', $lastObserved),
+            action: 'Check inverter Wi-Fi connection or SEMS Portal sync status to resume real-time recommendations.',
+            reason: sprintf('Solar inverter data was last refreshed at %s (>15 minutes ago). Because live inverter telemetry is marked STALE, recommendations rely on predictive modeling until fresh readings resume.', $lastObservedDisplay),
             timingWindow: 'Current inverter status',
             impact: RecommendationImpact::informational('Real-time solar recommendations resume once inverter synchronizes.'),
             evidence: new RecommendationEvidence(
-                solarForecast: ['status' => 'STALE', 'last_reading' => $lastObserved],
+                solarForecast: ['status' => 'STALE', 'last_reading' => $lastObservedDisplay],
                 limitations: array_merge(['STALE_SOLAR_TELEMETRY'], $limitations),
                 provenance: ['GOODWE_SEMS']
             ),
@@ -818,40 +993,97 @@ final class RecommendationEngine
     }
 
     /**
+     * Derive the highest useful forecast solar generation window in household local time.
+     *
      * @param list<array<string, mixed>> $timeSeries
      */
     private function findSurplusHours(array $timeSeries): string
     {
-        $surplusHours = [];
+        if (empty($timeSeries)) {
+            return '';
+        }
+
+        // Peak solar generation across the series
+        $peakSolar = 0.0;
         foreach ($timeSeries as $pt) {
-            $bal = (float) ($pt['balance_kwh'] ?? 0);
-            if ($bal >= $this->thresholds->minSurplusKwh && isset($pt['timestamp'])) {
-                $time = substr((string) $pt['timestamp'], 11, 5);
-                if ($time !== '') {
-                    $surplusHours[] = $time;
+            $s = (float) ($pt['predicted_solar_kwh'] ?? 0);
+            if ($s > $peakSolar) {
+                $peakSolar = $s;
+            }
+        }
+
+        // Target highest useful generation window:
+        // Hours where solar generation is at least 68% of daily peak AND net surplus >= minSurplusKwh
+        $threshold = max($this->thresholds->minSurplusKwh, $peakSolar * 0.68);
+
+        $usefulHours = [];
+        foreach ($timeSeries as $pt) {
+            $bal = (float) ($pt['projected_balance_kwh'] ?? $pt['balance_kwh'] ?? 0);
+            $solar = (float) ($pt['predicted_solar_kwh'] ?? 0);
+
+            if ($bal >= $this->thresholds->minSurplusKwh && $solar >= $threshold) {
+                $h = isset($pt['local_hour'])
+                    ? (int) $pt['local_hour']
+                    : (isset($pt['hour']) ? (int) $pt['hour'] : null);
+
+                if ($h === null && isset($pt['local_time']) && preg_match('/\s(\d{2}):/', (string) $pt['local_time'], $m)) {
+                    $h = (int) $m[1];
+                }
+
+                if ($h !== null && $h >= 6 && $h <= 18) {
+                    $usefulHours[] = $h;
                 }
             }
         }
 
-        if (empty($surplusHours)) {
+        // Fallback to all daylight surplus hours if peak threshold yielded empty set
+        if (empty($usefulHours)) {
+            foreach ($timeSeries as $pt) {
+                $bal = (float) ($pt['projected_balance_kwh'] ?? $pt['balance_kwh'] ?? 0);
+                if ($bal >= $this->thresholds->minSurplusKwh) {
+                    $h = isset($pt['local_hour'])
+                        ? (int) $pt['local_hour']
+                        : (isset($pt['hour']) ? (int) $pt['hour'] : null);
+                    if ($h === null && isset($pt['local_time']) && preg_match('/\s(\d{2}):/', (string) $pt['local_time'], $m)) {
+                        $h = (int) $m[1];
+                    }
+                    if ($h !== null && $h >= 6 && $h <= 18) {
+                        $usefulHours[] = $h;
+                    }
+                }
+            }
+        }
+
+        if (empty($usefulHours)) {
             return '';
         }
 
-        return sprintf('%s–%s', reset($surplusHours), end($surplusHours));
+        sort($usefulHours);
+        $start = reset($usefulHours);
+        $end = end($usefulHours);
+
+        return sprintf('%02d:00–%02d:00', $start, $end);
     }
 
     /**
+     * Derive evening deficit hours in household local time.
+     *
      * @param list<array<string, mixed>> $timeSeries
      */
     private function findDeficitHours(array $timeSeries): string
     {
         $deficitHours = [];
         foreach ($timeSeries as $pt) {
-            $bal = (float) ($pt['balance_kwh'] ?? 0);
-            if ($bal <= -$this->thresholds->minDeficitKwh && isset($pt['timestamp'])) {
-                $time = substr((string) $pt['timestamp'], 11, 5);
-                if ($time !== '') {
-                    $deficitHours[] = $time;
+            $bal = (float) ($pt['projected_balance_kwh'] ?? $pt['balance_kwh'] ?? 0);
+            if ($bal <= -$this->thresholds->minDeficitKwh) {
+                $h = isset($pt['local_hour'])
+                    ? (int) $pt['local_hour']
+                    : (isset($pt['hour']) ? (int) $pt['hour'] : null);
+                if ($h === null && isset($pt['local_time']) && preg_match('/\s(\d{2}):/', (string) $pt['local_time'], $m)) {
+                    $h = (int) $m[1];
+                }
+                if ($h !== null) {
+                    $deficitHours[] = $h;
                 }
             }
         }
@@ -860,7 +1092,15 @@ final class RecommendationEngine
             return '';
         }
 
-        return sprintf('%s–%s', reset($deficitHours), end($deficitHours));
+        // Focus on evening hours (17:00–23:00) when deficit is actionable for household load reduction
+        $evening = array_filter($deficitHours, static fn (int $h): bool => $h >= 17 && $h <= 23);
+        if (!empty($evening)) {
+            sort($evening);
+            return sprintf('%02d:00–%02d:00', reset($evening), end($evening));
+        }
+
+        sort($deficitHours);
+        return sprintf('%02d:00–%02d:00', reset($deficitHours), end($deficitHours));
     }
 
     private function extractUnitRate(?array $costProj): ?float
@@ -904,6 +1144,32 @@ final class RecommendationEngine
             }
         }
 
+        // Mutual suppression:
+        // Case A: If SHIFT_TO_SOLAR_WINDOW is present, suppress USE_AVAILABLE_SOLAR
+        // Case B: If EVENING_DEFICIT_PREPARATION is present, suppress AVOID_DEFICIT_WINDOW
+        $hasShiftToSolar = false;
+        $hasEveningDeficitPrep = false;
+        foreach ($unique as $c) {
+            if ($c->type === RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW) {
+                $hasShiftToSolar = true;
+            }
+            if ($c->type === RecommendationTaxonomy::TYPE_EVENING_DEFICIT_PREPARATION) {
+                $hasEveningDeficitPrep = true;
+            }
+        }
+
+        if ($hasShiftToSolar || $hasEveningDeficitPrep) {
+            $unique = array_filter($unique, static function (RecommendationCandidate $c) use ($hasShiftToSolar, $hasEveningDeficitPrep): bool {
+                if ($hasShiftToSolar && $c->type === RecommendationTaxonomy::TYPE_USE_AVAILABLE_SOLAR) {
+                    return false;
+                }
+                if ($hasEveningDeficitPrep && $c->type === RecommendationTaxonomy::TYPE_AVOID_DEFICIT_WINDOW) {
+                    return false;
+                }
+                return true;
+            });
+        }
+
         // Sort by priority DESC, then confidence DESC
         usort($unique, function (RecommendationCandidate $a, RecommendationCandidate $b): int {
             $pDiff = $this->priorityRank($b->priority) <=> $this->priorityRank($a->priority);
@@ -924,5 +1190,186 @@ final class RecommendationEngine
             Recommendation::PRIORITY_MEDIUM => 2,
             default => 1,
         };
+    }
+
+    /**
+     * Build normalized weather evidence conforming to Section 10 contract.
+     *
+     * @param array<string, mixed>|null $rawWeather
+     * @param array<string, mixed>|null $period
+     * @param list<array<string, mixed>> $timeSeries
+     * @param string|null $timingWindow
+     * @return array<string, mixed>|null
+     */
+    private function buildWeatherEvidence(
+        ?array $rawWeather,
+        ?array $period,
+        array $timeSeries = [],
+        ?string $timingWindow = null
+    ): ?array {
+        if ($rawWeather === null || empty($rawWeather)) {
+            return null;
+        }
+
+        $status = $rawWeather['status'] ?? (($rawWeather['available'] ?? false) ? 'ACTIVE' : 'FALLBACK');
+
+        if ($status === 'FALLBACK' || $status === 'UNAVAILABLE') {
+            $explanation = 'External weather data unavailable; forecast is supported by physical clear-sky solar modeling.';
+            return [
+                'source' => $rawWeather['source_label'] ?? $rawWeather['provider'] ?? 'Astronomical Clear-Sky Model',
+                'status' => $status,
+                'period_start' => $period['start'] ?? null,
+                'period_end' => $period['end'] ?? null,
+                'timing_window' => $timingWindow,
+                'solar_impact' => 'MODERATE',
+                'explanation' => $explanation,
+                'limitations' => ['External weather provider unavailable; clear-sky physical solar pattern model applies.'],
+            ];
+        }
+
+        // Try extracting window-specific atmospheric factors from timeSeries if timingWindow is specified
+        $windowMatchingPoints = [];
+        $windowStartIso = null;
+        $windowEndIso = null;
+        $startHour = null;
+        $endHour = null;
+
+        if ($timingWindow !== null && preg_match('/(\d{1,2}):\d{2}[–\-](\d{1,2}):\d{2}/u', $timingWindow, $matches)) {
+            $startHour = (int) $matches[1];
+            $endHour = (int) $matches[2];
+
+            foreach ($timeSeries as $pt) {
+                $h = isset($pt['local_hour'])
+                    ? (int) $pt['local_hour']
+                    : (isset($pt['hour']) ? (int) $pt['hour'] : null);
+                if ($h === null && isset($pt['local_time']) && preg_match('/\s(\d{2}):/', (string) $pt['local_time'], $m)) {
+                    $h = (int) $m[1];
+                }
+
+                if ($h !== null && $h >= $startHour && $h < $endHour) {
+                    $windowMatchingPoints[] = $pt;
+                }
+            }
+
+            if (!empty($windowMatchingPoints)) {
+                $windowStartIso = $windowMatchingPoints[0]['timestamp'] ?? null;
+                $windowEndIso = end($windowMatchingPoints)['timestamp'] ?? null;
+            }
+        }
+
+        // Check if matching points contain genuine atmospheric variables
+        $pointsWithWeather = array_filter(
+            $windowMatchingPoints,
+            static fn (array $pt): bool => isset($pt['cloud_cover_pct']) || isset($pt['solar_irradiance_wm2'])
+        );
+
+        $cloudPct = null;
+        $irradiance = null;
+        $tempC = null;
+        $precipProb = null;
+        $solarImpact = null;
+        $isWindowSpecific = false;
+
+        if (!empty($pointsWithWeather)) {
+            $isWindowSpecific = true;
+            $cloudSum = 0.0;
+            $cloudCount = 0;
+            $irrSum = 0.0;
+            $irrCount = 0;
+            $tempSum = 0.0;
+            $tempCount = 0;
+
+            foreach ($pointsWithWeather as $pt) {
+                if (isset($pt['cloud_cover_pct']) && is_numeric($pt['cloud_cover_pct'])) {
+                    $cloudSum += (float) $pt['cloud_cover_pct'];
+                    $cloudCount++;
+                }
+                if (isset($pt['solar_irradiance_wm2']) && is_numeric($pt['solar_irradiance_wm2'])) {
+                    $irrSum += (float) $pt['solar_irradiance_wm2'];
+                    $irrCount++;
+                }
+                if (isset($pt['temperature_c']) && is_numeric($pt['temperature_c'])) {
+                    $tempSum += (float) $pt['temperature_c'];
+                    $tempCount++;
+                }
+            }
+
+            $cloudPct = $cloudCount > 0 ? round($cloudSum / $cloudCount, 1) : null;
+            $irradiance = $irrCount > 0 ? round($irrSum / $irrCount, 1) : null;
+            $tempC = $tempCount > 0 ? round($tempSum / $tempCount, 1) : null;
+
+            // Window-specific solar impact
+            $isEveningOrNight = ($startHour !== null && $startHour >= 18) || ($irradiance !== null && $irradiance <= 5.0);
+            if ($isEveningOrNight) {
+                $solarImpact = 'LOW';
+                $explanation = sprintf('Solar irradiance is absent during %s, creating full reliance on grid power.', $timingWindow);
+            } elseif ($irradiance !== null && $irradiance >= 400.0) {
+                $solarImpact = 'STRONG';
+                $explanation = sprintf('Clear atmospheric conditions and strong solar irradiance (avg %d W/m²) support high solar availability during %s.', (int) round($irradiance), $timingWindow);
+            } elseif ($cloudPct !== null && $cloudPct > 70.0) {
+                $solarImpact = 'LOW';
+                $explanation = sprintf('Cloud cover (avg %d%%) is forecast to reduce solar availability during %s.', (int) round($cloudPct), $timingWindow);
+            } else {
+                $solarImpact = 'MODERATE';
+                $explanation = sprintf('Moderate atmospheric conditions with partial cloud cover are expected during %s.', $timingWindow);
+            }
+        } else {
+            // Use rawWeather overall fields
+            $cloudPct = isset($rawWeather['cloud_cover_pct']) && is_numeric($rawWeather['cloud_cover_pct'])
+                ? (float) $rawWeather['cloud_cover_pct']
+                : null;
+            $irradiance = isset($rawWeather['solar_irradiance_wm2']) && is_numeric($rawWeather['solar_irradiance_wm2'])
+                ? (float) $rawWeather['solar_irradiance_wm2']
+                : null;
+            $precipProb = isset($rawWeather['precipitation_probability_pct']) && is_numeric($rawWeather['precipitation_probability_pct'])
+                ? (float) $rawWeather['precipitation_probability_pct']
+                : null;
+            $tempC = isset($rawWeather['temperature_c']) && is_numeric($rawWeather['temperature_c'])
+                ? (float) $rawWeather['temperature_c']
+                : null;
+
+            $solarImpact = $rawWeather['solar_impact'] ?? 'MODERATE';
+            if ($solarImpact === 'MODERATE' && $cloudPct !== null) {
+                if ($cloudPct < 30.0) {
+                    $solarImpact = 'STRONG';
+                } elseif ($cloudPct > 70.0 || ($precipProb !== null && $precipProb >= 60.0)) {
+                    $solarImpact = 'LOW';
+                }
+            }
+
+            $explanation = match ($solarImpact) {
+                'STRONG' => 'Clear atmospheric conditions and high solar irradiance support strong daytime solar availability.',
+                'LOW' => 'Elevated cloud cover is forecast to reduce available solar irradiance.',
+                default => 'Moderate atmospheric conditions with partial cloud cover are expected across daylight hours.',
+            };
+        }
+
+        $evidenceLimitations = [];
+        if ($status === 'STALE') {
+            $evidenceLimitations[] = 'Weather evidence is STALE (>1 hour old).';
+        }
+        if ($timingWindow !== null && !$isWindowSpecific) {
+            $evidenceLimitations[] = sprintf('Hourly atmospheric factors unavailable for timing window %s; using period summary.', $timingWindow);
+        }
+
+        $periodStart = $windowStartIso ?? $period['start'] ?? null;
+        $periodEnd = $windowEndIso ?? $period['end'] ?? null;
+
+        return array_filter([
+            'source' => $rawWeather['source_label'] ?? $rawWeather['provider'] ?? 'Open-Meteo',
+            'status' => $status,
+            'period_start' => $periodStart,
+            'period_end' => $periodEnd,
+            'timing_window' => $timingWindow,
+            'cloud_cover_pct' => $cloudPct,
+            'irradiance_wm2' => $irradiance,
+            'precipitation_probability_pct' => $precipProb,
+            'temperature_c' => $tempC,
+            'weather_code' => $rawWeather['weather_code'] ?? null,
+            'condition' => $rawWeather['condition'] ?? null,
+            'solar_impact' => $solarImpact,
+            'explanation' => $explanation,
+            'limitations' => !empty($evidenceLimitations) ? $evidenceLimitations : null,
+        ], static fn ($v) => $v !== null);
     }
 }

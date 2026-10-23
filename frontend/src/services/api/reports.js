@@ -2,8 +2,24 @@ import { buildApiUrl } from './config'
 import { apiClient, ApiError } from './client'
 
 /**
- * SPMS Reporting & Data Export API (F8 — docs/02 §2 F8, docs/03 §4).
+ * SPMS Reporting API (docs/02 §2 F8, docs/03 §4).
+ *
+ * Provides household-scoped monthly reporting, executive PDF report downloads,
+ * and detailed analytical Excel workbooks.
  */
+
+/**
+ * Fetch authoritative monthly household energy report payload.
+ *
+ * @param {string} [month] - Target month in YYYY-MM format (optional)
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<any>}
+ */
+export async function getMonthlyReport(month, signal) {
+    const query = month ? `?month=${encodeURIComponent(month)}` : ''
+    const { data } = await apiClient.get(`/reports/monthly${query}`, { signal })
+    return data
+}
 
 /**
  * Fetch reports metadata summary for the active household (counts & date ranges).
@@ -17,19 +33,20 @@ export async function getReportsSummary(signal) {
 }
 
 /**
- * Triggers a secure, programmatic CSV download for a specified reports endpoint.
- * Preserves HttpOnly session credentials and parses RFC 4180 Content-Disposition filename.
+ * Triggers a secure, programmatic file download (PDF or XLSX) for a specified reports endpoint.
+ * Preserves HttpOnly session credentials and parses HTTP Content-Disposition filename.
  *
- * @param {string} endpoint - Relative path (e.g. '/reports/bills/export')
+ * @param {string} endpoint - Relative path (e.g. '/reports/monthly/export/pdf?month=2026-09')
  * @param {string} defaultFilename
+ * @param {string} [acceptHeader]
  * @returns {Promise<{ filename: string }>}
  */
-export async function downloadReportCsv(endpoint, defaultFilename) {
+export async function downloadReportFile(endpoint, defaultFilename, acceptHeader = 'application/octet-stream, application/json') {
     const url = buildApiUrl(endpoint)
     const response = await fetch(url, {
         method: 'GET',
         headers: {
-            Accept: 'text/csv, application/json',
+            Accept: acceptHeader,
         },
         credentials: 'include',
     })
@@ -81,7 +98,22 @@ export async function downloadReportCsv(endpoint, defaultFilename) {
 }
 
 export const reportsApi = {
+    getMonthly: (month, signal) => getMonthlyReport(month, signal),
     getSummary: getReportsSummary,
-    downloadBills: () => downloadReportCsv('/reports/bills/export', 'spms_bills_history.csv'),
-    downloadSolar: () => downloadReportCsv('/reports/solar/export', 'spms_solar_telemetry.csv'),
+    downloadPdf: (month) => {
+        const query = month ? `?month=${encodeURIComponent(month)}` : ''
+        return downloadReportFile(
+            `/reports/monthly/export/pdf${query}`,
+            `SPMS_Monthly_Energy_Report_${month || 'current'}.pdf`,
+            'application/pdf, application/json'
+        )
+    },
+    downloadExcel: (month) => {
+        const query = month ? `?month=${encodeURIComponent(month)}` : ''
+        return downloadReportFile(
+            `/reports/monthly/export/excel${query}`,
+            `SPMS_Monthly_Energy_Report_${month || 'current'}.xlsx`,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json'
+        )
+    },
 }

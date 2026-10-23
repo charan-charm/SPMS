@@ -72,6 +72,10 @@ Config::overrideForTesting([
     // regardless of the developer's local .env, and the test client
     // uses injected fakes.
     'MISTRAL_API_KEY' => '',
+    // Bill extraction gateway: Gemini fallback provider is also pinned
+    // off in automated tests — injected fakes are used instead.
+    // The '...' sentinel in .env is also treated as absent by the provider.
+    'GEMINI_API_KEY' => '',
     // B2 bill upload (docs/10 D-068): the automated suite's temporary
     // document storage is pinned OUTSIDE the repository (OS temp, own
     // process directory) and to the ratified retention — a test that
@@ -99,6 +103,7 @@ $suites = [
         Tests\Unit\LoggerRedactionTest::class,
         Tests\Unit\AIProviderTest::class,
         Tests\Unit\MistralOcrTest::class,
+        Tests\Unit\BillExtractionGatewayTest::class,
         Tests\Unit\BillDomainTest::class,
         Tests\Unit\BillUploadTest::class,
         Tests\Unit\BillExtractionNormalizerTest::class,
@@ -108,12 +113,17 @@ $suites = [
         Tests\Unit\GoodWePhp85ResponseTest::class,
         Tests\Unit\GoodWeModernInverterDiscoveryTest::class,
         Tests\Unit\ForecastDomainTest::class,
+        Tests\Unit\ForecastValidationServiceTest::class,
         Tests\Unit\OpenMeteoWeatherIntegrationTest::class,
+        Tests\Unit\WeatherServiceTest::class,
         Tests\Unit\ApspdclExportParserTest::class,
         Tests\Unit\BillingPeriodSequenceValidatorTest::class,
         Tests\Unit\RecommendationDomainTest::class,
         Tests\Unit\MLForecastingTest::class,
         Tests\Unit\AssistantSafetyAndIsolationTest::class,
+        Tests\Unit\WeatherConditionDetectorTest::class,
+        Tests\Unit\SolarHardwareDetectorTest::class,
+        Tests\Unit\CorsPolicyTest::class,
     ],
     'Integration' => [
         Tests\Integration\DatabaseConnectionTest::class,
@@ -125,6 +135,7 @@ $suites = [
         Tests\Integration\SolarPersistenceTest::class,
         Tests\Integration\ForecastPersistenceTest::class,
         Tests\Integration\RecommendationPersistenceTest::class,
+        Tests\Integration\IntelligenceOrchestratorTest::class,
     ],
     'API' => [
         Tests\API\HealthApiTest::class,
@@ -135,6 +146,7 @@ $suites = [
         Tests\API\HouseholdApiTest::class,
         Tests\API\HouseholdProfileTest::class,
         Tests\API\ForecastApiTest::class,
+        Tests\API\WeatherApiTest::class,
         Tests\API\BillVerificationApiTest::class,
         Tests\API\RecommendationApiTest::class,
         Tests\API\ReportApiTest::class,
@@ -142,12 +154,14 @@ $suites = [
         Tests\API\AnalyticsApiTest::class,
         Tests\API\OnboardingApiTest::class,
         Tests\API\AssistantApiTest::class,
+        Tests\API\DemoScenarioApiTest::class,
     ],
     'Security' => [
         Tests\Security\SafeErrorsTest::class,
         Tests\Security\AuthSecurityTest::class,
         Tests\Security\OwnershipSecurityTest::class,
         Tests\Security\EnvironmentIsolationTest::class,
+        Tests\Security\SolarEnvironmentIsolationTest::class,
         Tests\Security\RecommendationSecurityTest::class,
         Tests\Security\HouseholdServiceNumberSecurityTest::class,
     ],

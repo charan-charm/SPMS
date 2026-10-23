@@ -30,3 +30,32 @@ export function getForecasts({ horizon = 'DAY_AHEAD', signal } = {}) {
 export function generateForecast({ horizon = 'DAY_AHEAD', signal } = {}) {
     return apiClient.post('/forecasts/generate', { horizon }, { signal })
 }
+
+/**
+ * Fetch predicted vs actual solar validation series and metrics.
+ *
+ * @param {Object} [options]
+ * @param {string} [options.forecastId]
+ * @param {string} [options.date] Target date (YYYY-MM-DD)
+ * @param {AbortSignal} [options.signal]
+ * @returns {Promise<{data: Object, meta: Object, requestId: string|null, status: number}>}
+ */
+export function getForecastValidation({ forecastId, date, signal } = {}) {
+    const params = new URLSearchParams()
+    if (forecastId) params.append('forecast_id', forecastId)
+    if (date) params.append('date', date)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return apiClient.get(`/forecasts/validation${qs}`, { signal })
+}
+
+/**
+ * Fetch historical validation performance summary.
+ *
+ * @param {Object} [options]
+ * @param {AbortSignal} [options.signal]
+ * @returns {Promise<{data: Object, meta: Object, requestId: string|null, status: number}>}
+ */
+export function getForecastPerformance({ signal } = {}) {
+    return apiClient.get('/forecasts/performance', { signal })
+}
+

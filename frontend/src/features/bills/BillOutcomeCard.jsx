@@ -1,4 +1,4 @@
-import { RotateCcw, UploadCloud } from 'lucide-react'
+import { PencilLine, RotateCcw, UploadCloud } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { TERMINAL_OUTCOME } from './presentation'
@@ -8,10 +8,17 @@ import { cn } from '../../lib/utils'
  * BillOutcomeCard (B4 §13-§16) — honest cards for lifecycle outcomes
  * that carry no bill data (NOT_A_BILL / UNREADABLE / UNCERTAIN /
  * PROCESSING_FAILED). No fabricated fields, no raw provider or exception
- * text — the copy is fixed per state, and the primary action always
- * returns the user to the upload path.
+ * text — the copy is fixed per state, with Try again, Enter bill manually,
+ * and Upload another bill actions.
  */
-export function BillOutcomeCard({ status, onUploadAnother, retry = false, onRetry = null, reason = null }) {
+export function BillOutcomeCard({
+    status,
+    onUploadAnother,
+    retry = false,
+    onRetry = null,
+    onEnterManually = null,
+    reason = null,
+}) {
     const outcome = TERMINAL_OUTCOME[status]
 
     if (!outcome) {
@@ -43,6 +50,12 @@ export function BillOutcomeCard({ status, onUploadAnother, retry = false, onRetr
                         <Button type="button" variant="secondary" onClick={onRetry}>
                             <RotateCcw className="size-4" aria-hidden="true" />
                             Try again
+                        </Button>
+                    )}
+                    {onEnterManually && (
+                        <Button type="button" variant="secondary" onClick={onEnterManually}>
+                            <PencilLine className="size-4" aria-hidden="true" />
+                            Enter bill manually
                         </Button>
                     )}
                     <Button type="button" onClick={onUploadAnother}>

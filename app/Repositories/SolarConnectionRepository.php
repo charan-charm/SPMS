@@ -146,7 +146,7 @@ final class SolarConnectionRepository
     public function findAllActiveConnections(): array
     {
         $statement = $this->connection()->query(
-            "SELECT * FROM household_solar_connections WHERE connection_status IN ('CONNECTED', 'OFFLINE', 'UNKNOWN') ORDER BY updated_at ASC"
+            "SELECT * FROM household_solar_connections WHERE connection_status IN ('CONNECTED', 'OFFLINE', 'UNKNOWN', 'UNREACHABLE') ORDER BY updated_at ASC"
         );
 
         $results = $statement->fetchAll(PDO::FETCH_ASSOC);

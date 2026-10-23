@@ -144,21 +144,35 @@ final class SolarController
     {
         $householdId = $this->requireHouseholdId($request);
 
+        $dateParam = $request->queryParam('date');
         $fromParam = $request->queryParam('from');
         $toParam = $request->queryParam('to');
         $limitParam = $request->queryParam('limit');
 
         $from = null;
-        if (is_string($fromParam) && trim($fromParam) !== '') {
-            $from = new DateTimeImmutable($fromParam);
-        }
-
         $to = null;
-        if (is_string($toParam) && trim($toParam) !== '') {
-            $to = new DateTimeImmutable($toParam);
+
+        if (is_string($dateParam) && trim($dateParam) !== '') {
+            try {
+                $cleanDate = trim($dateParam);
+                $from = new DateTimeImmutable("{$cleanDate} 00:00:00");
+                $to = new DateTimeImmutable("{$cleanDate} 23:59:59");
+            } catch (Throwable) {}
         }
 
-        $limit = 100;
+        if ($from === null && is_string($fromParam) && trim($fromParam) !== '') {
+            try {
+                $from = new DateTimeImmutable(trim($fromParam));
+            } catch (Throwable) {}
+        }
+
+        if ($to === null && is_string($toParam) && trim($toParam) !== '') {
+            try {
+                $to = new DateTimeImmutable(trim($toParam));
+            } catch (Throwable) {}
+        }
+
+        $limit = ($dateParam !== null && trim($dateParam) !== '') ? 1000 : 500;
         if (is_string($limitParam) && is_numeric($limitParam)) {
             $limit = max(1, min(1000, (int) $limitParam));
         }
@@ -172,14 +186,36 @@ final class SolarController
     }
 
     /**
+     * GET /api/v1/solar/days
+     */
+    public function days(Request $request): Response
+    {
+        $householdId = $this->requireHouseholdId($request);
+        $days = $this->solarService->getDailySummaries($householdId);
+
+        return Response::success([
+            'days' => $days,
+            'count' => count($days),
+        ]);
+    }
+
+    /**
      * POST /api/v1/solar/sync
      */
     public function sync(Request $request): Response
     {
         $householdId = $this->requireHouseholdId($request);
 
+        $dateParam = $request->bodyParam('date') ?? $request->queryParam('date');
+        $date = null;
+        if (is_string($dateParam) && trim($dateParam) !== '') {
+            try {
+                $date = new DateTimeImmutable(trim($dateParam));
+            } catch (Throwable) {}
+        }
+
         try {
-            $snapshot = $this->solarService->syncHouseholdTelemetry($householdId);
+            $snapshot = $this->solarService->syncHouseholdTelemetry($householdId, $date);
 
             try {
                 $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
@@ -204,6 +240,32 @@ final class SolarController
                 ['error' => $e->getMessage()]
             );
         }
+    }
+
+    /**
+     * POST /api/v1/solar/sync/auto
+     *
+     * Opportunistic visit-triggered synchronization.
+     * Non-blocking, rate-limited, and concurrency-locked.
+     */
+    public function autoSync(Request $request): Response
+    {
+        $householdId = $this->requireHouseholdId($request);
+        $result = $this->solarService->syncIfStale($householdId, 300);
+
+        if (($result['synced'] ?? false) === true) {
+            try {
+                $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+                $intel = new \App\Domain\Intelligence\IntelligenceService(new \App\Repositories\InsightRepository());
+                $intel->refreshFromEnergyPipeline($householdId, $now);
+                $recs = new \App\Domain\Recommendation\RecommendationService();
+                $recs->generate($householdId, $now, true);
+            } catch (Throwable) {
+                // Non-blocking pipeline update
+            }
+        }
+
+        return Response::success($result);
     }
 
     private function requireHouseholdId(Request $request): string

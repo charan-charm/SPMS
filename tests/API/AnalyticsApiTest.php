@@ -113,7 +113,9 @@ final class AnalyticsApiTest
         PDO $pdo,
         string $householdId,
         string $measurementTime,
-        float $dailyGenerationKwh
+        float $dailyGenerationKwh,
+        float $powerW = 0.0,
+        string $dataNature = 'ACTUAL'
     ): void {
         $id  = self::uuid();
         $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
@@ -128,11 +130,11 @@ final class AnalyticsApiTest
             ) VALUES (
                 :id, :hid, :station_id, :inverter_sn,
                 :mt, :ra,
-                0.00, :dg,
-                'Normal', 'ACTUAL', 'FRESH', 'GOOD',
+                :pw, :dg,
+                'Normal', :nature, 'FRESH', 'GOOD',
                 :batch, :created_at
             )
-            ON DUPLICATE KEY UPDATE daily_generation_kwh = VALUES(daily_generation_kwh)
+            ON DUPLICATE KEY UPDATE daily_generation_kwh = VALUES(daily_generation_kwh), power_w = VALUES(power_w), data_nature = VALUES(data_nature)
         SQL)->execute([
             'id'          => $id,
             'hid'         => $householdId,
@@ -140,7 +142,9 @@ final class AnalyticsApiTest
             'inverter_sn' => 'SN-TEST-001',
             'mt'          => $measurementTime,
             'ra'          => $now,
+            'pw'          => number_format($powerW, 2, '.', ''),
             'dg'          => number_format($dailyGenerationKwh, 3, '.', ''),
+            'nature'      => $dataNature,
             'batch'       => 'test-batch-' . bin2hex(random_bytes(4)),
             'created_at'  => $now,
         ]);
@@ -434,6 +438,173 @@ final class AnalyticsApiTest
                 }
             }),
 
+            TestResult::check('GET /api/v1/analytics/daily requires authentication', function (): void {
+                RequestId::set(RequestId::new());
+
+                try {
+                    self::controller()->daily(Request::create('GET', '/api/v1/analytics/daily'));
+                    Assert::true(false, 'Expected UNAUTHENTICATED');
+                } catch (AppException $e) {
+                    Assert::same('UNAUTHENTICATED', $e->errorCode());
+                    Assert::same(401, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('GET /api/v1/analytics/day-curve requires authentication', function (): void {
+                RequestId::set(RequestId::new());
+
+                try {
+                    self::controller()->dayCurve(Request::create('GET', '/api/v1/analytics/day-curve?date=2026-01-30'));
+                    Assert::true(false, 'Expected UNAUTHENTICATED');
+                } catch (AppException $e) {
+                    Assert::same('UNAUTHENTICATED', $e->errorCode());
+                    Assert::same(401, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('Daily solar aggregation computes daily max, peak power, and detects gaps without fabricating days', function (): void {
+                RequestId::set(RequestId::new());
+                $pdo     = self::pdo();
+                $fixture = AuthTesting::householdFixture();
+                $hid     = $fixture['household_id'];
+
+                try {
+                    self::cleanup($pdo, $hid);
+
+                    // Day 1: normal day (2 readings, 5 min apart)
+                    self::insertSolarReading($pdo, $hid, '2026-05-10 10:00:00', 5.2, 1200.0);
+                    self::insertSolarReading($pdo, $hid, '2026-05-10 10:05:00', 8.5, 2100.0);
+
+                    // Day 2: gap day (10:00 to 14:00 gap)
+                    self::insertSolarReading($pdo, $hid, '2026-05-11 10:00:00', 4.0, 1500.0);
+                    self::insertSolarReading($pdo, $hid, '2026-05-11 14:00:00', 12.0, 2400.0);
+
+                    $req = AuthTesting::authed(
+                        Request::create('GET', '/api/v1/analytics/daily?range=all'),
+                        $fixture['account']
+                    );
+                    $res  = self::controller()->daily($req);
+                    $data = $res->data();
+
+                    Assert::same(200, $res->status());
+                    Assert::true(isset($data['points']), 'points must be present');
+                    Assert::same(2, count($data['points']), 'exactly 2 days with data');
+
+                    $p1 = $data['points'][0];
+                    Assert::same('2026-05-10', $p1['date']);
+                    Assert::same(8.5, $p1['solar_kwh']);
+                    Assert::same(2100.0, (float)$p1['peak_power_w']);
+                    Assert::same('ACTUAL', $p1['data_nature']);
+                    Assert::same(false, $p1['has_gap']);
+
+                    $p2 = $data['points'][1];
+                    Assert::same('2026-05-11', $p2['date']);
+                    Assert::same(12.0, $p2['solar_kwh']);
+                    Assert::same(2400.0, (float)$p2['peak_power_w']);
+                    Assert::same(true, $p2['has_gap']);
+                    Assert::same(true, $p2['gap_warning'] !== null);
+
+                    $summary = $data['summary'];
+                    Assert::same(2, $summary['days_with_data']);
+                    Assert::same(20.5, $summary['total_kwh']);
+                    Assert::same(2400.0, (float)$summary['peak_power_w']);
+                    Assert::same(1, $summary['days_with_gaps']);
+                } finally {
+                    self::cleanup($pdo, $hid);
+                }
+            }),
+
+            TestResult::check('Day-curve retrieves 5-minute readings and discloses gaps honestly', function (): void {
+                RequestId::set(RequestId::new());
+                $pdo     = self::pdo();
+                $fixture = AuthTesting::householdFixture();
+                $hid     = $fixture['household_id'];
+
+                try {
+                    self::cleanup($pdo, $hid);
+
+                    // Day with readings and exactly 1 4-hour gap (10:00 and 10:05 are contiguous, then 14:05)
+                    self::insertSolarReading($pdo, $hid, '2026-01-30 10:00:00', 3.0, 1500.0);
+                    self::insertSolarReading($pdo, $hid, '2026-01-30 10:05:00', 3.8, 1650.0);
+                    self::insertSolarReading($pdo, $hid, '2026-01-30 14:05:00', 8.0, 1800.0);
+
+                    $req = AuthTesting::authed(
+                        Request::create('GET', '/api/v1/analytics/day-curve?date=2026-01-30'),
+                        $fixture['account']
+                    );
+                    $res  = self::controller()->dayCurve($req);
+                    $data = $res->data();
+
+                    Assert::same(200, $res->status());
+                    Assert::same('2026-01-30', $data['date']);
+                    Assert::same(3, $data['metrics']['reading_count']);
+                    Assert::same(8.0, $data['metrics']['daily_kwh']);
+                    Assert::same(1800.0, (float)$data['metrics']['peak_power_w']);
+                    Assert::same(true, $data['metrics']['has_gap']);
+                    Assert::same(1, $data['metrics']['gap_count']);
+
+                    // Verify readings
+                    Assert::same(3, count($data['readings']));
+                    Assert::same('10:00', $data['readings'][0]['time']);
+                    Assert::same(1.5, $data['readings'][0]['power_kw']);
+                } finally {
+                    self::cleanup($pdo, $hid);
+                }
+            }),
+
+            TestResult::check('Analytics summary, monthly, daily, and day-curve return SIMULATED data_nature for simulated telemetry', function (): void {
+                RequestId::set(RequestId::new());
+                $pdo     = self::pdo();
+                $fixture = AuthTesting::householdFixture();
+                $hid     = $fixture['household_id'];
+
+                try {
+                    self::cleanup($pdo, $hid);
+
+                    // Insert simulated readings
+                    self::insertSolarReading($pdo, $hid, '2026-06-15 12:00:00', 14.2, 2800.0, 'SIMULATED');
+
+                    // 1. Summary
+                    $reqSummary = AuthTesting::authed(
+                        Request::create('GET', '/api/v1/analytics/summary'),
+                        $fixture['account']
+                    );
+                    $resSummary = self::controller()->summary($reqSummary);
+                    $dataSummary = $resSummary->data();
+                    Assert::same('SIMULATED', $dataSummary['solar']['data_nature'], 'Summary solar must be SIMULATED');
+
+                    // 2. Monthly
+                    $reqMonthly = AuthTesting::authed(
+                        Request::create('GET', '/api/v1/analytics/monthly?from_month=2026-06&to_month=2026-06'),
+                        $fixture['account']
+                    );
+                    $resMonthly = self::controller()->monthly($reqMonthly);
+                    $dataMonthly = $resMonthly->data();
+                    Assert::same('SIMULATED', $dataMonthly['points'][0]['solar_nature'], 'Monthly point solar_nature must be SIMULATED');
+
+                    // 3. Daily
+                    $reqDaily = AuthTesting::authed(
+                        Request::create('GET', '/api/v1/analytics/daily?range=all'),
+                        $fixture['account']
+                    );
+                    $resDaily = self::controller()->daily($reqDaily);
+                    $dataDaily = $resDaily->data();
+                    Assert::same('SIMULATED', $dataDaily['points'][0]['data_nature'], 'Daily point data_nature must be SIMULATED');
+
+                    // 4. Day-curve
+                    $reqCurve = AuthTesting::authed(
+                        Request::create('GET', '/api/v1/analytics/day-curve?date=2026-06-15'),
+                        $fixture['account']
+                    );
+                    $resCurve = self::controller()->dayCurve($reqCurve);
+                    $dataCurve = $resCurve->data();
+                    Assert::same('SIMULATED', $dataCurve['metrics']['data_nature'], 'Day-curve metrics data_nature must be SIMULATED');
+                } finally {
+                    self::cleanup($pdo, $hid);
+                }
+            }),
+
         ];
     }
 }
+

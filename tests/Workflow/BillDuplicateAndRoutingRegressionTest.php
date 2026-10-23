@@ -16,6 +16,8 @@ use App\Domain\Bill\BillUploadIntakeService;
 use App\Domain\Household\HouseholdService;
 use App\Repositories\BillRepository;
 use App\Repositories\BillTempDocumentRepository;
+use App\Services\BillExtraction\BillExtractionGateway;
+use App\Services\BillExtraction\MistralBillExtractionProvider;
 use App\Services\Files\LocalPrivateBillStorage;
 use App\Services\Mistral\MistralOcrClient;
 use App\Support\AppException;
@@ -70,6 +72,11 @@ final class BillDuplicateAndRoutingRegressionTest
         };
 
         return [new MistralOcrClient('mk_FAKE_REGRESSION', 'mistral-ocr-test', $handler), $calls];
+    }
+
+    private static function makeGateway(MistralOcrClient $ocr): BillExtractionGateway
+    {
+        return new BillExtractionGateway([new MistralBillExtractionProvider($ocr)]);
     }
 
     private static function ocrBody(array $annotation): string
@@ -152,7 +159,7 @@ final class BillDuplicateAndRoutingRegressionTest
             [$ocr1, $calls1] = self::fakeOcrClient([
                 ['status' => 200, 'body' => self::ocrBody(self::validBillAnnotation('2026-08-01', '2026-09-01'))],
             ]);
-            $procService1 = new BillProcessingService(new BillService(), $tempRepo, $storage, $ocr1);
+            $procService1 = new BillProcessingService(new BillService(), $tempRepo, $storage, self::makeGateway($ocr1));
             $procResult1 = $procService1->process($fixture['account'], $result1['bill']->id(), self::now());
             Assert::same(BillStatus::EXTRACTED, $procResult1['bill']->status());
 
@@ -217,7 +224,7 @@ final class BillDuplicateAndRoutingRegressionTest
             [$ocr1] = self::fakeOcrClient([
                 ['status' => 200, 'body' => self::ocrBody(self::validBillAnnotation('2026-08-01', '2026-09-01'))],
             ]);
-            $procService1 = new BillProcessingService(new BillService(), $tempRepo, $storage, $ocr1);
+            $procService1 = new BillProcessingService(new BillService(), $tempRepo, $storage, self::makeGateway($ocr1));
             $procResult1 = $procService1->process($fixture['account'], $result1['bill']->id(), self::now());
             Assert::same(BillStatus::EXTRACTED, $procResult1['bill']->status());
 
@@ -239,7 +246,7 @@ final class BillDuplicateAndRoutingRegressionTest
             [$ocr2] = self::fakeOcrClient([
                 ['status' => 200, 'body' => self::ocrBody(self::validBillAnnotation('2026-08-01', '2026-09-01'))],
             ]);
-            $procService2 = new BillProcessingService(new BillService(), $tempRepo, $storage, $ocr2);
+            $procService2 = new BillProcessingService(new BillService(), $tempRepo, $storage, self::makeGateway($ocr2));
 
             try {
                 $procService2->process($fixture['account'], $result2['bill']->id(), self::now());
@@ -294,7 +301,7 @@ final class BillDuplicateAndRoutingRegressionTest
 
             // Provide a fake OCR client with NO queued responses. If called, it would throw.
             [$ocr, $calls] = self::fakeOcrClient([]);
-            $procService = new BillProcessingService(new BillService(), $tempRepo, $storage, $ocr);
+            $procService = new BillProcessingService(new BillService(), $tempRepo, $storage, self::makeGateway($ocr));
 
             $procResult = $procService->process($fixture['account'], $result['bill']->id(), self::now());
 
@@ -333,7 +340,7 @@ final class BillDuplicateAndRoutingRegressionTest
             [$ocr, $calls] = self::fakeOcrClient([
                 ['status' => 429, 'body' => '{"object":"error","message":"Rate limit exceeded","type":"rate_limited","code":"1300"}'],
             ]);
-            $procService = new BillProcessingService(new BillService(), $tempRepo, $storage, $ocr);
+            $procService = new BillProcessingService(new BillService(), $tempRepo, $storage, self::makeGateway($ocr));
 
             try {
                 $procService->process($fixture['account'], $result['bill']->id(), self::now());
@@ -341,11 +348,11 @@ final class BillDuplicateAndRoutingRegressionTest
             } catch (AppException $e) {
                 Assert::same('EXTRACTION_FAILED', $e->errorCode());
                 Assert::same(502, $e->httpStatus());
-                Assert::same('rate_limit', $e->context()['category'] ?? null);
-                Assert::same('EXTRACTION_RATE_LIMITED', $e->context()['reason'] ?? null);
+                // Gateway maps Mistral 429 → BillExtractionFailure::TRANSIENT → all providers exhausted → EXTRACTION_PROVIDER_ERROR
+                Assert::same('EXTRACTION_PROVIDER_ERROR', $e->context()['reason'] ?? null);
             }
 
-            // Exactly 1 call was made — proving NO automatic retries
+            // Exactly 1 Mistral call was made — proving NO automatic retries
             Assert::same(1, $calls->count(), 'rate-limited OCR must not enter automatic retry loops');
 
             // Bill is marked PROCESSING_FAILED
@@ -382,7 +389,7 @@ final class BillDuplicateAndRoutingRegressionTest
             [$ocrA] = self::fakeOcrClient([
                 ['status' => 200, 'body' => self::ocrBody(self::validBillAnnotation('2026-08-01', '2026-09-01'))],
             ]);
-            $procA = new BillProcessingService(new BillService(), $tempRepo, $storage, $ocrA);
+            $procA = new BillProcessingService(new BillService(), $tempRepo, $storage, self::makeGateway($ocrA));
             $procA->process($fixtureA['account'], $resultA['bill']->id(), self::now());
             (new BillService())->verify($fixtureA['account'], $resultA['bill']->id(), self::now());
 

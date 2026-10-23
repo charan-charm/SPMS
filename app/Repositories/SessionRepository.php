@@ -53,6 +53,21 @@ final class SessionRepository
         return $row === false ? null : $row;
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function findById(string $sessionId): ?array
+    {
+        $statement = $this->connection()->prepare(
+            'SELECT * FROM sessions WHERE id = :id'
+        );
+        $statement->execute(['id' => $sessionId]);
+
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
     public function touchActivity(string $sessionId, string $idleExpiresAt, string $now): void
     {
         $statement = $this->connection()->prepare(

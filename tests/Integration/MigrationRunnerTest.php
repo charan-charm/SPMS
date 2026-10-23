@@ -63,14 +63,14 @@ final class MigrationRunnerTest
                 Assert::same(1, $bogus['exit_code'], 'only real|demo|test may be addressed');
             }),
 
-            TestResult::check('migration 0028 exists with identical schema across real and demo environments', function (): void {
+            TestResult::check('migration 0031 exists with identical schema across real and demo environments', function (): void {
                 $php = PHP_BINARY;
                 $script = dirname(__DIR__, 2) . '/database/migrate.php';
 
                 $verified = self::runScript($php, $script, ['--verify', '--all-environments']);
                 Assert::same(0, $verified['exit_code'], 'verify failed: ' . $verified['output']);
-                Assert::contains('`spms_real` at 0028_add_bills_file_hash', $verified['output']);
-                Assert::contains('`spms_demo` at 0028_add_bills_file_hash', $verified['output']);
+                Assert::contains('`spms_real` at 0031_create_intelligence_orchestrator_runs', $verified['output']);
+                Assert::contains('`spms_demo` at 0031_create_intelligence_orchestrator_runs', $verified['output']);
                 Assert::contains('OK — identical migration set', $verified['output']);
             }),
         ];

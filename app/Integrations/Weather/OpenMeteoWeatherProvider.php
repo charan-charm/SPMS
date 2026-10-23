@@ -31,8 +31,9 @@ use Throwable;
 final class OpenMeteoWeatherProvider implements WeatherProviderInterface
 {
     private const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
-    private const TIMEOUT_SECONDS = 4;
-    private const CACHE_TTL_SECONDS = 1800; // 30 minutes
+    private const ARCHIVE_URL = 'https://archive-api.open-meteo.com/v1/archive';
+    private const TIMEOUT_SECONDS = 5;
+    private const CACHE_TTL_SECONDS = 1800; // 30 minutes for live forecasts
 
     /** @var array<string, array<string, mixed>> In-memory cache */
     private static array $memoryCache = [];
@@ -68,6 +69,8 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
      * @return array{
      *     available: bool,
      *     provider: string,
+     *     weather_mode?: string,
+     *     weather_source?: string,
      *     location: array{lat: float, lon: float},
      *     retrieved_at: string,
      *     error: ?string,
@@ -109,15 +112,21 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
             return $diskResult;
         }
 
-        try {
-            $tz = new DateTimeZone($this->timezone);
-            $startDate = $start->setTimezone($tz)->format('Y-m-d');
-            $endDate = $end->setTimezone($tz)->format('Y-m-d');
+        $tz = new DateTimeZone($this->timezone);
+        $todayStr = (new DateTimeImmutable('now', $tz))->format('Y-m-d');
+        $startDate = $start->setTimezone($tz)->format('Y-m-d');
+        $endDate = $end->setTimezone($tz)->format('Y-m-d');
 
-            $url = self::FORECAST_URL . '?' . http_build_query([
+        $isHistorical = ($endDate < $todayStr);
+        $endpointUrl = $isHistorical ? self::ARCHIVE_URL : self::FORECAST_URL;
+        $weatherMode = $isHistorical ? 'HISTORICAL_ARCHIVE' : 'LIVE_FORECAST';
+        $weatherSource = $isHistorical ? 'Open-Meteo Archive API' : 'Open-Meteo Hourly Forecast API';
+
+        try {
+            $url = $endpointUrl . '?' . http_build_query([
                 'latitude' => round($latitude, 4),
                 'longitude' => round($longitude, 4),
-                'hourly' => 'cloud_cover,precipitation_probability,temperature_2m,direct_normal_irradiance,shortwave_radiation',
+                'hourly' => 'cloud_cover,precipitation_probability,precipitation,temperature_2m,direct_normal_irradiance,shortwave_radiation,weather_code',
                 'timezone' => $this->timezone,
                 'start_date' => $startDate,
                 'end_date' => $endDate,
@@ -136,6 +145,8 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
             $result = [
                 'available' => true,
                 'provider' => 'OPEN_METEO',
+                'weather_mode' => $weatherMode,
+                'weather_source' => $weatherSource,
                 'location' => [
                     'lat' => round($latitude, 4),
                     'lon' => round($longitude, 4),
@@ -153,12 +164,14 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
             return [
                 'available' => false,
                 'provider' => 'OPEN_METEO',
+                'weather_mode' => 'FALLBACK',
+                'weather_source' => 'Astronomical Clear-Sky Model',
                 'location' => [
                     'lat' => round($latitude, 4),
                     'lon' => round($longitude, 4),
                 ],
                 'retrieved_at' => $retrievedAt,
-                'error' => sprintf('Open-Meteo forecast error: %s', $e->getMessage()),
+                'error' => sprintf('Open-Meteo %s error: %s', $isHistorical ? 'archive' : 'forecast', $e->getMessage()),
                 'hourly_factors' => [],
             ];
         }
@@ -171,7 +184,13 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
      *     clear_sky_index: float,
      *     cloud_cover_pct: float,
      *     temperature_c: ?float,
-     *     condition: string
+     *     precipitation_probability_pct: float,
+     *     precipitation: float,
+     *     direct_normal_irradiance_wm2: ?float,
+     *     shortwave_radiation_wm2: ?float,
+     *     weather_code: int,
+     *     condition: string,
+     *     solar_impact: string
      * }>
      */
     private function extractHourlyFactors(array $hourly, DateTimeImmutable $start, DateTimeImmutable $end): array
@@ -179,7 +198,9 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
         $times = $hourly['time'] ?? [];
         $clouds = $hourly['cloud_cover'] ?? [];
         $precips = $hourly['precipitation_probability'] ?? [];
+        $precipMms = $hourly['precipitation'] ?? [];
         $temps = $hourly['temperature_2m'] ?? [];
+        $weatherCodes = $hourly['weather_code'] ?? [];
 
         $dnis = $hourly['direct_normal_irradiance'] ?? [];
         $swrs = $hourly['shortwave_radiation'] ?? [];
@@ -198,7 +219,9 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
                     'epoch' => $dt->getTimestamp(),
                     'cloud' => isset($clouds[$idx]) && is_numeric($clouds[$idx]) ? (float) $clouds[$idx] : 0.0,
                     'precip' => isset($precips[$idx]) && is_numeric($precips[$idx]) ? (float) $precips[$idx] : 0.0,
+                    'precip_mm' => isset($precipMms[$idx]) && is_numeric($precipMms[$idx]) ? (float) $precipMms[$idx] : null,
                     'temp' => isset($temps[$idx]) && is_numeric($temps[$idx]) ? (float) $temps[$idx] : null,
+                    'weather_code' => isset($weatherCodes[$idx]) && is_numeric($weatherCodes[$idx]) ? (int) $weatherCodes[$idx] : null,
                     'dni' => isset($dnis[$idx]) && is_numeric($dnis[$idx]) ? (float) $dnis[$idx] : null,
                     'swr' => isset($swrs[$idx]) && is_numeric($swrs[$idx]) ? (float) $swrs[$idx] : null,
                 ];
@@ -245,8 +268,18 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
                     $rainAttenuation = 1.0 - (($precipProb - 50.0) / 100.0 * 0.35);
                 }
 
-                // Clamped clear-sky index between 0.2 and 1.0
-                $clearSkyIndex = max(0.2, min(1.0, round($cloudAttenuation * $rainAttenuation, 3)));
+                // Base cloud-attenuated clear-sky index
+                $baseCsi = round($cloudAttenuation * $rainAttenuation, 3);
+
+                // Radiative transfer refinement: thin high cirrus clouds often report high sky cloud coverage
+                // (e.g. 90-100%) while transmitting significant direct normal irradiance (DNI > 200 W/m²).
+                // When DNI is present and high, adjust clear-sky index to reflect actual direct beam penetration.
+                if ($dni !== null && (float) $dni > 200.0) {
+                    $dniFactor = min(1.0, (float) $dni / 750.0) * 0.85;
+                    $clearSkyIndex = max(0.2, min(1.0, round(max($baseCsi, $dniFactor), 3)));
+                } else {
+                    $clearSkyIndex = max(0.2, min(1.0, $baseCsi));
+                }
 
                 // Deterministic condition classification
                 $condition = 'CLEAR';
@@ -260,15 +293,34 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
                     $condition = 'PARTLY_CLOUDY';
                 }
 
+                $weatherCode = $best['weather_code'] ?? (
+                    $condition === 'CLEAR' ? 0 : (
+                        $condition === 'PARTLY_CLOUDY' ? 2 : (
+                            $condition === 'RAIN' ? 61 : 3
+                        )
+                    )
+                );
+                $precipMm = $best['precip_mm'] ?? ($precipProb >= 60.0 ? 1.5 : 0.0);
+
+                $solarImpact = 'MODERATE';
+                if ($cloudCoverPct < 30.0 && ($clearSkyIndex >= 0.70 || ($dni !== null && (float) $dni > 300.0))) {
+                    $solarImpact = 'STRONG';
+                } elseif ($cloudCoverPct > 70.0 || $precipProb >= 60.0) {
+                    $solarImpact = 'LOW';
+                }
+
                 $factors[] = [
                     'timestamp' => $current->format('Y-m-d\TH:i:s\Z'),
                     'clear_sky_index' => $clearSkyIndex,
                     'cloud_cover_pct' => round($cloudCoverPct, 1),
                     'temperature_c' => $tempC !== null ? round($tempC, 1) : null,
                     'precipitation_probability_pct' => round($precipProb, 1),
+                    'precipitation' => round($precipMm, 1),
                     'direct_normal_irradiance_wm2' => $dni !== null ? round((float) $dni, 1) : null,
                     'shortwave_radiation_wm2' => $swr !== null ? round((float) $swr, 1) : null,
+                    'weather_code' => $weatherCode,
                     'condition' => $condition,
+                    'solar_impact' => $solarImpact,
                 ];
             }
 
@@ -341,18 +393,23 @@ final class OpenMeteoWeatherProvider implements WeatherProviderInterface
             return null;
         }
 
-        if ((time() - filemtime($file)) > self::CACHE_TTL_SECONDS) {
-            @unlink($file);
-            return null;
-        }
-
         $content = @file_get_contents($file);
         if (!is_string($content) || $content === '') {
             return null;
         }
 
         $decoded = json_decode($content, true);
-        return is_array($decoded) ? $decoded : null;
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $isHistorical = ($decoded['weather_mode'] ?? '') === 'HISTORICAL_ARCHIVE';
+        if (!$isHistorical && (time() - filemtime($file)) > self::CACHE_TTL_SECONDS) {
+            @unlink($file);
+            return null;
+        }
+
+        return $decoded;
     }
 
     /**

@@ -60,6 +60,8 @@ final class MistralBillValidator
             return [$key, $number($section, $key)];
         };
 
+        $solarUnitsValue = $number('solar', 'solar_export_units_kwh') ?? $number('solar', 'solar_units_kwh');
+
         return [
             'meter' => self::difference(
                 $field('meter_evidence', 'previous_meter_reading'),
@@ -69,10 +71,10 @@ final class MistralBillValidator
             'solar' => self::difference(
                 $field('solar', 'previous_solar_reading'),
                 $field('solar', 'present_solar_reading'),
-                $field('solar', 'solar_units_kwh'),
+                ['solar_units_kwh', $solarUnitsValue],
             ),
             'net' => self::difference(
-                $field('solar', 'solar_units_kwh'),
+                ['solar_units_kwh', $solarUnitsValue],
                 $field('consumption', 'consumption_kwh'),
                 $field('solar', 'net_units_kwh'),
             ),

@@ -320,4 +320,325 @@ describe('F7 Recommendations Feature Flow', () => {
         expect(screen.getByText('≈21.1 kWh')).toBeInTheDocument()
         expect(screen.getByText(/Forecast-derived potential; not guaranteed savings\./i)).toBeInTheDocument()
     })
+
+    it('defaults to collapsed state and expands explanation on click with slide-down interaction', () => {
+        render(
+            <MemoryRouter>
+                <RecommendationCard recommendation={mockActiveRecommendation} />
+            </MemoryRouter>
+        )
+
+        const toggleBtn = screen.getByRole('button', { name: /Why this recommendation/i })
+        expect(toggleBtn).toHaveAttribute('aria-expanded', 'false')
+
+        // Click to expand
+        fireEvent.click(toggleBtn)
+        expect(toggleBtn).toHaveAttribute('aria-expanded', 'true')
+        expect(screen.getByText('Why This Recommendation?')).toBeInTheDocument()
+        expect(screen.getByText('Based on:')).toBeInTheDocument()
+        expect(screen.getByText(/Solar forecast/i)).toBeInTheDocument()
+        expect(screen.getByText(/Household electricity use is estimated from verified bills and is not measured hour by hour/i)).toBeInTheDocument()
+        expect(screen.getByText(/Savings are not guaranteed/i)).toBeInTheDocument()
+
+        // Click to collapse
+        fireEvent.click(toggleBtn)
+        expect(toggleBtn).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('displays honest stale telemetry messaging when solar telemetry is stale without claiming live inverter output', () => {
+        const mockStaleSolarRec = {
+            ...mockActiveRecommendation,
+            quality: 'STALE',
+            limitations: ['STALE_SOLAR_TELEMETRY'],
+        }
+
+        render(
+            <MemoryRouter>
+                <RecommendationCard recommendation={mockStaleSolarRec} />
+            </MemoryRouter>
+        )
+
+        expect(screen.getByText(/Your solar connection has not sent a fresh reading recently\. This recommendation is based on the forecast and recent data\./i)).toBeInTheDocument()
+        // Ensure it does NOT claim current live generation
+        expect(screen.queryByText(/Your inverter is currently generating/i)).not.toBeInTheDocument()
+    })
+
+    it('renders dynamic Best Time window clearly in primary card', () => {
+        const mockDynamicWindowRec = {
+            ...mockActiveRecommendation,
+            timing_window: '08:00 AM – 01:00 PM',
+        }
+
+        render(
+            <MemoryRouter>
+                <RecommendationCard recommendation={mockDynamicWindowRec} />
+            </MemoryRouter>
+        )
+
+        expect(screen.getByText('Best Time')).toBeInTheDocument()
+        expect(screen.getByText('08:00 AM – 01:00 PM')).toBeInTheDocument()
+    })
+
+    it('renders compact mode with title, action, best time, and link for Dashboard consistency', () => {
+        render(
+            <MemoryRouter>
+                <RecommendationCard recommendation={mockActiveRecommendation} compact={true} />
+            </MemoryRouter>
+        )
+
+        expect(screen.getByText('Shift Flexible Loads to Solar Generation Window')).toBeInTheDocument()
+        expect(screen.getByText('Run washing machine or water pump between 11:30 and 14:00.')).toBeInTheDocument()
+        expect(screen.getByText('11:30 - 14:00')).toBeInTheDocument()
+        expect(screen.getByText('HIGH PRIORITY')).toBeInTheDocument()
+        expect(screen.getByText(/View full recommendations & explanation/i)).toBeInTheDocument()
+    })
+
+    describe('Recommendation Feedback Loop & Consumer UX', () => {
+        it('handles positive usefulness feedback and subsequent follow-through selection', async () => {
+            const feedbackSpy = vi.spyOn(recommendationApi, 'submitRecommendationFeedback').mockImplementation(
+                (id, data) => Promise.resolve({
+                    success: true,
+                    data: {
+                        feedback: {
+                            id: 'fb-001',
+                            recommendation_id: id,
+                            usefulness: data.usefulness === 'YES' ? 'USEFUL' : 'NOT_USEFUL',
+                            followed_status: data.followed_status || null,
+                            reason: data.reason || null,
+                            optional_comment: data.optional_comment || null,
+                        },
+                    },
+                })
+            )
+
+            render(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={mockActiveRecommendation} />
+                </MemoryRouter>
+            )
+
+            // Primary question
+            expect(screen.getByText('Was this recommendation useful?')).toBeInTheDocument()
+            const yesBtn = screen.getByRole('button', { name: /Mark recommendation as useful/i })
+            fireEvent.click(yesBtn)
+
+            await waitFor(() => {
+                expect(feedbackSpy).toHaveBeenCalledWith('rec-001', { usefulness: 'YES' })
+                expect(screen.getByText(/Thanks\. Your feedback helps improve recommendations\./i)).toBeInTheDocument()
+                expect(screen.getByText('Did you follow it?')).toBeInTheDocument()
+            })
+
+            // Follow-through response
+            const partlyBtn = screen.getByRole('button', { name: 'Partly' })
+            fireEvent.click(partlyBtn)
+
+            await waitFor(() => {
+                expect(feedbackSpy).toHaveBeenCalledWith('rec-001', {
+                    usefulness: 'YES',
+                    followed_status: 'PARTLY',
+                })
+                expect(screen.getByText('Marked useful')).toBeInTheDocument()
+                expect(screen.getByText('Partly followed')).toBeInTheDocument()
+            })
+        })
+
+        it('handles negative feedback with reason selection and optional comment', async () => {
+            const feedbackSpy = vi.spyOn(recommendationApi, 'submitRecommendationFeedback').mockResolvedValue({
+                success: true,
+                data: {
+                    feedback: {
+                        id: 'fb-002',
+                        recommendation_id: 'rec-001',
+                        usefulness: 'NOT_USEFUL',
+                        reason: 'WRONG_TIMING',
+                        optional_comment: 'Was away from home during midday',
+                    },
+                },
+            })
+
+            render(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={mockActiveRecommendation} />
+                </MemoryRouter>
+            )
+
+            const noBtn = screen.getByRole('button', { name: /Mark recommendation as not useful/i })
+            fireEvent.click(noBtn)
+
+            await waitFor(() => {
+                expect(screen.getByText('What could be better?')).toBeInTheDocument()
+            })
+
+            // Select reason
+            const wrongTimingBtn = screen.getByRole('button', { name: 'Wrong timing' })
+            fireEvent.click(wrongTimingBtn)
+
+            // Fill comment
+            const commentInput = screen.getByPlaceholderText(/Optional short note/i)
+            fireEvent.change(commentInput, { target: { value: 'Was away from home during midday' } })
+
+            const submitBtn = screen.getByRole('button', { name: 'Submit Feedback' })
+            fireEvent.click(submitBtn)
+
+            await waitFor(() => {
+                expect(feedbackSpy).toHaveBeenCalledWith('rec-001', {
+                    usefulness: 'NO',
+                    reason: 'WRONG_TIMING',
+                    optional_comment: 'Was away from home during midday',
+                })
+                expect(screen.getByText('Feedback recorded')).toBeInTheDocument()
+                expect(screen.getByText('(Wrong timing)')).toBeInTheDocument()
+            })
+        })
+
+        it('renders read-only feedback states in history mode without prompting', () => {
+            const recWithUsefulFeedback = {
+                ...mockActiveRecommendation,
+                user_feedback: {
+                    usefulness: 'USEFUL',
+                    followed_status: 'YES',
+                },
+            }
+
+            const { rerender } = render(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={recWithUsefulFeedback} isHistorical={true} />
+                </MemoryRouter>
+            )
+
+            expect(screen.queryByText('Was this recommendation useful?')).not.toBeInTheDocument()
+            expect(screen.getByText('Useful')).toBeInTheDocument()
+            expect(screen.getByText('Followed')).toBeInTheDocument()
+
+            // Negative feedback in history
+            const recWithNegativeFeedback = {
+                ...mockActiveRecommendation,
+                user_feedback: {
+                    usefulness: 'NOT_USEFUL',
+                    reason: 'WRONG_TIMING',
+                },
+            }
+
+            rerender(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={recWithNegativeFeedback} isHistorical={true} />
+                </MemoryRouter>
+            )
+
+            expect(screen.getByText('Not useful')).toBeInTheDocument()
+            expect(screen.getByText(/Wrong timing/i)).toBeInTheDocument()
+
+            // No feedback in history
+            const recWithNoFeedback = {
+                ...mockActiveRecommendation,
+                user_feedback: null,
+            }
+
+            rerender(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={recWithNoFeedback} isHistorical={true} />
+                </MemoryRouter>
+            )
+
+            expect(screen.getByText('— No feedback')).toBeInTheDocument()
+        })
+
+        it('renders canonical action-first copy directly and hides internal rule IDs in primary card', () => {
+            const canonicalRec = {
+                ...mockActiveRecommendation,
+                title: 'Use flexible appliances during solar hours',
+                action: 'Run the washing machine, water pump or water heater during the higher-solar period.',
+            }
+
+            render(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={canonicalRec} />
+                </MemoryRouter>
+            )
+
+            // Consumer-friendly copy rendered directly from canonical backend fields
+            expect(screen.getByText('Use flexible appliances during solar hours')).toBeInTheDocument()
+            expect(screen.getByText('Run the washing machine, water pump or water heater during the higher-solar period.')).toBeInTheDocument()
+
+            // Primary card does not expose rule ID or internal identifiers in top-level view; housed in details
+            expect(screen.getByText('Technical details & audit evidence')).toBeInTheDocument()
+            const technicalDetails = screen.getByText('Technical details & audit evidence').closest('details')
+            expect(technicalDetails).toBeInTheDocument()
+            expect(technicalDetails).toHaveTextContent('Rule ID:')
+        })
+
+        it('displays friendly weather data limitation UX without raw network error in primary view', () => {
+            const weatherLimitationRec = {
+                ...mockActiveRecommendation,
+                limitations: ['Open-Meteo geocoding request failed: Network error (28)...'],
+            }
+
+            render(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={weatherLimitationRec} />
+                </MemoryRouter>
+            )
+
+            expect(screen.getByText('Weather data unavailable')).toBeInTheDocument()
+            expect(screen.getByText(/This recommendation is currently based on the expected solar pattern rather than live weather conditions\./i)).toBeInTheDocument()
+
+            // Raw error is tucked inside secondary technical disclosure
+            const technicalDetails = screen.getByText('Technical details & audit evidence').closest('details')
+            expect(technicalDetails).toBeInTheDocument()
+            expect(technicalDetails).toHaveTextContent(/Network error \(28\)/i)
+        })
+
+        it('displays stale telemetry warning with Check connection CTA and avoids showing Actual beside it', () => {
+            const staleRec = {
+                ...mockActiveRecommendation,
+                quality: 'STALE',
+                limitations: ['STALE_SOLAR_TELEMETRY'],
+            }
+
+            render(
+                <MemoryRouter>
+                    <RecommendationCard recommendation={staleRec} />
+                </MemoryRouter>
+            )
+
+            expect(screen.getByText('Solar data is out of date')).toBeInTheDocument()
+            expect(screen.getByText(/Your inverter has not sent a fresh reading recently\. Recommendations that depend on live solar data may be less reliable\./i)).toBeInTheDocument()
+            expect(screen.getByText(/Check connection →/i)).toBeInTheDocument()
+        })
+
+        it('deduplicates active recommendations of the same type on RecommendationsPage', async () => {
+            const duplicateRecs = [
+                {
+                    ...mockActiveRecommendation,
+                    id: 'rec-001',
+                    type: 'SHIFT_TO_SOLAR_WINDOW',
+                    title: 'Shift Flexible Loads to Solar Generation Window',
+                },
+                {
+                    ...mockActiveRecommendation,
+                    id: 'rec-002',
+                    type: 'SHIFT_TO_SOLAR_WINDOW',
+                    title: 'Shift Flexible Loads to Solar Generation Window',
+                },
+            ]
+
+            vi.spyOn(recommendationApi, 'getRecommendations').mockResolvedValue({
+                recommendations: duplicateRecs,
+                active_count: 2,
+            })
+
+            render(
+                <MemoryRouter>
+                    <RecommendationsPage />
+                </MemoryRouter>
+            )
+
+            await waitFor(() => {
+                const cards = screen.getAllByTestId('recommendation-card')
+                // Deduplicated from 2 to 1 in the active list
+                expect(cards).toHaveLength(1)
+            })
+        })
+    })
 })
+

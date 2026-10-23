@@ -241,6 +241,178 @@ final class RecommendationRepository
         return Recommendation::fromRow($row);
     }
 
+    public function findActiveEquivalent(
+        string $householdId,
+        string $type,
+        ?string $start = null,
+        ?string $end = null,
+        ?string $title = null
+    ): ?Recommendation {
+        $byPeriod = $this->findActiveByPeriod($householdId, $type, $start, $end);
+        if ($byPeriod !== null) {
+            return $byPeriod;
+        }
+
+        if ($type === \App\Domain\Recommendation\RecommendationTaxonomy::TYPE_DATA_LIMITATION) {
+            $sql = 'SELECT * FROM recommendations
+                    WHERE household_id = :household_id
+                      AND type = :type
+                      AND status = :status';
+            $params = [
+                ':household_id' => $householdId,
+                ':type' => $type,
+                ':status' => Recommendation::STATUS_ACTIVE,
+            ];
+            if ($title !== null) {
+                $sql .= ' AND title = :title';
+                $params[':title'] = $title;
+            }
+            $sql .= ' ORDER BY created_at DESC LIMIT 1';
+            $stmt = $this->db()->prepare($sql);
+            $stmt->execute($params);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return $row ? Recommendation::fromRow($row) : null;
+        }
+
+        $sql = 'SELECT * FROM recommendations
+                WHERE household_id = :household_id
+                  AND type = :type
+                  AND status = :status
+                ORDER BY created_at DESC
+                LIMIT 1';
+        $stmt = $this->db()->prepare($sql);
+        $stmt->execute([
+            ':household_id' => $householdId,
+            ':type' => $type,
+            ':status' => Recommendation::STATUS_ACTIVE,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? Recommendation::fromRow($row) : null;
+    }
+
+    public function supersedeDuplicateActives(
+        string $householdId,
+        string $type,
+        string $canonicalId,
+        DateTimeImmutable $now
+    ): int {
+        $stmt = $this->db()->prepare(<<<'SQL'
+            UPDATE recommendations
+            SET status = :superseded,
+                updated_at = :now
+            WHERE household_id = :household_id
+              AND type = :type
+              AND status = :active
+              AND id != :canonical_id
+        SQL);
+
+        $stmt->execute([
+            ':superseded' => Recommendation::STATUS_SUPERSEDED,
+            ':now' => $now->format('Y-m-d H:i:s'),
+            ':household_id' => $householdId,
+            ':type' => $type,
+            ':active' => Recommendation::STATUS_ACTIVE,
+            ':canonical_id' => $canonicalId,
+        ]);
+
+        return $stmt->rowCount();
+    }
+
+    public function supersedeActivesByType(
+        string $householdId,
+        string $type,
+        DateTimeImmutable $now
+    ): int {
+        $stmt = $this->db()->prepare(<<<'SQL'
+            UPDATE recommendations
+            SET status = :superseded,
+                updated_at = :now
+            WHERE household_id = :household_id
+              AND type = :type
+              AND status = :active
+        SQL);
+
+        $stmt->execute([
+            ':superseded' => Recommendation::STATUS_SUPERSEDED,
+            ':now' => $now->format('Y-m-d H:i:s'),
+            ':household_id' => $householdId,
+            ':type' => $type,
+            ':active' => Recommendation::STATUS_ACTIVE,
+        ]);
+
+        return $stmt->rowCount();
+    }
+
+    public function supersedeActivesByTitle(
+        string $householdId,
+        string $type,
+        string $title,
+        DateTimeImmutable $now
+    ): int {
+        $stmt = $this->db()->prepare(<<<'SQL'
+            UPDATE recommendations
+            SET status = :superseded,
+                updated_at = :now
+            WHERE household_id = :household_id
+              AND type = :type
+              AND title = :title
+              AND status = :active
+        SQL);
+
+        $stmt->execute([
+            ':superseded' => Recommendation::STATUS_SUPERSEDED,
+            ':now' => $now->format('Y-m-d H:i:s'),
+            ':household_id' => $householdId,
+            ':type' => $type,
+            ':title' => $title,
+            ':active' => Recommendation::STATUS_ACTIVE,
+        ]);
+
+        return $stmt->rowCount();
+    }
+
+    public function supersedeConflictingWeatherRecommendations(
+        string $householdId,
+        string $incomingType,
+        ?string $periodStart,
+        ?string $periodEnd,
+        DateTimeImmutable $now
+    ): int {
+        if ($periodStart === null) {
+            return 0;
+        }
+
+        $targetType = ($incomingType === \App\Domain\Recommendation\RecommendationTaxonomy::TYPE_SOLAR_DECLINE_RESPONSE)
+            ? \App\Domain\Recommendation\RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW
+            : (($incomingType === \App\Domain\Recommendation\RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW)
+                ? \App\Domain\Recommendation\RecommendationTaxonomy::TYPE_SOLAR_DECLINE_RESPONSE
+                : null);
+
+        if ($targetType === null) {
+            return 0;
+        }
+
+        $sql = 'UPDATE recommendations
+                SET status = :superseded, updated_at = :now
+                WHERE household_id = :household_id
+                  AND type = :type
+                  AND status = :active
+                  AND relevant_period_start = :period_start
+                  AND evidence_json LIKE \'%WEATHER%\'';
+
+        $stmt = $this->db()->prepare($sql);
+        $stmt->execute([
+            ':superseded' => Recommendation::STATUS_SUPERSEDED,
+            ':now' => $now->format('Y-m-d H:i:s'),
+            ':household_id' => $householdId,
+            ':type' => $targetType,
+            ':active' => Recommendation::STATUS_ACTIVE,
+            ':period_start' => $periodStart,
+        ]);
+
+        return $stmt->rowCount();
+    }
+
     public function findRecentDismissed(
         string $householdId,
         string $type,
@@ -286,7 +458,7 @@ final class RecommendationRepository
             SET status = :status_expired, updated_at = :updated_at
             WHERE household_id = :household_id
               AND status = :status_active
-              AND valid_until < :now_threshold
+              AND (valid_until < :now_threshold OR (relevant_period_end IS NOT NULL AND relevant_period_end < :today))
         SQL);
 
         $stmt->execute([
@@ -294,6 +466,7 @@ final class RecommendationRepository
             ':status_active' => Recommendation::STATUS_ACTIVE,
             ':updated_at' => $now->format('Y-m-d H:i:s'),
             ':now_threshold' => $now->format('Y-m-d H:i:s'),
+            ':today' => $now->format('Y-m-d'),
             ':household_id' => $householdId,
         ]);
 

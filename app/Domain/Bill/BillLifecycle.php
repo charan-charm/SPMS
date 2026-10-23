@@ -43,14 +43,20 @@ final class BillLifecycle
             BillStatus::VERIFIED,
         ],
         BillStatus::NEEDS_REVIEW => [
+            BillStatus::EXTRACTED,
             BillStatus::VERIFIED,
         ],
         BillStatus::VERIFIED => [],
         BillStatus::NOT_A_BILL => [],
-        BillStatus::UNREADABLE => [],
-        BillStatus::UNCERTAIN => [],
+        BillStatus::UNREADABLE => [
+            BillStatus::NEEDS_REVIEW,
+        ],
+        BillStatus::UNCERTAIN => [
+            BillStatus::NEEDS_REVIEW,
+        ],
         BillStatus::PROCESSING_FAILED => [
             BillStatus::PROCESSING,
+            BillStatus::NEEDS_REVIEW,
         ],
     ];
 

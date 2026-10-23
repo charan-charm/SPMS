@@ -13,6 +13,8 @@ use App\Domain\Bill\BillUpload;
 use App\Domain\Bill\BillUploadIntakeService;
 use App\Domain\Household\HouseholdService;
 use App\Repositories\BillTempDocumentRepository;
+use App\Services\BillExtraction\BillExtractionGateway;
+use App\Services\BillExtraction\MistralBillExtractionProvider;
 use App\Services\Files\LocalPrivateBillStorage;
 use App\Services\Mistral\MistralOcrClient;
 use App\Support\Config;
@@ -93,11 +95,13 @@ final class DemoBillScenarioSeeder
             ]);
         };
 
-        $fakeOcr = static fn (string $body): MistralOcrClient => new MistralOcrClient(
-            'mk_FAKE-DEMO-NEVER-REAL',
-            'mistral-ocr-demo-fixture',
-            static fn (string $method, string $url, array $options): array => ['status' => 200, 'body' => $body]
-        );
+        $fakeOcr = static fn (string $body): BillExtractionGateway => new BillExtractionGateway([
+            new MistralBillExtractionProvider(new MistralOcrClient(
+                'mk_FAKE-DEMO-NEVER-REAL',
+                'mistral-ocr-demo-fixture',
+                static fn (string $method, string $url, array $options): array => ['status' => 200, 'body' => $body]
+            )),
+        ]);
 
         $makeAccount = static function (string $localPart, string $displayName) use (&$passwords, $pdo): Account {
             $password = bin2hex(random_bytes(12)) . 'Aa1!';

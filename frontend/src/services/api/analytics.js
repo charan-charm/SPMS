@@ -42,6 +42,8 @@ import { apiClient } from './client'
  *   data_notes: { solar: string, consumption: string, net: string },
  * }>}
  */
+export const ANALYTICS_TIMEOUT_MS = 30000
+
 export async function getMonthlyAnalytics({ from_month, to_month, signal } = {}) {
     const query = new URLSearchParams()
     if (from_month) query.set('from_month', from_month)
@@ -49,7 +51,7 @@ export async function getMonthlyAnalytics({ from_month, to_month, signal } = {})
 
     const qs  = query.toString()
     const url = `/analytics/monthly${qs ? `?${qs}` : ''}`
-    const { data } = await apiClient.get(url, { signal })
+    const { data } = await apiClient.get(url, { signal, timeoutMs: ANALYTICS_TIMEOUT_MS })
     return data
 }
 
@@ -65,11 +67,35 @@ export async function getMonthlyAnalytics({ from_month, to_month, signal } = {})
  * }>}
  */
 export async function getAnalyticsSummary(signal) {
-    const { data } = await apiClient.get('/analytics/summary', { signal })
+    const { data } = await apiClient.get('/analytics/summary', { signal, timeoutMs: ANALYTICS_TIMEOUT_MS })
+    return data
+}
+
+export async function getDailyAnalytics({ range, from_date, to_date, signal } = {}) {
+    const query = new URLSearchParams()
+    if (range) query.set('range', range)
+    if (from_date) query.set('from_date', from_date)
+    if (to_date) query.set('to_date', to_date)
+
+    const qs = query.toString()
+    const url = `/analytics/daily${qs ? `?${qs}` : ''}`
+    const { data } = await apiClient.get(url, { signal, timeoutMs: ANALYTICS_TIMEOUT_MS })
+    return data
+}
+
+export async function getDayCurveAnalytics({ date, signal } = {}) {
+    const query = new URLSearchParams()
+    if (date) query.set('date', date)
+
+    const qs = query.toString()
+    const url = `/analytics/day-curve${qs ? `?${qs}` : ''}`
+    const { data } = await apiClient.get(url, { signal, timeoutMs: ANALYTICS_TIMEOUT_MS })
     return data
 }
 
 export const analyticsApi = {
     getMonthly: getMonthlyAnalytics,
+    getDaily: getDailyAnalytics,
+    getDayCurve: getDayCurveAnalytics,
     getSummary: getAnalyticsSummary,
 }

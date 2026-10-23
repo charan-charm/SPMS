@@ -6,11 +6,13 @@ namespace App\Domain\Bill;
 
 use App\Domain\Account\Account;
 use App\Repositories\BillTempDocumentRepository;
+use App\Services\BillExtraction\BillExtractionFailure;
+use App\Services\BillExtraction\BillExtractionGateway;
+use App\Services\BillExtraction\MistralBillExtractionProvider;
 use App\Services\Files\BillTemporaryStorageInterface;
 use App\Services\Files\LocalPrivateBillStorage;
 use App\Services\Mistral\BillAnnotationNormalizer;
 use App\Services\Mistral\MistralOcrClient;
-use App\Services\Mistral\MistralOcrException;
 use App\Support\AppException;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -54,12 +56,19 @@ use Throwable;
  */
 final class BillProcessingService
 {
+    private readonly BillExtractionGateway $gateway;
+
     public function __construct(
         private readonly BillService $bills = new BillService(),
         private readonly BillTempDocumentRepository $tempDocs = new BillTempDocumentRepository(),
         private readonly BillTemporaryStorageInterface $storage = new LocalPrivateBillStorage(),
-        private readonly MistralOcrClient $ocr = new MistralOcrClient()
+        BillExtractionGateway|MistralOcrClient|null $gateway = null
     ) {
+        if ($gateway instanceof MistralOcrClient) {
+            $this->gateway = new BillExtractionGateway([new MistralBillExtractionProvider($gateway)]);
+        } else {
+            $this->gateway = $gateway ?? new BillExtractionGateway();
+        }
     }
 
     /**
@@ -391,7 +400,7 @@ final class BillProcessingService
     }
 
     // ------------------------------------------------------------------
-    // Mistral OCR path (image / PDF)
+    // Multimodal OCR path (image / PDF) — resilient gateway
     // ------------------------------------------------------------------
 
     /**
@@ -411,52 +420,61 @@ final class BillProcessingService
         string $path,
         DateTimeImmutable $now
     ): array {
-        // Provider call — through the ratified Mistral client.
+        // Determine MIME type from the temp document metadata (already
+        // validated at intake; no re-sniffing here).
+        $extension = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+        $mimeType = match ($extension) {
+            'pdf'        => 'application/pdf',
+            'png'        => 'image/png',
+            'jpg', 'jpeg'=> 'image/jpeg',
+            default      => $temp->mimeType(),
+        };
+
+        // Provider call — through the extraction gateway (Mistral → Gemini fallback).
         try {
-            $validated = MistralOcrClient::validateLocalDocument($path);
-
-            if ($validated['mime'] === 'application/pdf') {
-                $document = MistralOcrClient::documentUrlRef(
-                    $this->ocr->fetchSignedUrl($this->ocr->uploadDocument($validated), 24)
-                );
-            } else {
-                $document = MistralOcrClient::imageDataUrlDocument($validated);
-            }
-
-            $result = $this->ocr->processOcr(
-                $document,
+            $result = $this->gateway->extract(
+                $path,
+                $mimeType,
                 MistralOcrClient::billAnnotationSchema(),
                 MistralOcrClient::BILL_ANNOTATION_PROMPT
             );
-        } catch (MistralOcrException $e) {
+        } catch (BillExtractionFailure $e) {
             $this->bills->markProcessingFailed($account, $bill->id(), $now);
-            $reasonCode = match ($e->category()) {
-                MistralOcrException::RATE_LIMIT => 'EXTRACTION_RATE_LIMITED',
-                MistralOcrException::NETWORK => 'EXTRACTION_TIMEOUT',
-                MistralOcrException::AUTHENTICATION => 'EXTRACTION_AUTHENTICATION_ERROR',
-                MistralOcrException::CONFIGURATION => 'EXTRACTION_CONFIGURATION_ERROR',
-                MistralOcrException::INVALID_REQUEST => 'UNSUPPORTED_DOCUMENT',
-                default => 'EXTRACTION_PROVIDER_ERROR',
+            $reasonCode = match ($e->category) {
+                BillExtractionFailure::TERMINAL_AUTH             => 'EXTRACTION_AUTHENTICATION_ERROR',
+                BillExtractionFailure::TERMINAL_NOT_CONFIGURED   => 'EXTRACTION_CONFIGURATION_ERROR',
+                BillExtractionFailure::TERMINAL_INVALID_DOCUMENT => 'UNSUPPORTED_DOCUMENT',
+                BillExtractionFailure::TERMINAL_MALFORMED_RESPONSE => 'EXTRACTION_MALFORMED_RESPONSE',
+                default                                          => 'EXTRACTION_PROVIDER_ERROR',
             };
+
+            $underlying = $e->getPrevious();
+            while ($underlying instanceof BillExtractionFailure && $underlying->getPrevious() !== null) {
+                $underlying = $underlying->getPrevious();
+            }
+
+            $safeCategory = $e->category;
+            if ($underlying instanceof \App\Services\Mistral\MistralOcrException) {
+                $safeCategory = $underlying->category();
+            }
+
             try {
-                \App\Support\Logger::default()->error('mistral.ocr.failed', [
-                    'bill_id' => $bill->id(),
-                    'category' => $e->category(),
-                    'reason' => $reasonCode,
-                    'http_status' => $e->status(),
-                    'mistral_code' => $e->mistralCode(),
+                \App\Support\Logger::default()->error('bill.extraction.gateway.failed', [
+                    'bill_id'    => $bill->id(),
+                    'provider'   => $e->provider,
+                    'category'   => $e->category,
+                    'reason'     => $reasonCode,
+                    'http_status'=> $e->httpStatus,
                 ]);
             } catch (\Throwable) {
             }
             throw new AppException(
                 'EXTRACTION_FAILED',
-                'SPMS could not finish reading this bill (' . $e->category() . '). Please retry or upload another copy.',
+                'SPMS could not finish reading this bill (' . $safeCategory . '). Please retry or upload another copy.',
                 502,
                 [
-                    'category' => $e->category(),
-                    'reason' => $reasonCode,
-                    'status' => $e->status(),
-                    'provider_code' => $e->mistralCode(),
+                    'category' => $e->category,
+                    'reason'   => $reasonCode,
                 ]
             );
         }
@@ -468,17 +486,30 @@ final class BillProcessingService
         $normalized = BillAnnotationNormalizer::normalize($annotation);
         $validations = BillAnnotationNormalizer::validations($annotation);
         $flags = BillAnnotationNormalizer::qualityFlags($normalized, $validations);
-        $assessment = $normalized['assessment'];
+        [$assessment, $assessmentReason] = BillAnnotationNormalizer::reconcileAssessment(
+            $normalized['assessment'],
+            $normalized['assessment_reason'],
+            $validations,
+            $flags
+        );
         $documentConfidence = $normalized['document_confidence'];
+
+        // Use provider provenance from the gateway result.
+        $extractionProvider = is_string($result['provider'] ?? null) && $result['provider'] !== ''
+            ? $result['provider']
+            : 'unknown';
+        $extractionModel = is_string($result['model'] ?? null) && $result['model'] !== ''
+            ? $result['model']
+            : null;
 
         $draft = BillExtractionDraft::create(
             $bill->id(),
-            'mistral',
-            is_string($result['model'] ?? null) && $result['model'] !== '' ? $result['model'] : $this->ocr->model(),
+            $extractionProvider,
+            $extractionModel ?? $extractionProvider,
             $now,
-            $normalized['assessment'],
-            $normalized['assessment_reason'],
-            $normalized['document_confidence'],
+            $assessment,
+            $assessmentReason,
+            $documentConfidence,
             $normalized['values'],
             $normalized['confidences'],
             $now

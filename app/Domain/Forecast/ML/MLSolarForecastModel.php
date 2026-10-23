@@ -204,8 +204,8 @@ final class MLSolarForecastModel
 
             // Deterministic baseline prediction for same hour
             $hour = $testSample['hour'];
-            $clearSky = $hour >= 6 && $hour <= 18 ? round(sin((($hour - 6) / 12.0) * M_PI), 4) : 0.0;
-            $baseTestPreds[] = round($peakCapacityW * $clearSky, 1);
+            $clearSky = $hour >= 6 && $hour <= 18 ? round(pow(sin((($hour - 6) / 12.0) * M_PI), SolarForecastModel::APERTURE_EXPONENT), 4) : 0.0;
+            $baseTestPreds[] = round($peakCapacityW * $clearSky * SolarForecastModel::DEFAULT_PERFORMANCE_RATIO, 1);
         }
 
         // 6. Compute evaluation metrics
@@ -286,6 +286,7 @@ final class MLSolarForecastModel
         $totalPredictedKwh = 0.0;
         $current = $start;
 
+        $tzObj = new DateTimeZone($householdTz);
         if ($resolution === ForecastHorizon::RESOLUTION_HOURLY) {
             while ($current < $end) {
                 $hour = (int) $current->format('H');
@@ -302,7 +303,7 @@ final class MLSolarForecastModel
                 } else {
                     // Daylight prediction
                     $daylightFraction = ($hour - 6) / 12.0;
-                    $diurnalSin = round(sin($daylightFraction * M_PI), 4);
+                    $diurnalSin = round(pow(max(0.0, sin($daylightFraction * M_PI)), SolarForecastModel::APERTURE_EXPONENT), 4);
                     $diurnalCos = round(cos($daylightFraction * M_PI), 4);
 
                     $weather = $weatherFactorsByHour[$timestampKey] ?? null;
@@ -408,6 +409,69 @@ final class MLSolarForecastModel
             $limitations[] = 'External weather provider unavailable: ML solar model relied on clear-sky diurnal profile.';
         }
 
+        // Weather evidence summary for UI & provenance
+        $weatherSummary = null;
+        if ($weatherResult['available'] && !empty($weatherResult['hourly_factors'])) {
+            $selectedFactor = null;
+            foreach ($weatherResult['hourly_factors'] as $hf) {
+                try {
+                    $hfHour = (int) (new DateTimeImmutable($hf['timestamp']))->format('H');
+                    if ($hfHour >= 11 && $hfHour <= 14) {
+                        $selectedFactor = $hf;
+                        break;
+                    }
+                } catch (\Throwable) {
+                }
+            }
+            if ($selectedFactor === null) {
+                $selectedFactor = $weatherResult['hourly_factors'][0] ?? null;
+            }
+
+            $weatherSummary = [
+                'status' => 'ACTIVE',
+                'available' => true,
+                'provider' => $weatherResult['provider'] ?? 'OPEN_METEO',
+                'source_label' => ($weatherResult['provider'] ?? '') === 'FAKE_WEATHER_PROVIDER' ? 'Simulated Open-Meteo' : 'Open-Meteo',
+                'location_name' => $geoResult['name'] ?? $locationLabel ?? 'Household Location',
+                'coordinates' => $resolvedLat !== null && $resolvedLon !== null ? [
+                    'latitude' => $resolvedLat,
+                    'longitude' => $resolvedLon,
+                ] : ($weatherResult['location'] ?? null),
+                'retrieved_at' => $weatherResult['retrieved_at'] ?? (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
+                'temperature_c' => $selectedFactor['temperature_c'] ?? null,
+                'cloud_cover_pct' => $selectedFactor['cloud_cover_pct'] ?? null,
+                'precipitation_probability_pct' => $selectedFactor['precipitation_probability_pct'] ?? null,
+                'solar_irradiance_wm2' => $selectedFactor['direct_normal_irradiance_wm2'] ?? $selectedFactor['shortwave_radiation_wm2'] ?? null,
+                'condition' => $selectedFactor['condition'] ?? 'CLEAR',
+                'clear_sky_index' => $selectedFactor['clear_sky_index'] ?? null,
+                'error' => null,
+                'fallback_explanation' => null,
+            ];
+        } else {
+            $isNotConfigured = ($locationLabel === null || trim($locationLabel) === '');
+            $weatherSummary = [
+                'status' => $isNotConfigured ? 'UNAVAILABLE' : 'FALLBACK',
+                'available' => false,
+                'provider' => $weatherResult['provider'] ?? 'OPEN_METEO',
+                'source_label' => 'Open-Meteo',
+                'location_name' => $geoResult['name'] ?? $locationLabel,
+                'coordinates' => $resolvedLat !== null && $resolvedLon !== null ? [
+                    'latitude' => $resolvedLat,
+                    'longitude' => $resolvedLon,
+                ] : null,
+                'retrieved_at' => $weatherResult['retrieved_at'] ?? null,
+                'temperature_c' => null,
+                'cloud_cover_pct' => null,
+                'precipitation_probability_pct' => null,
+                'solar_irradiance_wm2' => null,
+                'condition' => 'UNAVAILABLE',
+                'error' => $weatherResult['error'] ?? ($isNotConfigured ? 'Household location label is not configured.' : 'Weather service unavailable'),
+                'fallback_explanation' => $isNotConfigured
+                    ? 'Household location is not configured: solar forecast relies on clear-sky physical solar pattern fallback model.'
+                    : 'External weather provider unavailable: solar forecast relies on clear-sky physical solar pattern fallback model.',
+            ];
+        }
+
         $provenance = [
             'forecast_source' => 'ML',
             'model_name' => self::MODEL_NAME,
@@ -428,6 +492,15 @@ final class MLSolarForecastModel
             'capacity_source' => $capacitySource,
             'weather_available' => $weatherResult['available'],
             'weather_provider' => $weatherResult['provider'] ?? null,
+            'weather' => $weatherSummary,
+            'location_resolved' => $geoResult['resolved'] ?? false,
+            'location_name' => $geoResult['name'] ?? null,
+            'coordinates' => $resolvedLat !== null && $resolvedLon !== null ? [
+                'latitude' => $resolvedLat,
+                'longitude' => $resolvedLon,
+            ] : null,
+            'evidence_count' => count($rawReadings),
+            'historical_days' => $this->readings->countDistinctDaysByHouseholdId($householdId),
             'generated_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
         ];
 

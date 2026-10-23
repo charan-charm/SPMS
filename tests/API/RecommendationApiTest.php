@@ -276,6 +276,94 @@ final class RecommendationApiTest
                 } catch (AppException $e) {
                     Assert::same(404, $e->httpStatus());
                 }
+
+                // User B tries to submit feedback on Household A's recommendation
+                $reqFeedback = AuthTesting::authed(
+                    Request::create('POST', "/api/v1/recommendations/{$recId}/feedback", body: [
+                        'usefulness' => 'YES',
+                    ]),
+                    $fixtureB['account']
+                );
+                try {
+                    self::controller()->submitFeedback($reqFeedback, ['id' => $recId]);
+                    Assert::true(false, 'Expected 404 for cross-household feedback request');
+                } catch (AppException $e) {
+                    Assert::same(404, $e->httpStatus());
+                }
+            }),
+
+            TestResult::check('POST /api/v1/recommendations/{id}/feedback saves usefulness, follow-through, and reasons', function (): void {
+                RequestId::set(RequestId::new());
+                $fixture = AuthTesting::householdFixture();
+                $repo = new RecommendationRepository(Database::connection());
+                $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+                $recId = self::uuid();
+                $rec = new Recommendation(
+                    id: $recId,
+                    householdId: $fixture['household_id'],
+                    type: RecommendationTaxonomy::TYPE_SHIFT_TO_SOLAR_WINDOW,
+                    status: Recommendation::STATUS_ACTIVE,
+                    priority: Recommendation::PRIORITY_HIGH,
+                    title: 'Use flexible appliances during solar hours',
+                    summary: 'Shift usage to midday',
+                    action: 'Run washing machine',
+                    reason: 'Peak solar midday',
+                    timingWindow: '09:00 - 13:00',
+                    potentialImpact: null,
+                    impactJson: null,
+                    evidenceJson: [],
+                    confidence: RecommendationConfidence::CONFIDENCE_HIGH,
+                    quality: 'GOOD',
+                    dataNature: 'PREDICTED',
+                    provenance: ['ForecastService'],
+                    limitations: [],
+                    relevantPeriodStart: null,
+                    relevantPeriodEnd: null,
+                    validFrom: $now,
+                    validUntil: $now->modify('+24 hours'),
+                    createdAt: $now,
+                    updatedAt: $now
+                );
+                $repo->save($rec);
+
+                // 1. Submit positive feedback with follow-through
+                $reqPos = AuthTesting::authed(
+                    Request::create('POST', "/api/v1/recommendations/{$recId}/feedback", body: [
+                        'usefulness' => 'YES',
+                        'followed_status' => 'YES',
+                    ]),
+                    $fixture['account']
+                );
+                $resPos = self::controller()->submitFeedback($reqPos, ['id' => $recId]);
+                Assert::same(200, $resPos->status());
+                $dataPos = $resPos->data();
+                Assert::same('USEFUL', $dataPos['feedback']['usefulness']);
+                Assert::same('YES', $dataPos['feedback']['followed_status']);
+
+                // 2. Verified via GET /api/v1/recommendations/{id}
+                $reqGet = AuthTesting::authed(Request::create('GET', "/api/v1/recommendations/{$recId}"), $fixture['account']);
+                $resGet = self::controller()->show($reqGet, ['id' => $recId]);
+                $dataGet = $resGet->data();
+                Assert::true(isset($dataGet['recommendation']['user_feedback']));
+                Assert::same('USEFUL', $dataGet['recommendation']['user_feedback']['usefulness']);
+                Assert::same('YES', $dataGet['recommendation']['user_feedback']['followed_status']);
+
+                // 3. Update feedback to negative with reason and comment
+                $reqNeg = AuthTesting::authed(
+                    Request::create('POST', "/api/v1/recommendations/{$recId}/feedback", body: [
+                        'usefulness' => 'NO',
+                        'reason' => 'WRONG_TIMING',
+                        'optional_comment' => 'Nobody was home during those hours.',
+                    ]),
+                    $fixture['account']
+                );
+                $resNeg = self::controller()->submitFeedback($reqNeg, ['id' => $recId]);
+                Assert::same(200, $resNeg->status());
+                $dataNeg = $resNeg->data();
+                Assert::same('NOT_USEFUL', $dataNeg['feedback']['usefulness']);
+                Assert::same('WRONG_TIMING', $dataNeg['feedback']['reason']);
+                Assert::same('Nobody was home during those hours.', $dataNeg['feedback']['optional_comment']);
             }),
         ];
     }

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { Lightbulb, Sparkles } from 'lucide-react'
+import { Lightbulb, RefreshCw, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { InsightCard } from '../../components/data-display/InsightCard'
 import { EmptyState } from '../../components/feedback/EmptyState'
@@ -27,6 +27,16 @@ import { getInsights } from '../../services/api/intelligence'
 
 const DEGRADED_STATUSES = ['STALE', 'DEGRADED', 'UNAVAILABLE']
 
+const CATEGORY_FILTERS = [
+    { id: 'ALL', label: 'All' },
+    { id: 'WEATHER', label: 'Weather' },
+    { id: 'SOLAR', label: 'Solar' },
+    { id: 'CONSUMPTION', label: 'Consumption' },
+    { id: 'ENERGY', label: 'Energy' },
+    { id: 'COST', label: 'Cost' },
+    { id: 'DATA_LIMITATION', label: 'Limitations' },
+]
+
 function normalizeError(err) {
     return err instanceof ApiError
         ? err
@@ -37,9 +47,18 @@ export function InsightsPage() {
     const [phase, setPhase] = useState('loading')
     const [insights, setInsights] = useState([])
     const [error, setError] = useState(null)
+    const [isRefreshing, setIsRefreshing] = useState(false)
+    const [selectedCategory, setSelectedCategory] = useState('ALL')
 
-    const loadInsights = useCallback(() => {
-        getInsights()
+    const loadData = useCallback((showLoadingPhase = true) => {
+        if (showLoadingPhase) {
+            setPhase('loading')
+        } else {
+            setIsRefreshing(true)
+        }
+        setError(null)
+
+        return getInsights()
             .then((response) => {
                 setInsights(Array.isArray(response.data?.insights) ? response.data.insights : [])
                 setPhase('ready')
@@ -48,19 +67,51 @@ export function InsightsPage() {
                 setError(normalizeError(err))
                 setPhase('error')
             })
+            .finally(() => {
+                setIsRefreshing(false)
+            })
     }, [])
 
     useEffect(() => {
-        loadInsights()
-    }, [loadInsights])
+        let isMounted = true
+        getInsights()
+            .then((response) => {
+                if (!isMounted) return
+                setInsights(Array.isArray(response.data?.insights) ? response.data.insights : [])
+                setPhase('ready')
+            })
+            .catch((err) => {
+                if (!isMounted) return
+                setError(normalizeError(err))
+                setPhase('error')
+            })
+        return () => {
+            isMounted = false
+        }
+    }, [])
 
     const retryLoad = () => {
-        setPhase('loading')
-        setError(null)
-        loadInsights()
+        loadData(true)
+    }
+
+    const handleRefresh = () => {
+        loadData(false)
     }
 
     const degraded = insights.some((insight) => DEGRADED_STATUSES.includes(insight.data_status))
+
+    const counts = useMemo(() => {
+        const acc = { ALL: insights.length }
+        for (const item of insights) {
+            acc[item.category] = (acc[item.category] || 0) + 1
+        }
+        return acc
+    }, [insights])
+
+    const filteredInsights = useMemo(() => {
+        if (selectedCategory === 'ALL') return insights
+        return insights.filter((i) => i.category === selectedCategory)
+    }, [insights, selectedCategory])
 
     return (
         <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -72,6 +123,20 @@ export function InsightsPage() {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRefresh}
+                        disabled={isRefreshing || phase === 'loading'}
+                        aria-label="Refresh insights"
+                        className="flex items-center gap-1.5"
+                    >
+                        <RefreshCw
+                            className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+                            aria-hidden="true"
+                        />
+                        <span>Refresh</span>
+                    </Button>
                     <Link to="/recommendations">
                         <Button variant="secondary" size="sm" className="flex items-center gap-1.5">
                             <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
@@ -113,13 +178,71 @@ export function InsightsPage() {
                             icon={Lightbulb}
                             explanation="No insights are available yet. Insight generation is backend-controlled: it runs only through the backend's internal evaluation path and is never triggered by ordinary page loads."
                             limitation="SPMS does not invent insights to fill the page. Insights appear here once controlled generation runs against real energy evidence."
+                            action={
+                                <div className="flex flex-wrap items-center justify-center gap-2">
+                                    <Link to="/solar">
+                                        <Button variant="secondary" size="sm">
+                                            View Solar Telemetry
+                                        </Button>
+                                    </Link>
+                                    <Link to="/bills">
+                                        <Button variant="outline" size="sm">
+                                            Review Bills
+                                        </Button>
+                                    </Link>
+                                </div>
+                            }
                         />
                     ) : (
-                        <div className="flex flex-col gap-4" aria-live="polite">
-                            {insights.map((insight) => (
-                                <InsightCard key={insight.id} insight={insight} />
-                            ))}
-                        </div>
+                        <>
+                            {/* Category Filter Tabs */}
+                            <div className="flex items-center justify-between gap-2 overflow-x-auto border-b border-border pb-2">
+                                <div className="flex items-center gap-1.5">
+                                    <SlidersHorizontal className="size-4 text-muted" aria-hidden="true" />
+                                    <span className="text-xs font-semibold uppercase tracking-wider text-muted">Category:</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    {CATEGORY_FILTERS.map((tab) => {
+                                        const count = counts[tab.id] || 0
+                                        if (tab.id !== 'ALL' && count === 0) return null
+                                        return (
+                                            <button
+                                                key={tab.id}
+                                                type="button"
+                                                onClick={() => setSelectedCategory(tab.id)}
+                                                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                                                    selectedCategory === tab.id
+                                                        ? 'bg-primary-soft font-semibold text-primary-active'
+                                                        : 'text-muted hover:bg-surface-alt hover:text-heading'
+                                                }`}
+                                            >
+                                                {tab.label}
+                                                <span className="ml-1 opacity-75">({count})</span>
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+
+                            {filteredInsights.length === 0 ? (
+                                <EmptyState
+                                    variant="noResults"
+                                    title="No matching insights"
+                                    explanation={`There are no insights in the "${selectedCategory}" category for this household.`}
+                                    action={
+                                        <Button variant="secondary" size="sm" onClick={() => setSelectedCategory('ALL')}>
+                                            Show all insights
+                                        </Button>
+                                    }
+                                />
+                            ) : (
+                                <div className="flex flex-col gap-4" aria-live="polite">
+                                    {filteredInsights.map((insight) => (
+                                        <InsightCard key={insight.id} insight={insight} />
+                                    ))}
+                                </div>
+                            )}
+                        </>
                     )}
 
                     <p className="text-xs text-muted">

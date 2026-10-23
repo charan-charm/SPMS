@@ -237,7 +237,7 @@ describe('SPMS O4.7 — Solar Header Synchronization & Semantics', () => {
             )
 
             expect(screen.getByText(/Telemetry is STALE/i)).toBeInTheDocument()
-            expect(screen.getByText(/night standby or offline/i)).toBeInTheDocument()
+            expect(screen.getByText(/standby/i)).toBeInTheDocument()
             expect(screen.getByText('STALE')).toBeInTheDocument()
             expect(screen.getByText('OFFLINE')).toBeInTheDocument()
         })

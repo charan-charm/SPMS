@@ -137,7 +137,13 @@ function BillSequenceNotice({ sequence, gapAcknowledged, onGapAcknowledgeChange 
  * - Preserves strict test heading ordering:
  *     solar readings < bill validation < review needed
  */
-export function BillReviewPanel({ detail, actions = null, onVerify = null, verifying = false }) {
+export function BillReviewPanel({
+    detail,
+    actions = null,
+    onVerify = null,
+    verifying = false,
+    onCorrectField = null,
+}) {
     const [gapAcknowledged, setGapAcknowledged] = useState(false)
     const needsReview = detail.status === 'NEEDS_REVIEW'
     const provenance = detail.provenance ?? {}
@@ -149,16 +155,32 @@ export function BillReviewPanel({ detail, actions = null, onVerify = null, verif
     const primaryProvenance = isStructured ? 'STRUCTURED_IMPORT' : 'AI_EXTRACTION'
     const SourceIcon = docSource.icon
 
+    const conflictCount = (detail.validations ?? []).filter((v) => v.status === 'CONFLICT').length
+    const hasCriticalFlags = (detail.quality_flags ?? []).some((q) =>
+        ['INCONSISTENT_NET_UNITS', 'CONFLICTING_METER_READINGS', 'CONFLICTING_SOLAR_READINGS'].includes(q.code)
+    )
+    const hasConflicts = needsReview || conflictCount > 0 || hasCriticalFlags
+    const hasRequiredFields = Boolean(
+        detail.values?.billing_period_start &&
+        detail.values?.billing_period_end &&
+        detail.values?.consumption_kwh !== null &&
+        detail.values?.consumption_kwh !== undefined
+    )
+
     const isDuplicateOrOverlap = ['DUPLICATE_PERIOD', 'OVERLAPPING_PERIOD', 'INVALID_REVERSED'].includes(
         detail.sequence_validation?.status
     )
     const isOwnershipMismatch = detail.ownership?.status === 'MISMATCH'
     const isGapDetected = detail.sequence_validation?.status === 'GAP_DETECTED'
-    const canVerify = !isDuplicateOrOverlap && !isOwnershipMismatch && (!isGapDetected || gapAcknowledged)
+    const canVerify =
+        !isDuplicateOrOverlap &&
+        !isOwnershipMismatch &&
+        (!isGapDetected || gapAcknowledged) &&
+        !hasConflicts
 
     return (
-        <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-            {/* LEFT MAIN COLUMN (~70% desktop width): Core billing information & validations */}
+        <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(340px,1fr)] xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,1fr)]">
+            {/* LEFT COLUMN: Core billing details, readings, costs, context & technical details */}
             <div className="flex min-w-0 flex-col gap-6">
                 {/* 1. Header & review notice */}
                 <div className="flex flex-col gap-1.5">
@@ -190,47 +212,89 @@ export function BillReviewPanel({ detail, actions = null, onVerify = null, verif
                     </p>
                 </div>
 
-                {!needsReview && (
+                {needsReview || conflictCount > 0 ? (
+                    <div
+                        role="alert"
+                        className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-body"
+                    >
+                        <TriangleAlert className="mt-0.5 size-4.5 shrink-0 text-warning" aria-hidden="true" />
+                        <div className="flex-1">
+                            <p className="font-semibold text-heading">
+                                {conflictCount === 1 ? '1 value needs your attention' : `${conflictCount || 'Some'} values need your attention`}
+                            </p>
+                            <p className="mt-0.5 text-xs text-muted">
+                                SPMS detected inconsistent readings. Inspect the highlighted sections below and correct them using your physical or digital statement before verification.
+                            </p>
+                        </div>
+                    </div>
+                ) : (
                     <div
                         role="status"
-                        className="flex items-start gap-2 rounded-lg border border-info/30 bg-info/5 px-4 py-3 text-sm text-body"
+                        className="flex items-start gap-2.5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-body"
                     >
-                        <CircleCheck className="mt-0.5 size-4 shrink-0 text-info" aria-hidden="true" />
-                        SPMS read this bill without finding anything that needs your review — please still check
-                        the values before verification.
+                        <CircleCheck className="mt-0.5 size-4.5 shrink-0 text-primary" aria-hidden="true" />
+                        <div className="flex-1">
+                            <p className="font-semibold text-heading">
+                                All values validated
+                            </p>
+                            <p className="mt-0.5 text-xs text-muted">
+                                SPMS read this bill without finding anything that needs your review — please still check the values before verification.
+                            </p>
+                        </div>
                     </div>
                 )}
 
-                {/* 2. Grouped Information Sections (Identity, Energy, Meter, Solar, Cost, Context) */}
-                <BillInformationSections detail={detail} />
-
-                {/* 3. Validation checks summary (heading: "Bill validation") */}
-                <BillValidationSummary validations={detail.validations} />
-
-                {/* 4. Conflict Alert (heading: "Review needed") — ordered strictly after validation */}
-                {needsReview && <BillReviewAlert detail={detail} />}
+                {/* 2. Grouped Information Sections (Identity, Energy, Meter, Solar, Cost, Context, Technical) */}
+                <BillInformationSections detail={detail} onCorrectField={onCorrectField} />
             </div>
 
             {/* RIGHT SIDEBAR (~30% desktop width): Contextual status, source, ownership, actions */}
-            <aside className="flex min-w-0 flex-col gap-4">
+            <aside className="flex min-w-0 flex-col gap-5">
                 {/* Primary Action / Verification State */}
                 {actions ??
                     (detail.status === 'VERIFIED' ? (
-                        <div className="flex flex-col gap-2 rounded-xl border border-primary/30 bg-primary/5 p-4 shadow-2xs">
+                        <div className="flex flex-col gap-3 rounded-xl border border-primary/30 bg-primary/5 p-4 shadow-2xs">
                             <div className="flex items-center gap-2 font-medium text-primary">
                                 <ShieldCheck className="size-5 shrink-0" aria-hidden="true" />
-                                <span>This bill has been verified</span>
+                                <span className="font-semibold">This bill has been verified</span>
                                 {detail.verified_at && (
                                     <span className="ml-auto text-xs text-muted">
                                         {formatDate(detail.verified_at.slice(0, 10))}
                                     </span>
                                 )}
                             </div>
-                            <p className="text-xs text-muted">
-                                This statement is locked into your household energy baseline.
+                            <p className="text-xs text-body">
+                                This statement is locked into your household energy baseline as authoritative data.
                             </p>
+                            <div className="border-t border-primary/20 pt-2.5">
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                                    Downstream SPMS usage
+                                </p>
+                                <ul className="mt-1.5 space-y-1 text-xs text-muted">
+                                    <li className="flex items-center gap-1.5">
+                                        <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                        <span>Demand baseline calibrated</span>
+                                    </li>
+                                    <li className="flex items-center gap-1.5">
+                                        <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                        <span>Consumption & solar generation forecasts updated</span>
+                                    </li>
+                                    <li className="flex items-center gap-1.5">
+                                        <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                        <span>Energy balance & solar self-consumption verified</span>
+                                    </li>
+                                    <li className="flex items-center gap-1.5">
+                                        <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                        <span>Cost & tariff analysis records updated</span>
+                                    </li>
+                                    <li className="flex items-center gap-1.5">
+                                        <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                        <span>Energy-saving recommendations refined</span>
+                                    </li>
+                                </ul>
+                            </div>
                             {detail.quality_flags?.some((f) => f.code === 'INCOMPLETE_HISTORY') && (
-                                <p className="text-xs text-warning">
+                                <p className="text-xs text-warning pt-1">
                                     Verified with acknowledged billing gap. Future forecasts account for this incomplete historical sequence.
                                 </p>
                             )}
@@ -242,10 +306,57 @@ export function BillReviewPanel({ detail, actions = null, onVerify = null, verif
                                     Ready to verify this bill?
                                 </CardTitle>
                                 <CardDescription className="text-xs">
-                                    Verification locks this bill into your household energy records and updates your consumption baseline.
+                                    Your corrections will become the trusted bill data used by SPMS.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent className="flex flex-col gap-3 pt-0">
+                                {/* Pre-verification checklist */}
+                                <div className="rounded-lg border border-border/70 bg-surface-alt/40 p-3 text-xs">
+                                    <p className="font-semibold text-heading mb-2">Pre-verification checklist</p>
+                                    <ul className="space-y-1.5 text-muted">
+                                        <li className="flex items-center gap-2">
+                                            {hasRequiredFields ? (
+                                                <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                            ) : (
+                                                <TriangleAlert className="size-3.5 text-warning shrink-0" />
+                                            )}
+                                            <span className={hasRequiredFields ? 'text-heading font-medium' : ''}>
+                                                Required fields complete
+                                            </span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            {!isOwnershipMismatch ? (
+                                                <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                            ) : (
+                                                <TriangleAlert className="size-3.5 text-danger shrink-0" />
+                                            )}
+                                            <span className={!isOwnershipMismatch ? 'text-heading font-medium' : ''}>
+                                                Service number matches household
+                                            </span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            {!isDuplicateOrOverlap && (!isGapDetected || gapAcknowledged) ? (
+                                                <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                            ) : (
+                                                <TriangleAlert className="size-3.5 text-warning shrink-0" />
+                                            )}
+                                            <span className={!isDuplicateOrOverlap && (!isGapDetected || gapAcknowledged) ? 'text-heading font-medium' : ''}>
+                                                Billing period sequence valid
+                                            </span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            {conflictCount === 0 && !hasCriticalFlags ? (
+                                                <CircleCheck className="size-3.5 text-primary shrink-0" />
+                                            ) : (
+                                                <TriangleAlert className="size-3.5 text-warning shrink-0" />
+                                            )}
+                                            <span className={conflictCount === 0 && !hasCriticalFlags ? 'text-heading font-medium' : ''}>
+                                                No unresolved critical inconsistencies
+                                            </span>
+                                        </li>
+                                    </ul>
+                                </div>
+
                                 <Button
                                     type="button"
                                     className="w-full"
@@ -255,6 +366,16 @@ export function BillReviewPanel({ detail, actions = null, onVerify = null, verif
                                 >
                                     Verify bill
                                 </Button>
+                                {(conflictCount > 0 || hasCriticalFlags) && (
+                                    <p className="text-xs text-warning">
+                                        Resolve the {conflictCount} flagged inconsistencies before verifying.
+                                    </p>
+                                )}
+                                {!hasRequiredFields && (
+                                    <p className="text-xs text-warning">
+                                        Please provide all required bill values (period, consumption, bill amount).
+                                    </p>
+                                )}
                                 {isOwnershipMismatch && (
                                     <p className="text-xs text-warning">
                                         Verification is unavailable because the service number does not match this household.
@@ -362,14 +483,14 @@ export function BillReviewPanel({ detail, actions = null, onVerify = null, verif
                         <div className="text-sm">
                             <Disclosure label="Extraction details">
                                 {detail.extraction ? (
-                                    <div className="flex flex-col gap-2">
-                                        <dl className="grid gap-x-4 gap-y-1">
+                                    <div className="mt-1 flex flex-col max-h-60 sm:max-h-64 overflow-y-auto overscroll-contain pr-2 pt-1 pb-4 rounded-lg border border-border/40 bg-surface-alt/30 p-2.5">
+                                        <dl className="flex flex-col divide-y divide-border/20">
                                             {Object.entries(detail.values)
                                                 .filter(([field, value]) => value !== null && FIELD_LABEL[field])
                                                 .map(([field]) => (
-                                                    <div key={field} className="flex justify-between gap-2 py-0.5 text-xs">
-                                                        <dt className="text-muted truncate">{FIELD_LABEL[field].label}</dt>
-                                                        <dd className="text-body font-mono text-[11px] shrink-0">
+                                                    <div key={field} className="flex items-center justify-between gap-3 py-1.5 text-xs leading-normal first:pt-0 last:pb-0">
+                                                        <dt className="text-muted truncate font-medium">{FIELD_LABEL[field].label}</dt>
+                                                        <dd className="text-body font-mono text-[11px] shrink-0 rounded bg-surface px-1.5 py-0.5 border border-border/40">
                                                             {provenance[field]?.confidence && !isStructured
                                                                 ? `${Math.round(provenance[field].confidence * 100)}% conf`
                                                                 : 'recorded'}
@@ -385,6 +506,12 @@ export function BillReviewPanel({ detail, actions = null, onVerify = null, verif
                         </div>
                     </CardContent>
                 </Card>
+
+                {/* Bill validation summary (moved to right column for balanced layout) */}
+                <BillValidationSummary validations={detail.validations} />
+
+                {/* Conflict Alert (heading: "Review needed") — ordered strictly after validation */}
+                {needsReview && <BillReviewAlert detail={detail} />}
 
                 <p className="flex items-center gap-2 text-xs text-muted">
                     <ShieldCheck className="size-3.5 shrink-0" aria-hidden="true" />

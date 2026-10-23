@@ -34,12 +34,19 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
     private string $baseUrl;
     /** @var (callable(string, array<string, mixed>, ?string, ?string, int, int): array<string, mixed>)|null */
     private $transport;
+    /** @var array<string, array{session: array<string, mixed>, expires_at: int}> */
+    private array $sessionCache = [];
 
     public function __construct(?string $baseUrl = null, ?callable $transport = null)
     {
         $configured = $baseUrl ?? (string) Config::get('GOODWE_API_BASE_URL', self::DEFAULT_BASE_URL);
         $this->baseUrl = rtrim($configured !== '' ? $configured : self::DEFAULT_BASE_URL, '/');
         $this->transport = $transport;
+    }
+
+    public function clearSessionCache(): void
+    {
+        $this->sessionCache = [];
     }
 
     /**
@@ -198,6 +205,177 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
         }
 
         $regionalBaseUrl = $session['base_url'] ?? $this->baseUrl;
+
+        // Resolve inverter serial number
+        $inverterSn = $credentials->inverterSn();
+        if ($inverterSn === null || $inverterSn === '') {
+            $inverterDiscovery = $this->queryStationInverters($token, $stationId, $regionalBaseUrl);
+            $inverterSn = $inverterDiscovery['inverters'][0]['sn'] ?? null;
+        }
+
+        $stationTz = new \DateTimeZone('Asia/Kolkata');
+        $now = new DateTimeImmutable('now', $stationTz);
+
+        // 1. MODERN GATEWAY FIRST (/web/sems/* modern SEMS+ platform)
+        $modernCandidates = $this->resolveModernGatewayCandidates($regionalBaseUrl);
+        foreach ($modernCandidates as $candidateBaseUrl) {
+            try {
+                // A. Energy Flow: provides instantaneous power pAc (kW), operating status, refreshTime
+                $flowResponse = $this->getJson(
+                    '/web/sems/sems-plant/api/stations/flow?stationId=' . rawurlencode($stationId),
+                    $token,
+                    $candidateBaseUrl,
+                    connectTimeout: 4,
+                    timeout: 8
+                );
+                $flowData = $flowResponse['data'] ?? [];
+
+                // B. Telecounting: provides today's generation (kWh) & lifetime generation (kWh)
+                $telecountingData = [];
+                if ($inverterSn !== null && $inverterSn !== '') {
+                    try {
+                        $tcResponse = $this->getJson(
+                            '/web/sems/sems-plant/api/equipments/' . rawurlencode($inverterSn) . '/telecounting?sn=' . rawurlencode($inverterSn) . '&deviceType=INVERTER&pwId=' . rawurlencode($stationId),
+                            $token,
+                            $candidateBaseUrl,
+                            connectTimeout: 4,
+                            timeout: 8
+                        );
+                        $telecountingData = $this->flattenFactors($tcResponse['data'] ?? []);
+                    } catch (\Throwable) {}
+                }
+
+                // C. Telemetry: provides electrical measurements (Vac, Iac, Fac, temperature, MPPT)
+                $telemetryData = [];
+                if ($inverterSn !== null && $inverterSn !== '') {
+                    try {
+                        $telemResponse = $this->getJson(
+                            '/web/sems/sems-plant/api/equipments/' . rawurlencode($inverterSn) . '/telemetry?sn=' . rawurlencode($inverterSn) . '&deviceType=INVERTER&pwId=' . rawurlencode($stationId),
+                            $token,
+                            $candidateBaseUrl,
+                            connectTimeout: 4,
+                            timeout: 8
+                        );
+                        $telemetryData = $this->flattenFactors($telemResponse['data'] ?? []);
+                    } catch (\Throwable) {}
+                }
+
+                // D. Production: fallback for today's generation
+                $productionKwh = null;
+                try {
+                    $prodResponse = $this->postJson(
+                        '/web/sems/sems-plant/api/stations/production',
+                        [
+                            'stationId' => $stationId,
+                            'items' => ['profitProStats', 'proSystemTotalStats'],
+                            'dimension' => 'day',
+                            'isReport' => false,
+                            'startTime' => $now->format('Y-m-d') . ' 00:00:00',
+                            'endTime' => $now->format('Y-m-d') . ' 23:59:59',
+                        ],
+                        $token,
+                        $candidateBaseUrl,
+                        connectTimeout: 4,
+                        timeout: 8
+                    );
+                    if (isset($prodResponse['data']['proSystemTotalStats']) && is_numeric($prodResponse['data']['proSystemTotalStats'])) {
+                        $productionKwh = (float) $prodResponse['data']['proSystemTotalStats'];
+                    }
+                } catch (\Throwable) {}
+
+                // If flowData has data or telecounting has data, we successfully reached modern GoodWe SEMS+
+                if (!empty($flowData) || !empty($telecountingData)) {
+                    // 1. Instantaneous Power (W)
+                    $rawPacKw = null;
+                    if (isset($flowData['pAc']) && is_numeric($flowData['pAc'])) {
+                        $rawPacKw = (float) $flowData['pAc'];
+                    } elseif (isset($telemetryData['pAc']) && is_numeric($telemetryData['pAc'])) {
+                        $rawPacKw = (float) $telemetryData['pAc'];
+                    } elseif (isset($telecountingData['pAc']) && is_numeric($telecountingData['pAc'])) {
+                        $rawPacKw = (float) $telecountingData['pAc'];
+                    }
+                    $powerW = $rawPacKw !== null ? max(0.0, round($rawPacKw * 1000.0, 2)) : 0.0;
+
+                    // 2. Today's Generation (kWh)
+                    $dailyKwh = 0.0;
+                    if (isset($telecountingData['proPvStatsToday']) && is_numeric($telecountingData['proPvStatsToday'])) {
+                        $dailyKwh = max(0.0, round((float) $telecountingData['proPvStatsToday'], 3));
+                    } elseif ($productionKwh !== null) {
+                        $dailyKwh = max(0.0, round($productionKwh, 3));
+                    }
+
+                    // 3. Lifetime Total Generation (kWh) — preserve null when provider does not supply
+                    $totalKwh = null;
+                    if (isset($telecountingData['proPvStatsTotal']) && is_numeric($telecountingData['proPvStatsTotal'])) {
+                        $totalKwh = max(0.0, round((float) $telecountingData['proPvStatsTotal'], 3));
+                    }
+
+                    // 4. Inverter Status
+                    $rawStatus = isset($flowData['status']) && is_numeric($flowData['status'])
+                        ? (int) $flowData['status']
+                        : 1;
+                    $inverterStatus = $this->mapInverterStatus($rawStatus, $powerW);
+
+                    // 5. Electrical Parameters
+                    $acVoltage = isset($telemetryData['Vac']) && is_numeric($telemetryData['Vac'])
+                        ? (float) $telemetryData['Vac']
+                        : null;
+                    $acCurrent = isset($telemetryData['Iac']) && is_numeric($telemetryData['Iac'])
+                        ? (float) $telemetryData['Iac']
+                        : null;
+                    $acFreq = isset($telemetryData['Fac']) && is_numeric($telemetryData['Fac'])
+                        ? (float) $telemetryData['Fac']
+                        : null;
+                    $temp = isset($telemetryData['Temperature']) && is_numeric($telemetryData['Temperature'])
+                        ? (float) $telemetryData['Temperature']
+                        : null;
+
+                    // 6. DC Array Power (PV)
+                    $pvPowerW = null;
+                    if (isset($telemetryData['MPPT-1:Ppv']) && is_numeric($telemetryData['MPPT-1:Ppv'])) {
+                        $pvPowerW = max(0.0, round((float) $telemetryData['MPPT-1:Ppv'] * 1000.0, 2));
+                    } elseif ($powerW > 0.0) {
+                        $pvPowerW = $powerW;
+                    }
+
+                    // 7. Measurement Time
+                    $rawTime = isset($flowData['refreshTime']) && is_string($flowData['refreshTime'])
+                        ? $flowData['refreshTime']
+                        : null;
+                    $measurementTime = $this->parseMeasurementTime($rawTime, $now);
+
+                    $nowUtc = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+                    $measUtc = $measurementTime->setTimezone(new \DateTimeZone('UTC'));
+                    $ageSeconds = max(0, $nowUtc->getTimestamp() - $measUtc->getTimestamp());
+                    $dataStatus = $ageSeconds > 900 ? 'STALE' : 'FRESH';
+
+                    return new NormalizedSolarSnapshot(
+                        stationId: $stationId,
+                        inverterSn: $inverterSn,
+                        measurementTime: $measurementTime,
+                        receivedAt: $now,
+                        powerW: $powerW,
+                        dailyGenerationKwh: $dailyKwh,
+                        totalGenerationKwh: $totalKwh,
+                        pvPowerW: $pvPowerW,
+                        acVoltageV: $acVoltage !== null ? max(0.0, round($acVoltage, 2)) : null,
+                        acCurrentA: $acCurrent !== null ? max(0.0, round($acCurrent, 2)) : null,
+                        acFrequencyHz: $acFreq !== null ? max(0.0, round($acFreq, 2)) : null,
+                        temperatureC: $temp !== null ? round($temp, 2) : null,
+                        gridPowerW: null,
+                        consumptionPowerW: null,
+                        inverterStatus: $inverterStatus,
+                        dataNature: 'ACTUAL',
+                        dataStatus: $dataStatus,
+                        dataQuality: 'GOOD'
+                    );
+                }
+            } catch (\Throwable $e) {
+                // Try next modern candidate or fallback to legacy
+            }
+        }
+
+        // 2. LEGACY FALLBACK (getMonitorDetail on legacy regional host)
         $detail = $this->getMonitorDetail($token, $stationId, $regionalBaseUrl);
         $inverters = $detail['inverter'] ?? [];
         if (!is_array($inverters) || empty($inverters)) {
@@ -209,9 +387,9 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
         }
 
         $matched = null;
-        if ($credentials->inverterSn() !== null && $credentials->inverterSn() !== '') {
+        if ($inverterSn !== null && $inverterSn !== '') {
             foreach ($inverters as $inv) {
-                if (isset($inv['sn']) && (string) $inv['sn'] === $credentials->inverterSn()) {
+                if (isset($inv['sn']) && (string) $inv['sn'] === $inverterSn) {
                     $matched = $inv;
                     break;
                 }
@@ -221,7 +399,6 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
             $matched = $inverters[0];
         }
 
-        $now = new DateTimeImmutable('now');
         $rawTime = isset($matched['time']) ? (string) $matched['time'] : (isset($detail['info']['time']) ? (string) $detail['info']['time'] : null);
         $measurementTime = $this->parseMeasurementTime($rawTime, $now);
 
@@ -258,7 +435,9 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
         $rawStatus = isset($matched['status']) ? (int) $matched['status'] : 1;
         $inverterStatus = $this->mapInverterStatus($rawStatus, $pac);
 
-        $ageSeconds = abs($now->getTimestamp() - $measurementTime->getTimestamp());
+        $nowUtc = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $measUtc = $measurementTime->setTimezone(new \DateTimeZone('UTC'));
+        $ageSeconds = max(0, $nowUtc->getTimestamp() - $measUtc->getTimestamp());
         $dataStatus = $ageSeconds > 900 ? 'STALE' : 'FRESH'; // > 15 min is stale
 
         return new NormalizedSolarSnapshot(
@@ -298,56 +477,151 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
 
         $regionalBaseUrl = $session['base_url'] ?? $this->baseUrl;
 
+        // Resolve inverter SN
+        $inverterSn = $credentials->inverterSn();
+        if ($inverterSn === null || $inverterSn === '') {
+            $inverterDiscovery = $this->queryStationInverters($token, $stationId, $regionalBaseUrl);
+            $inverterSn = $inverterDiscovery['inverters'][0]['sn'] ?? null;
+        }
+
+        $stationTz = new \DateTimeZone('Asia/Kolkata');
+        $now = new DateTimeImmutable('now', $stationTz);
+        $dateStr = $date->format('Y-m-d');
+
+        // 1. MODERN GATEWAY FIRST (/web/sems/sems-plant/api/portal/equipments/{sn}/timeSeriesData)
+        if ($inverterSn !== null && $inverterSn !== '') {
+            $modernCandidates = $this->resolveModernGatewayCandidates($regionalBaseUrl);
+            foreach ($modernCandidates as $candidateBaseUrl) {
+                try {
+                    $tsEndpoint = '/web/sems/sems-plant/api/portal/equipments/' . rawurlencode($inverterSn) . '/timeSeriesData';
+                    $payload = [
+                        'stationId' => $stationId,
+                        'sn' => $inverterSn,
+                        'deviceType' => 'INVERTER',
+                        'group' => 'operation_area',
+                        'module' => 'chart',
+                        'startDateTime' => "{$dateStr} 00:00:00",
+                        'endDateTime' => "{$dateStr} 23:59:59",
+                        'timeGranularity' => '1',
+                    ];
+
+                    $response = $this->postJson($tsEndpoint, $payload, $token, $candidateBaseUrl, connectTimeout: 6, timeout: 12);
+                    $data = $response['data'] ?? [];
+                    $xAxis = $data['xAxis'] ?? [];
+                    $yAxis = $data['yAxis'] ?? [];
+
+                    if (!empty($xAxis) && !empty($yAxis)) {
+                        $powerSeries = $yAxis[0]['data'] ?? [];
+                        $unit = strtolower((string) ($yAxis[0]['unit'] ?? 'kw'));
+                        $multiplier = $unit === 'w' ? 1.0 : 1000.0;
+
+                        $results = [];
+                        $runningEnergyKwh = 0.0;
+
+                        foreach ($xAxis as $idx => $xItem) {
+                            if (!is_array($xItem) || !isset($xItem['xAxi'])) {
+                                continue;
+                            }
+                            $timeStr = (string) $xItem['xAxi'];
+                            $val = $powerSeries[$idx] ?? null;
+
+                            // Parse timestamp in station local time (Y-m-d H:i:s or Y-m-d H:i)
+                            $pointTime = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $timeStr);
+                            if ($pointTime === false) {
+                                $pointTime = DateTimeImmutable::createFromFormat('Y-m-d H:i', $timeStr);
+                            }
+                            if ($pointTime === false) {
+                                continue;
+                            }
+
+                            if ($val === null || $val === '') {
+                                continue;
+                            }
+
+                            $powerKw = (float) $val;
+                            $powerW = max(0.0, round($powerKw * $multiplier, 2));
+
+                            // 5-minute interval energy Riemann sum: power(kW) * (5/60 hours)
+                            $runningEnergyKwh += ($powerKw * (5.0 / 60.0));
+
+                            $results[] = new NormalizedSolarSnapshot(
+                                stationId: $stationId,
+                                inverterSn: $inverterSn,
+                                measurementTime: $pointTime,
+                                receivedAt: $now,
+                                powerW: $powerW,
+                                dailyGenerationKwh: max(0.0, round($runningEnergyKwh, 3)),
+                                totalGenerationKwh: null,
+                                pvPowerW: $powerW > 0.0 ? $powerW : null,
+                                inverterStatus: $powerW > 0.0 ? 'NORMAL' : 'WAITING',
+                                dataNature: 'ACTUAL',
+                                dataStatus: 'FRESH',
+                                dataQuality: 'GOOD'
+                            );
+                        }
+
+                        if (!empty($results)) {
+                            return $results;
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // Try next modern candidate or fallback
+                }
+            }
+        }
+
+        // 2. LEGACY FALLBACK (/api/v2/PowerStation/GetPowerStationPowerAndIncomeByDay)
         $payload = [
             'powerStationId' => $stationId,
-            'date' => $date->format('Y-m-d'),
+            'date' => $dateStr,
         ];
 
-        $response = $this->postJson(
-            '/api/v2/PowerStation/GetPowerStationPowerAndIncomeByDay',
-            $payload,
-            $token,
-            $regionalBaseUrl
-        );
-        $data = $response['data'] ?? [];
-        $pTotal = $data['pTotal'] ?? [];
-        if (!is_array($pTotal)) {
-            return [];
-        }
-
-        $results = [];
-        $now = new DateTimeImmutable('now');
-        $sn = $credentials->inverterSn();
-
-        foreach ($pTotal as $point) {
-            if (!isset($point['x']) || !isset($point['y'])) {
-                continue;
-            }
-            $timeStr = (string) $point['x'];
-            $pac = (float) $point['y'];
-            $pointTime = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $date->format('Y-m-d') . ' ' . $timeStr . ':00');
-            if ($pointTime === false) {
-                $pointTime = DateTimeImmutable::createFromFormat('Y-m-d H:i', $date->format('Y-m-d') . ' ' . $timeStr);
-            }
-            if ($pointTime === false) {
-                continue;
-            }
-
-            $results[] = new NormalizedSolarSnapshot(
-                stationId: $credentials->stationId(),
-                inverterSn: $sn,
-                measurementTime: $pointTime,
-                receivedAt: $now,
-                powerW: max(0.0, round($pac, 2)),
-                dailyGenerationKwh: 0.0,
-                inverterStatus: $pac > 0 ? 'NORMAL' : 'OFFLINE',
-                dataNature: 'ACTUAL',
-                dataStatus: 'FRESH',
-                dataQuality: 'GOOD'
+        try {
+            $response = $this->postJson(
+                '/api/v2/PowerStation/GetPowerStationPowerAndIncomeByDay',
+                $payload,
+                $token,
+                $regionalBaseUrl
             );
-        }
+            $data = $response['data'] ?? [];
+            $pTotal = $data['pTotal'] ?? [];
+            if (is_array($pTotal)) {
+                $results = [];
+                $sn = $inverterSn ?? $credentials->inverterSn();
 
-        return $results;
+                foreach ($pTotal as $point) {
+                    if (!isset($point['x']) || !isset($point['y'])) {
+                        continue;
+                    }
+                    $timeStr = (string) $point['x'];
+                    $pac = (float) $point['y'];
+                    $pointTime = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $dateStr . ' ' . $timeStr . ':00');
+                    if ($pointTime === false) {
+                        $pointTime = DateTimeImmutable::createFromFormat('Y-m-d H:i', $dateStr . ' ' . $timeStr);
+                    }
+                    if ($pointTime === false) {
+                        continue;
+                    }
+
+                    $results[] = new NormalizedSolarSnapshot(
+                        stationId: $stationId,
+                        inverterSn: $sn,
+                        measurementTime: $pointTime,
+                        receivedAt: $now,
+                        powerW: max(0.0, round($pac, 2)),
+                        dailyGenerationKwh: 0.0,
+                        inverterStatus: $pac > 0 ? 'NORMAL' : 'OFFLINE',
+                        dataNature: 'ACTUAL',
+                        dataStatus: 'FRESH',
+                        dataQuality: 'GOOD'
+                    );
+                }
+
+                return $results;
+            }
+        } catch (\Throwable) {}
+
+        return [];
     }
 
     public function fetchHistoricalDailyTotals(
@@ -366,6 +640,14 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
      */
     private function crossLogin(string $account, string $password): array
     {
+        $cacheKey = hash('sha256', $account . ':' . $password);
+        if ($this->transport === null && isset($this->sessionCache[$cacheKey])) {
+            $cached = $this->sessionCache[$cacheKey];
+            if (($cached['expires_at'] ?? 0) > time()) {
+                return $cached['session'];
+            }
+        }
+
         $payload = [
             'account' => $account,
             'pwd' => $password,
@@ -435,7 +717,7 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
             // Fail-safe: diagnostic logging must never break authentication flow
         }
 
-        return [
+        $session = [
             'token' => $tokenHeader,
             'raw_token' => (string) ($data['token'] ?? ''),
             'token_header' => $tokenHeader,
@@ -446,6 +728,15 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
             'api_host' => $apiHost,
             'region' => $region,
         ];
+
+        if ($this->transport === null) {
+            $this->sessionCache[$cacheKey] = [
+                'session' => $session,
+                'expires_at' => time() + 900,
+            ];
+        }
+
+        return $session;
     }
 
     /**
@@ -696,19 +987,40 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
             return $fallback;
         }
 
-        // Try standard SEMS formats: "Y-m-d H:i:s", "m/d/Y H:i:s A", "Y/m/d H:i:s"
+        $cleaned = trim($rawTime);
+
+        // Standard GoodWe / SEMS date formats:
+        // SEMS often outputs US standard "m/d/Y H:i:s" (e.g. "09/21/2026 17:05:34") or ISO "Y-m-d H:i:s".
+        // Crucial: check getLastErrors() to prevent PHP from overflowing days/months (e.g. month 21 -> next year).
         $formats = [
             'Y-m-d H:i:s',
+            'Y-m-d\TH:i:s',
+            'Y-m-d H:i',
+            'Y/m/d H:i:s',
+            'Y/m/d H:i',
+            'm/d/Y H:i:s',
             'm/d/Y H:i:s A',
             'm/d/Y h:i:s A',
-            'Y/m/d H:i:s',
+            'm/d/Y H:i',
             'd/m/Y H:i:s',
+            'd/m/Y H:i:s A',
+            'd/m/Y h:i:s A',
+            'd/m/Y H:i',
         ];
 
+        $currentYear = (int) $fallback->format('Y');
+
         foreach ($formats as $fmt) {
-            $dt = DateTimeImmutable::createFromFormat($fmt, trim($rawTime));
-            if ($dt !== false) {
-                return $dt;
+            $dt = DateTimeImmutable::createFromFormat($fmt, $cleaned, $fallback->getTimezone());
+            $errors = DateTimeImmutable::getLastErrors();
+            $hasErrors = $errors !== false && ($errors['error_count'] > 0 || $errors['warning_count'] > 0);
+
+            if ($dt !== false && !$hasErrors) {
+                $year = (int) $dt->format('Y');
+                // Guard against corrupt/overflow future years (> current year) or ancient years (< 2020)
+                if ($year >= 2020 && $year <= $currentYear) {
+                    return $dt;
+                }
             }
         }
 
@@ -1101,6 +1413,127 @@ final class GoodWeSemsPortalAdapter implements SolarProviderInterface
         ];
 
         return $decoded;
+    }
+
+    /**
+     * Execute HTTP GET with cURL.
+     *
+     * @return array<string, mixed>
+     */
+    private function getJson(
+        string $endpoint,
+        ?string $sessionToken = null,
+        ?string $overrideBaseUrl = null,
+        int $connectTimeout = 10,
+        int $timeout = 20
+    ): array {
+        $baseUrl = rtrim($overrideBaseUrl ?? $this->baseUrl, '/');
+        $url = $baseUrl . $endpoint;
+        $this->assertSafeOrigin($url);
+
+        if ($this->transport !== null) {
+            return ($this->transport)($endpoint, [], $sessionToken, $overrideBaseUrl, $connectTimeout, $timeout);
+        }
+
+        $tokenHeaderValue = self::CLIENT_TOKEN_HEADER;
+        if ($sessionToken !== null && $sessionToken !== '') {
+            if (str_starts_with(trim($sessionToken), '{')) {
+                $tokenHeaderValue = trim($sessionToken);
+            } else {
+                $tokenHeaderValue = json_encode([
+                    'version' => 'v2.1.0',
+                    'client' => 'ios',
+                    'language' => 'en',
+                    'token' => $sessionToken,
+                ], JSON_UNESCAPED_SLASHES);
+            }
+        }
+
+        if (str_starts_with($endpoint, '/web/sems/') || str_starts_with($endpoint, '/sems/')) {
+            $headers = $this->buildSemsWebHeaders($tokenHeaderValue);
+        } else {
+            $headers = [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'User-Agent: ' . self::USER_AGENT,
+                'Token: ' . $tokenHeaderValue,
+            ];
+        }
+
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+
+        $rawResponse = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $contentType = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $curlError = curl_error($ch);
+        $curlErrno = curl_errno($ch);
+        unset($ch);
+
+        if ($curlErrno !== 0) {
+            throw new RuntimeException("GoodWe SEMS+ network request failed: {$curlError} (curl errno {$curlErrno})");
+        }
+
+        if ($httpCode >= 400) {
+            throw new RuntimeException("GoodWe SEMS+ server returned HTTP error {$httpCode}.");
+        }
+
+        if (!is_string($rawResponse) || trim($rawResponse) === '') {
+            throw new RuntimeException('GoodWe SEMS+ returned an empty response.');
+        }
+
+        $decoded = json_decode($rawResponse, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('GoodWe SEMS+ response was not valid JSON.');
+        }
+
+        $decoded['_meta'] = [
+            'http_code' => $httpCode,
+            'content_type' => $contentType,
+            'request_url' => $url,
+            'request_host' => parse_url($url, PHP_URL_HOST) ?? '',
+        ];
+
+        return $decoded;
+    }
+
+    /**
+     * Flatten grouped factor arrays from GoodWe telemetry / telecounting responses.
+     *
+     * @param mixed $data
+     * @return array<string, mixed>
+     */
+    private function flattenFactors(mixed $data): array
+    {
+        $result = [];
+        if (!is_array($data)) {
+            return $result;
+        }
+
+        foreach ($data as $group) {
+            if (!is_array($group) || !isset($group['factors']) || !is_array($group['factors'])) {
+                continue;
+            }
+            foreach ($group['factors'] as $factor) {
+                if (!is_array($factor) || !isset($factor['code'])) {
+                    continue;
+                }
+                $code = (string) $factor['code'];
+                $val = $factor['data'] ?? null;
+                $result[$code] = $val;
+            }
+        }
+
+        return $result;
     }
 
     private function assertSafeOrigin(string $url): void

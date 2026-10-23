@@ -17,6 +17,7 @@ vi.mock('../../services/api/solar', () => ({
         disconnect: vi.fn(),
         getLatest: vi.fn(),
         getHistory: vi.fn(),
+        getDays: vi.fn(),
         syncTelemetry: vi.fn(),
     },
 }))
@@ -67,6 +68,7 @@ function makeConfiguredConnection(overrides = {}) {
 describe('SPMS O4 Solar Telemetry Components & Flow', () => {
     beforeEach(() => {
         vi.clearAllMocks()
+        solarApi.getDays?.mockResolvedValue({ days: [] })
     })
 
     // ────────────────────────────────────────────────────────────────────────
@@ -284,6 +286,25 @@ describe('SPMS O4 Solar Telemetry Components & Flow', () => {
             await user.click(screen.getByRole('button', { name: /Confirm Disconnect\?/i }))
             expect(onDisconnect).toHaveBeenCalled()
         })
+
+        it('strictly separates provider connection status from telemetry freshness', () => {
+            render(
+                <SolarConnectionCard
+                    connection={mockConn}
+                    latestReading={{
+                        data_status: 'STALE',
+                        measurement_time: '2026-09-28T04:47:58Z',
+                    }}
+                    onSync={vi.fn()}
+                    onDisconnect={vi.fn()}
+                />
+            )
+
+            // Provider connection is Connected
+            expect(screen.getByText('Connected')).toBeInTheDocument()
+            // Telemetry freshness is Stale
+            expect(screen.getByText('Stale')).toBeInTheDocument()
+        })
     })
 
     // ────────────────────────────────────────────────────────────────────────
@@ -314,11 +335,240 @@ describe('SPMS O4 Solar Telemetry Components & Flow', () => {
             expect(screen.getByText(/1,845.6/)).toBeInTheDocument()
             expect(screen.getByText('232.40 V')).toBeInTheDocument()
             expect(screen.getByText('14.85 A')).toBeInTheDocument()
+            expect(screen.getByText('LIVE GENERATING')).toBeInTheDocument()
 
             // Smart meter absence disclosure
             expect(screen.getByText(/Smart Meter Distinction:/i)).toBeInTheDocument()
             expect(screen.getByText(/No bidirectional smart meter is detected/i)).toBeInTheDocument()
             expect(screen.getByText(/strictly in accordance with SPMS data integrity rules/i)).toBeInTheDocument()
+        })
+
+        it('clearly displays STALE state and last recorded timestamp for stale telemetry', () => {
+            const staleReading = {
+                power_w: '0.00',
+                daily_generation_kwh: '7.400',
+                total_generation_kwh: '3325.9',
+                measurement_time: '2026-09-28T04:47:58Z',
+                inverter_status: 'NORMAL',
+                data_nature: 'ACTUAL',
+                data_status: 'STALE',
+            }
+
+            render(<SolarLiveReadingCard reading={staleReading} />)
+
+            expect(screen.getByText(/Telemetry is STALE:/i)).toBeInTheDocument()
+            expect(screen.getByText('STALE')).toBeInTheDocument()
+        })
+
+        it('displays NO GENERATION when telemetry is fresh with 0 W power (night standby)', () => {
+            const zeroReading = {
+                power_w: '0.00',
+                daily_generation_kwh: '0.000',
+                inverter_status: 'WAITING',
+                data_nature: 'ACTUAL',
+                data_status: 'FRESH',
+            }
+
+            render(<SolarLiveReadingCard reading={zeroReading} />)
+
+            expect(screen.getByText('NO GENERATION')).toBeInTheDocument()
+            expect(screen.queryByText(/^WAITING$/)).not.toBeInTheDocument()
+        })
+
+        it('renders Unavailable when electrical metrics are null without fabricating values', () => {
+            const nullMetricsReading = {
+                power_w: '1500.00',
+                daily_generation_kwh: '3.500',
+                ac_voltage_v: null,
+                ac_current_a: null,
+                ac_frequency_hz: null,
+                pv_power_w: null,
+                temperature_c: null,
+                grid_power_w: null,
+                consumption_power_w: null,
+                inverter_status: 'NORMAL',
+                data_status: 'FRESH',
+            }
+
+            render(<SolarLiveReadingCard reading={nullMetricsReading} />)
+
+            const unavailables = screen.getAllByText('Unavailable')
+            expect(unavailables.length).toBeGreaterThanOrEqual(4)
+            expect(screen.getAllByText('Awaiting first valid telemetry').length).toBeGreaterThanOrEqual(4)
+        })
+
+        // ────────────────────────────────────────────────────────────────────
+        // Section 14 Tests: Cases A through H
+        // ────────────────────────────────────────────────────────────────────
+        it('Case A: Fresh telemetry renders exact values with fresh/live state', () => {
+            const freshReading = {
+                power_w: '2200.00',
+                daily_generation_kwh: '4.100',
+                ac_voltage_v: '257.50',
+                ac_current_a: '8.70',
+                ac_frequency_hz: '49.96',
+                temperature_c: '66.60',
+                pv_power_w: '2358.50',
+                grid_power_w: null,
+                consumption_power_w: null,
+                measurement_time: '2026-10-06 10:30:00',
+                inverter_status: 'NORMAL',
+                data_status: 'FRESH',
+                data_nature: 'ACTUAL',
+            }
+
+            render(<SolarLiveReadingCard reading={freshReading} />)
+
+            expect(screen.getByText('257.50 V')).toBeInTheDocument()
+            expect(screen.getByText('8.70 A')).toBeInTheDocument()
+            expect(screen.getByText('49.96 Hz')).toBeInTheDocument()
+            expect(screen.getByText('66.60 °C')).toBeInTheDocument()
+            expect(screen.getByText('LIVE GENERATING')).toBeInTheDocument()
+            expect(screen.getAllByText(/Fresh · 10:30 IST/).length).toBeGreaterThanOrEqual(1)
+        })
+
+        it('Case B: Stale telemetry with previous value renders last observed value and STALE badge', () => {
+            const staleReading = {
+                power_w: '2200.00',
+                daily_generation_kwh: '4.100',
+                ac_voltage_v: '257.50',
+                ac_current_a: '8.70',
+                ac_frequency_hz: '49.96',
+                temperature_c: '66.60',
+                grid_power_w: null,
+                consumption_power_w: null,
+                measurement_time: '2026-10-05 10:24:00',
+                inverter_status: 'NORMAL',
+                data_status: 'STALE',
+                data_nature: 'ACTUAL',
+            }
+
+            render(<SolarLiveReadingCard reading={staleReading} />)
+
+            expect(screen.getByText('257.50 V')).toBeInTheDocument()
+            expect(screen.getByText('8.70 A')).toBeInTheDocument()
+            expect(screen.getByText('49.96 Hz')).toBeInTheDocument()
+            // Telemetry values have visible Last observed timestamp and STALE badge
+            expect(screen.getAllByText('Last observed · 10:24 IST').length).toBeGreaterThanOrEqual(1)
+            expect(screen.getAllByText('STALE').length).toBeGreaterThanOrEqual(2)
+        })
+
+        it('Case C: Missing telemetry with no previous value renders Unavailable with honest reason', () => {
+            const missingReading = {
+                power_w: null,
+                daily_generation_kwh: null,
+                ac_voltage_v: null,
+                ac_current_a: null,
+                ac_frequency_hz: null,
+                pv_power_w: null,
+                temperature_c: null,
+                grid_power_w: null,
+                consumption_power_w: null,
+                measurement_time: null,
+                inverter_status: 'DISCONNECTED',
+                data_status: 'UNAVAILABLE',
+            }
+
+            render(<SolarLiveReadingCard reading={missingReading} />)
+
+            const unavailables = screen.getAllByText('Unavailable')
+            expect(unavailables.length).toBeGreaterThanOrEqual(5)
+            expect(screen.getAllByText('Awaiting first valid telemetry').length).toBeGreaterThanOrEqual(5)
+            // NEVER shows fake 0 V, 0 A, 0 Hz for missing values
+            expect(screen.queryByText('0.00 V')).not.toBeInTheDocument()
+            expect(screen.queryByText('0.00 A')).not.toBeInTheDocument()
+            expect(screen.queryByText('0.00 Hz')).not.toBeInTheDocument()
+        })
+
+        it('Case D: Actual measured zero renders 0 because zero is a real measurement', () => {
+            const measuredZeroReading = {
+                power_w: '0.00',
+                daily_generation_kwh: '0.000',
+                ac_voltage_v: '0.00',
+                ac_current_a: '0.00',
+                ac_frequency_hz: '0.00',
+                pv_power_w: '0.00',
+                temperature_c: '25.00',
+                grid_power_w: null,
+                consumption_power_w: null,
+                measurement_time: '2026-10-06 01:00:00',
+                inverter_status: 'WAITING',
+                data_status: 'FRESH',
+                data_nature: 'ACTUAL',
+            }
+
+            render(<SolarLiveReadingCard reading={measuredZeroReading} />)
+
+            // Real measured zero must display as 0.00 / 0.0, NOT Unavailable
+            expect(screen.getByText('0.00 V')).toBeInTheDocument()
+            expect(screen.getByText('0.00 A')).toBeInTheDocument()
+            expect(screen.getByText('0.00 Hz')).toBeInTheDocument()
+            expect(screen.getByText('0.00 W')).toBeInTheDocument()
+            expect(screen.getByText('0.0')).toBeInTheDocument()
+        })
+
+        it('Case E: Stale active power shows last valid kW value, NOT 0 kW', () => {
+            const stalePowerReading = {
+                power_w: '2200.00',
+                daily_generation_kwh: '4.100',
+                measurement_time: '2026-10-05 10:24:00',
+                inverter_status: 'NORMAL',
+                data_status: 'STALE',
+                data_nature: 'ACTUAL',
+            }
+
+            render(<SolarLiveReadingCard reading={stalePowerReading} />)
+
+            // Must show 2,200 W and (2.20 kW), NOT 0 kW!
+            expect(screen.getByText('2,200.0')).toBeInTheDocument()
+            expect(screen.getByText('(2.20 kW)')).toBeInTheDocument()
+            expect(screen.queryByText('(0.00 kW)')).not.toBeInTheDocument()
+            expect(screen.getByText('Last Observed Active Power')).toBeInTheDocument()
+            expect(screen.queryByText('Current Active Power')).not.toBeInTheDocument()
+        })
+
+        it('Case F & G: Stale AC current and grid frequency show last valid values, NOT 0 A / 0 Hz', () => {
+            const staleElectrical = {
+                power_w: '963.00',
+                daily_generation_kwh: '0.000',
+                ac_voltage_v: '257.50',
+                ac_current_a: '8.70',
+                ac_frequency_hz: '49.96',
+                temperature_c: '66.60',
+                electrical_measurement_time: '2026-10-05 10:24:00',
+                electrical_data_status: 'STALE',
+                measurement_time: '2026-10-06 11:12:00',
+                data_status: 'FRESH',
+                data_nature: 'ACTUAL',
+            }
+
+            render(<SolarLiveReadingCard reading={staleElectrical} />)
+
+            expect(screen.getByText('257.50 V')).toBeInTheDocument()
+            expect(screen.getByText('8.70 A')).toBeInTheDocument()
+            expect(screen.getByText('49.96 Hz')).toBeInTheDocument()
+            expect(screen.queryByText('0.00 A')).not.toBeInTheDocument()
+            expect(screen.queryByText('0.00 Hz')).not.toBeInTheDocument()
+            expect(screen.getAllByText('Last observed · 10:24 IST').length).toBeGreaterThanOrEqual(3)
+        })
+
+        it('Case H: Timestamp integrity ensures displayed time is the measurement time, not render time', () => {
+            const observationTimestamp = '2026-10-05 10:24:00'
+            const reading = {
+                power_w: '2200.00',
+                daily_generation_kwh: '4.100',
+                ac_voltage_v: '257.50',
+                ac_current_a: '8.70',
+                ac_frequency_hz: '49.96',
+                measurement_time: observationTimestamp,
+                data_status: 'STALE',
+                data_nature: 'ACTUAL',
+            }
+
+            render(<SolarLiveReadingCard reading={reading} />)
+
+            // Exactly 10:24 IST must appear, never the current wall-clock time
+            expect(screen.getAllByText(/10:24 IST/).length).toBeGreaterThanOrEqual(1)
         })
     })
 
@@ -326,35 +576,27 @@ describe('SPMS O4 Solar Telemetry Components & Flow', () => {
     // SolarHistoryTable
     // ────────────────────────────────────────────────────────────────────────
     describe('SolarHistoryTable', () => {
-        it('renders chronological intervals with exact decimal values', () => {
-            const history = [
+        it('renders daily history rows with exact values and columns', () => {
+            const days = [
                 {
-                    id: 'r-1',
-                    measurement_time: '2026-09-20T12:00:00Z',
-                    power_w: '3500.00',
-                    daily_generation_kwh: '12.500',
-                    ac_voltage_v: '231.50',
-                    inverter_status: 'NORMAL',
-                    data_nature: 'ACTUAL',
-                },
-                {
-                    id: 'r-2',
-                    measurement_time: '2026-09-20T12:05:00Z',
-                    power_w: '3600.00',
-                    daily_generation_kwh: '12.800',
-                    ac_voltage_v: '232.00',
-                    inverter_status: 'NORMAL',
-                    data_nature: 'ACTUAL',
+                    date: '2026-09-20',
+                    date_label: '20 Sep 2026',
+                    generation_kwh: 12.80,
+                    peak_power_kw: 3.60,
+                    observation_count: 2,
+                    status: 'COMPLETE',
+                    status_label: 'Complete',
                 },
             ]
 
-            render(<SolarHistoryTable history={history} />)
+            render(<SolarHistoryTable days={days} />)
 
-            expect(screen.getByText('3,500.0')).toBeInTheDocument()
-            expect(screen.getByText('3,600.0')).toBeInTheDocument()
-            expect(screen.getByText('12.500')).toBeInTheDocument()
-            expect(screen.getByText('12.800')).toBeInTheDocument()
-            expect(screen.getByText(/2 intervals/i)).toBeInTheDocument()
+            expect(screen.getByText('Solar Generation History')).toBeInTheDocument()
+            expect(screen.getByText('20 Sep 2026')).toBeInTheDocument()
+            expect(screen.getByText('12.80 kWh')).toBeInTheDocument()
+            expect(screen.getByText('3.60 kW')).toBeInTheDocument()
+            expect(screen.getByText('2')).toBeInTheDocument()
+            expect(screen.getByText('COMPLETE')).toBeInTheDocument()
         })
     })
 

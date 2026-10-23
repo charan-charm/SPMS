@@ -156,6 +156,7 @@ final class ConfidenceModel
                 'forecast' => $evidence->forecastPeriods() !== [],
                 'balance' => $this->hasClassifiedBalance($evidence),
                 'cost' => $this->hasEstimatedCost($evidence),
+                'weather' => $evidence->weather() !== null && !empty($evidence->weather()['available']),
                 default => false,
             };
 

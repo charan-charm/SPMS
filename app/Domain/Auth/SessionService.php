@@ -112,10 +112,18 @@ final class SessionService
      */
     public function touch(array $session): void
     {
+        $sessionId = isset($session['id']) && is_string($session['id']) && trim($session['id']) !== ''
+            ? trim($session['id'])
+            : null;
+
+        if ($sessionId === null) {
+            return;
+        }
+
         $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
         $this->sessions->touchActivity(
-            (string) $session['id'],
+            $sessionId,
             $now->modify('+' . self::IDLE_HOURS . ' hours')->format('Y-m-d H:i:s'),
             $now->format('Y-m-d H:i:s')
         );
@@ -123,20 +131,48 @@ final class SessionService
 
     /**
      * @param array<string, mixed> $session
+     * @return bool True if a valid session was revoked, false otherwise
      */
-    public function revoke(array $session, string $reason): void
+    public function revoke(array $session, string $reason): bool
     {
+        $sessionId = isset($session['id']) && is_string($session['id']) && trim($session['id']) !== ''
+            ? trim($session['id'])
+            : null;
+
+        if ($sessionId === null) {
+            return false;
+        }
+
+        $accountId = isset($session['account_id']) && is_string($session['account_id']) && trim($session['account_id']) !== ''
+            ? trim($session['account_id'])
+            : null;
+
+        // If account_id was omitted in partial session array, resolve from persisted record
+        if ($accountId === null) {
+            $persisted = $this->sessions->findById($sessionId);
+            if ($persisted === null) {
+                return false;
+            }
+            if (isset($persisted['account_id']) && is_string($persisted['account_id'])) {
+                $accountId = trim($persisted['account_id']);
+            }
+        }
+
         $now = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
-        $this->sessions->revoke((string) $session['id'], $now->format('Y-m-d H:i:s'));
+        $this->sessions->revoke($sessionId, $now->format('Y-m-d H:i:s'));
 
-        $this->events->record(
-            SecurityEventRepository::SESSION_REVOKED,
-            null,
-            (string) $session['account_id'],
-            ['session_id' => $session['id'], 'reason' => $reason],
-            null
-        );
+        if ($accountId !== null && $accountId !== '') {
+            $this->events->record(
+                SecurityEventRepository::SESSION_REVOKED,
+                null,
+                $accountId,
+                ['session_id' => $sessionId, 'reason' => $reason],
+                null
+            );
+        }
+
+        return true;
     }
 
     /**

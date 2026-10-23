@@ -124,6 +124,19 @@ export function RecommendationCard({
                                     ))}
                                 </dl>
                                 {why.explanation && <p className="mt-3 text-xs text-body">{why.explanation}</p>}
+                                {why.weather && (
+                                    <div className="mt-2.5 rounded border border-sky-500/20 bg-sky-500/5 p-2 text-xs space-y-1">
+                                        <div className="font-semibold text-heading flex items-center justify-between">
+                                            <span>Weather Evidence ({why.weather.source || 'Open-Meteo'})</span>
+                                            {why.weather.solar_impact && (
+                                                <span className="text-[10px] font-semibold text-sky-600 dark:text-sky-400">
+                                                    {why.weather.solar_impact}
+                                                </span>
+                                            )}
+                                        </div>
+                                        {why.weather.explanation && <p className="text-muted text-[11px]">{why.weather.explanation}</p>}
+                                    </div>
+                                )}
                             </motion.div>
                         )}
                     </AnimatePresence>
