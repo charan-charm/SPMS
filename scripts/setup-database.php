@@ -174,19 +174,33 @@ foreach ($migrationFiles as $file) {
 
     if (!isset($applied[$id])) {
         try {
-            $pdo->beginTransaction();
+            if (!$pdo->inTransaction()) {
+                $pdo->beginTransaction();
+            }
             $migration['up']($pdo);
-            $stmt = $pdo->prepare('INSERT INTO `migrations` (id) VALUES (:id)');
+            $stmt = $pdo->prepare('INSERT INTO `migrations` (id) VALUES (:id) ON DUPLICATE KEY UPDATE id=id');
             $stmt->execute([':id' => $id]);
-            $pdo->commit();
+            if ($pdo->inTransaction()) {
+                $pdo->commit();
+            }
             output("  ✓ Applied migration: {$id}");
             $newlyAppliedCount++;
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
-            output("Failed applying migration '{$id}': " . $e->getMessage(), true);
-            exit(1);
+
+            // DDL statements in MySQL cause an implicit commit. If a table or key already exists
+            // from an interrupted run, safely record the migration as applied and continue.
+            if (str_contains($e->getMessage(), 'already exists') || str_contains($e->getMessage(), 'Duplicate column') || str_contains($e->getMessage(), 'Duplicate key name')) {
+                $stmt = $pdo->prepare('INSERT INTO `migrations` (id) VALUES (:id) ON DUPLICATE KEY UPDATE id=id');
+                $stmt->execute([':id' => $id]);
+                output("  ✓ Migration {$id} tables already present, recorded as applied.");
+                $newlyAppliedCount++;
+            } else {
+                output("Failed applying migration '{$id}': " . $e->getMessage(), true);
+                exit(1);
+            }
         }
     }
 }
