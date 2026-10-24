@@ -64,6 +64,43 @@ if ($requestedDemo) {
     putenv('SPMS_DATA_ENVIRONMENT=demo');
 }
 
+// Auto-bridge .env if SPMS_DB_DEMO_DATABASE is missing
+$envPath = $rootPath . '/.env';
+if (!file_exists($envPath) && file_exists($rootPath . '/.env.example')) {
+    copy($rootPath . '/.env.example', $envPath);
+}
+
+if (file_exists($envPath) && $requestedDemo) {
+    $envContent = (string) file_get_contents($envPath);
+    if (!str_contains($envContent, 'SPMS_DB_DEMO_DATABASE')) {
+        $lines = explode("\n", $envContent);
+        $parsed = [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line !== '' && !str_starts_with($line, '#') && strpos($line, '=') !== false) {
+                [$k, $v] = explode('=', $line, 2);
+                $parsed[trim($k)] = trim($v, "\"' \t\r\n");
+            }
+        }
+
+        $host = $parsed['DB_HOST'] ?? '127.0.0.1';
+        $port = $parsed['DB_PORT'] ?? '3306';
+        $db = $parsed['DB_DATABASE'] ?? 'spms_demo';
+        $user = $parsed['DB_USERNAME'] ?? 'root';
+        $pass = $parsed['DB_PASSWORD'] ?? '';
+
+        $bridge = "\n# SPMS Demo Database Isolation (Auto-configured by setup script)\n"
+            . "SPMS_DB_DEMO_HOST={$host}\n"
+            . "SPMS_DB_DEMO_PORT={$port}\n"
+            . "SPMS_DB_DEMO_DATABASE={$db}\n"
+            . "SPMS_DB_DEMO_USERNAME={$user}\n"
+            . "SPMS_DB_DEMO_PASSWORD={$pass}\n";
+
+        file_put_contents($envPath, $envContent . $bridge);
+        output("  [Notice] Auto-bridged SPMS_DB_DEMO_* in .env using your database credentials.");
+    }
+}
+
 require $rootPath . '/vendor/autoload.php';
 
 use App\Support\Config;
