@@ -49,3 +49,6 @@ storage/temp/
 *.pem
 *.key
 *.tar.gz
+*.zip
+*.sql
+*.sql.gz

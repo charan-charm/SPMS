@@ -1,0 +1,16 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # 1. Route all /api requests to index.php front controller
+    RewriteCond %{REQUEST_URI} ^/api [NC]
+    RewriteRule ^(.*)$ index.php [QSA,L]
+
+    # 2. If the requested file or directory exists on disk, serve it directly
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # 3. For all other routes (React SPA client-side routes like /dashboard), route to index.html
+    RewriteRule ^ index.html [L]
+</IfModule>
